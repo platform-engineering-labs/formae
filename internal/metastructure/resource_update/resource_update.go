@@ -164,7 +164,7 @@ func (ru *ResourceUpdate) ResolveValue(formaeUri pkgmodel.FormaeURI, value strin
 	}
 	ru.DesiredState.Properties = properties
 
-	return ru.reDerivePatchAfterSubstitution(mode, string(formaeUri))
+	return ru.reDerivePatchAfterSubstitution(mode, string(formaeUri), formaeUri)
 }
 
 // ResolveGeneratorValue delivers a generator's freshly drawn value to every
@@ -251,7 +251,7 @@ func (ru *ResourceUpdate) PrepareGeneratorValues(generatorKsuid string, values m
 func (ru *ResourceUpdate) CommitGeneratorValues(prepared *PreparedGenDelivery, generatorKsuid string, generationID string, mode pkgmodel.FormaApplyMode) error {
 	ru.DesiredState.Properties = prepared.properties
 	ru.stampDrawnGeneration(generatorKsuid, prepared.outputs, generationID)
-	return ru.reDerivePatchAfterSubstitution(mode, "generator "+generatorKsuid)
+	return ru.reDerivePatchAfterSubstitution(mode, "generator "+generatorKsuid, "")
 }
 
 // ResolveGeneratorValue prepares and commits in one step, for a caller
@@ -308,7 +308,7 @@ func (ru *ResourceUpdate) stampDrawnGeneration(generatorKsuid string, outputs []
 // Only Updates need a fresh patch — Create/Delete/Replace carry full
 // desired/prior state to the provider rather than a diff. Patch regen is also
 // a no-op when no Schema is available (sync/discovery paths).
-func (ru *ResourceUpdate) reDerivePatchAfterSubstitution(mode pkgmodel.FormaApplyMode, subject string) error {
+func (ru *ResourceUpdate) reDerivePatchAfterSubstitution(mode pkgmodel.FormaApplyMode, subject string, deliveredURI pkgmodel.FormaeURI) error {
 	if ru.Operation != OperationUpdate || len(ru.DesiredState.Schema.Fields) == 0 {
 		return nil
 	}
@@ -319,11 +319,19 @@ func (ru *ResourceUpdate) reDerivePatchAfterSubstitution(mode pkgmodel.FormaAppl
 	}
 	if len(createOnlyPatch) > 0 {
 		// References deliver one at a time, and each delivery re-derives the
-		// patch. A path whose own reference has not delivered yet diffs as the
-		// unresolved-envelope placeholder, not as a value, so it cannot be
-		// judged on this re-derivation — its turn comes when its value
-		// arrives. Only ops on fully-resolved paths count against the guard.
-		judgeable, ferr := opsOutsidePendingReferences(createOnlyPatch, ru.DesiredState.Properties)
+		// patch. A path whose own reference has not delivered yet — its
+		// envelope holds no value, or its URI is still queued for delivery —
+		// cannot be judged on this re-derivation: a placeholder or a carried
+		// value is not the value the update will execute with. Its turn comes
+		// when its own delivery arrives. Only ops on fully-delivered paths
+		// count against the guard.
+		queued := make(map[string]bool, len(ru.RemainingResolvables))
+		for _, uri := range ru.RemainingResolvables {
+			if uri != deliveredURI {
+				queued[string(uri)] = true
+			}
+		}
+		judgeable, ferr := opsOutsidePendingReferences(createOnlyPatch, ru.DesiredState.Properties, queued)
 		if ferr != nil {
 			return fmt.Errorf("failed to inspect createOnly patch after resolving %s: %w", subject, ferr)
 		}
@@ -473,14 +481,16 @@ func (ru *ResourceUpdate) ConvergenceOnly() bool {
 // opsOutsidePendingReferences returns the subset of createOnly patch ops that
 // can be judged now: ops whose path does not touch a reference that has not
 // delivered its value yet. An op at, under, or above a pending destination is
-// diffing the unresolved-envelope placeholder rather than a value, so it is
-// excluded; it gets judged on the re-derivation its own delivery triggers.
-func opsOutsidePendingReferences(createOnlyPatch json.RawMessage, desiredProperties json.RawMessage) (json.RawMessage, error) {
+// diffing a placeholder or a carried value rather than the value the update
+// will execute with, so it is excluded; it gets judged on the re-derivation
+// its own delivery triggers. queuedURIs names the references still awaiting
+// delivery, keyed by their $ref URI.
+func opsOutsidePendingReferences(createOnlyPatch json.RawMessage, desiredProperties json.RawMessage, queuedURIs map[string]bool) (json.RawMessage, error) {
 	var ops []map[string]any
 	if err := json.Unmarshal(createOnlyPatch, &ops); err != nil {
 		return nil, fmt.Errorf("failed to parse createOnly patch ops: %w", err)
 	}
-	pending, err := unresolvedReferencePaths(desiredProperties)
+	pending, err := unresolvedReferencePaths(desiredProperties, queuedURIs)
 	if err != nil {
 		return nil, err
 	}
@@ -514,9 +524,12 @@ func opsOutsidePendingReferences(createOnlyPatch json.RawMessage, desiredPropert
 }
 
 // unresolvedReferencePaths lists the destination paths, as raw key segments,
-// of reference envelopes that still hold a $ref without a $value — the exact
-// set the flatten step renders as placeholders. Numeric segments index arrays.
-func unresolvedReferencePaths(properties json.RawMessage) ([][]string, error) {
+// of reference envelopes that have not delivered their value: envelopes
+// holding a $ref without a $value (the set the flatten step renders as
+// placeholders), plus envelopes whose $ref URI is in queuedURIs — a queued
+// reference's carried value is a prior delivery's, not this update's.
+// Numeric segments index arrays.
+func unresolvedReferencePaths(properties json.RawMessage, queuedURIs map[string]bool) ([][]string, error) {
 	var doc map[string]any
 	if err := json.Unmarshal(properties, &doc); err != nil {
 		return nil, fmt.Errorf("failed to parse desired properties: %w", err)
@@ -526,8 +539,10 @@ func unresolvedReferencePaths(properties json.RawMessage) ([][]string, error) {
 	walk = func(prefix []string, node any) {
 		switch n := node.(type) {
 		case map[string]any:
-			if _, hasRef := n["$ref"]; hasRef {
-				if _, hasVal := n["$value"]; !hasVal {
+			if ref, hasRef := n["$ref"]; hasRef {
+				_, hasVal := n["$value"]
+				refURI, _ := ref.(string)
+				if !hasVal || queuedURIs[refURI] {
 					paths = append(paths, append([]string{}, prefix...))
 				}
 				return

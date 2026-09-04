@@ -193,3 +193,17 @@ func TestResolveValue_PendingRefUnderSlashedKeyStaysUnjudged(t *testing.T) {
 
 	require.NoError(t, err, "a pending reference under an escaped key is still pending")
 }
+
+// A reference whose URI is still queued for delivery is pending even when its
+// envelope carries a value from an earlier delivery (a resumed update
+// re-resolves it): a sibling delivery must not judge the carried value; the
+// reference is judged when its own re-delivery arrives.
+func TestResolveValue_QueuedRefWithCarriedValueStaysUnjudged(t *testing.T) {
+	ru := spokeShapedUpdate()
+	ru.DesiredState.Properties = json.RawMessage(
+		`{"Name": "s1", "Description": "new", "Hub": {"$ref": "formae://k-hub#/Name"}, "LinkedNetwork": {"Uri": {"$ref": "formae://k-net#/SelfLink", "$value": "https://net-STALE"}}}`)
+
+	err := ru.ResolveValue("formae://k-hub#/Name", "hub-1", pkgmodel.FormaApplyModePatch)
+
+	require.NoError(t, err, "a queued reference is pending regardless of a carried value")
+}
