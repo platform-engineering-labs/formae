@@ -54,12 +54,17 @@ type ConfigFieldHint struct {
 // ConfigSchema describes the structure and mutability of a target's config fields.
 type ConfigSchema struct {
 	Hints map[string]ConfigFieldHint `json:"Hints,omitempty" pkl:"Hints,omitempty"`
+	// DefaultReap is the provider's default reaping behaviour for its
+	// targets, declared by the plugin author as a class-level annotation on
+	// the target Config class (raw, e.g. {"Kind":"never"}). Nil when the
+	// provider declares none; admission then falls to the global default.
+	DefaultReap json.RawMessage `json:"DefaultReap,omitempty" pkl:"DefaultReap,omitempty"`
 }
 
-// IsZero reports whether the schema has no hints, used by omitzero to suppress
-// the field in JSON output for targets without schema annotations.
+// IsZero reports whether the schema carries nothing, used by omitzero to
+// suppress the field in JSON output for targets without schema annotations.
 func (cs ConfigSchema) IsZero() bool {
-	return len(cs.Hints) == 0
+	return len(cs.Hints) == 0 && len(cs.DefaultReap) == 0
 }
 
 // TargetHealth holds persisted health-observation fields for a target.
