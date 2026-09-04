@@ -38,11 +38,15 @@ func TestFormaCommandPersister_StoresNewFormaCommand(t *testing.T) {
 
 	storeResult := operator.Call(sender, StoreNewFormaCommand{Command: *formaCommand})
 	assert.NoError(t, storeResult.Error)
-	assert.True(t, storeResult.Response.(bool))
+	assert.True(t, storeResult.Response.(CommandPersistResult).OK)
 
 	loadResult := operator.Call(sender, LoadFormaCommand{CommandID: formaCommand.ID})
 	assert.NoError(t, loadResult.Error)
-	loadedCommand, ok := loadResult.Response.(*forma_command.FormaCommand)
+	loadedCommandLoadRes, ok := loadResult.Response.(LoadFormaCommandResult)
+	var loadedCommand *forma_command.FormaCommand
+	if ok {
+		loadedCommand = loadedCommandLoadRes.Command
+	}
 	assert.True(t, ok)
 
 	assert.Equal(t, formaCommand.ID, loadedCommand.ID)
@@ -55,7 +59,7 @@ func TestFormaCommandPersister_RecordsResourceProgress(t *testing.T) {
 
 	storeResult := formaPersister.Call(sender, StoreNewFormaCommand{Command: *formaCommand})
 	assert.NoError(t, storeResult.Error)
-	assert.True(t, storeResult.Response.(bool))
+	assert.True(t, storeResult.Response.(CommandPersistResult).OK)
 
 	// Use the KSUID from the resource
 	resourceURI := formaCommand.ResourceUpdates[0].DesiredState.URI()
@@ -77,11 +81,15 @@ func TestFormaCommandPersister_RecordsResourceProgress(t *testing.T) {
 	}
 	res := formaPersister.Call(sender, updateResourceProgress)
 	assert.NoError(t, res.Error)
-	assert.True(t, res.Response.(bool))
+	assert.True(t, res.Response.(CommandPersistResult).OK)
 
 	loadCommandResult := formaPersister.Call(sender, LoadFormaCommand{CommandID: formaCommand.ID})
 	assert.NoError(t, loadCommandResult.Error)
-	loadedCommand, ok := loadCommandResult.Response.(*forma_command.FormaCommand)
+	loadedCommandLoadRes, ok := loadCommandResult.Response.(LoadFormaCommandResult)
+	var loadedCommand *forma_command.FormaCommand
+	if ok {
+		loadedCommand = loadedCommandLoadRes.Command
+	}
 	assert.True(t, ok)
 
 	assert.Equal(t, resource_update.ResourceUpdateStateInProgress, loadedCommand.ResourceUpdates[0].State)
@@ -110,14 +118,18 @@ func TestFormaCommandPersister_RecordsResourceProgress(t *testing.T) {
 	}
 	secondRes := formaPersister.Call(sender, secondProgressUpdate)
 	assert.NoError(t, secondRes.Error)
-	assert.True(t, secondRes.Response.(bool))
+	assert.True(t, secondRes.Response.(CommandPersistResult).OK)
 
 	// After a terminal progress update, the command should still be InProgress.
 	// The command only transitions to a terminal state via MarkResourceUpdateAsComplete,
 	// which in production runs after the ResourcePersister has stored the resource.
 	secondLoadCommandResult := formaPersister.Call(sender, LoadFormaCommand{CommandID: formaCommand.ID})
 	assert.NoError(t, secondLoadCommandResult.Error)
-	secondLoadedCommand, ok := secondLoadCommandResult.Response.(*forma_command.FormaCommand)
+	secondLoadedCommandLoadRes, ok := secondLoadCommandResult.Response.(LoadFormaCommandResult)
+	var secondLoadedCommand *forma_command.FormaCommand
+	if ok {
+		secondLoadedCommand = secondLoadedCommandLoadRes.Command
+	}
 	assert.True(t, ok)
 
 	assert.Equal(t, forma_command.CommandStateInProgress, secondLoadedCommand.State)
@@ -135,11 +147,15 @@ func TestFormaCommandPersister_RecordsResourceProgress(t *testing.T) {
 	}
 	markRes := formaPersister.Call(sender, markComplete)
 	assert.NoError(t, markRes.Error)
-	assert.True(t, markRes.Response.(bool))
+	assert.True(t, markRes.Response.(CommandPersistResult).OK)
 
 	finalLoadResult := formaPersister.Call(sender, LoadFormaCommand{CommandID: formaCommand.ID})
 	assert.NoError(t, finalLoadResult.Error)
-	finalCommand, ok := finalLoadResult.Response.(*forma_command.FormaCommand)
+	finalCommandLoadRes, ok := finalLoadResult.Response.(LoadFormaCommandResult)
+	var finalCommand *forma_command.FormaCommand
+	if ok {
+		finalCommand = finalCommandLoadRes.Command
+	}
 	assert.True(t, ok)
 
 	assert.Equal(t, forma_command.CommandStateSuccess, finalCommand.State)
@@ -209,11 +225,11 @@ func TestFormaCommandPersister_BulkUpdateResourceState(t *testing.T) {
 
 	updateResult := formaPersister.Call(sender, failResources)
 	assert.NoError(t, updateResult.Error)
-	assert.True(t, updateResult.Response.(bool))
+	assert.True(t, updateResult.Response.(CommandPersistResult).OK)
 
 	loadResult := formaPersister.Call(sender, LoadFormaCommand{CommandID: formaCommand.ID})
 	assert.NoError(t, loadResult.Error)
-	loadedCommand := loadResult.Response.(*forma_command.FormaCommand)
+	loadedCommand := loadResult.Response.(LoadFormaCommandResult).Command
 
 	// Build a map of KSUID -> ResourceUpdate for order-agnostic assertions
 	ruByKsuid := make(map[string]*resource_update.ResourceUpdate)
@@ -268,11 +284,11 @@ func TestFormaCommandPersister_MarkCommandResourcesAsCanceled(t *testing.T) {
 
 	cancelResult := formaPersister.Call(sender, MarkCommandResourcesAsCanceled{CommandID: formaCommand.ID})
 	assert.NoError(t, cancelResult.Error)
-	assert.True(t, cancelResult.Response.(bool))
+	assert.True(t, cancelResult.Response.(CommandPersistResult).OK)
 
 	loadResult := formaPersister.Call(sender, LoadFormaCommand{CommandID: formaCommand.ID})
 	assert.NoError(t, loadResult.Error)
-	loadedCommand := loadResult.Response.(*forma_command.FormaCommand)
+	loadedCommand := loadResult.Response.(LoadFormaCommandResult).Command
 
 	ruByKsuid := make(map[string]*resource_update.ResourceUpdate)
 	for i := range loadedCommand.ResourceUpdates {
@@ -294,7 +310,7 @@ func TestFormaCommandPersister_DeletesSyncCommandWithNoVersions(t *testing.T) {
 	// Store the sync command
 	storeResult := formaPersister.Call(sender, StoreNewFormaCommand{Command: *formaCommand})
 	assert.NoError(t, storeResult.Error)
-	assert.True(t, storeResult.Response.(bool))
+	assert.True(t, storeResult.Response.(CommandPersistResult).OK)
 
 	// Mark the resource update as complete WITHOUT a version (no changes detected)
 	resourceURI := formaCommand.ResourceUpdates[0].DesiredState.URI()
@@ -311,12 +327,14 @@ func TestFormaCommandPersister_DeletesSyncCommandWithNoVersions(t *testing.T) {
 	}
 	res := formaPersister.Call(sender, markComplete)
 	assert.NoError(t, res.Error)
-	assert.True(t, res.Response.(bool))
+	assert.True(t, res.Response.(CommandPersistResult).OK)
 
-	// Verify the command was deleted (LoadFormaCommand should return an error)
+	// Verify the command was deleted (LoadFormaCommand is answered with a failure)
 	loadResult := formaPersister.Call(sender, LoadFormaCommand{CommandID: formaCommand.ID})
-	assert.Error(t, loadResult.Error, "Sync command with no versions should be deleted")
-	assert.Contains(t, loadResult.Error.Error(), "forma command not found")
+	assert.NoError(t, loadResult.Error)
+	failed, ok := loadResult.Response.(LoadFormaCommandResult)
+	assert.True(t, ok, "expected a typed reply, got %T", loadResult.Response)
+	assert.Contains(t, failed.Error, "forma command not found")
 }
 
 func TestFormaCommandPersister_KeepsSyncCommandWithVersions(t *testing.T) {
@@ -327,7 +345,7 @@ func TestFormaCommandPersister_KeepsSyncCommandWithVersions(t *testing.T) {
 	// Store the sync command
 	storeResult := formaPersister.Call(sender, StoreNewFormaCommand{Command: *formaCommand})
 	assert.NoError(t, storeResult.Error)
-	assert.True(t, storeResult.Response.(bool))
+	assert.True(t, storeResult.Response.(CommandPersistResult).OK)
 
 	// Mark the resource update as complete WITH a version (changes detected)
 	resourceURI := formaCommand.ResourceUpdates[0].DesiredState.URI()
@@ -344,12 +362,16 @@ func TestFormaCommandPersister_KeepsSyncCommandWithVersions(t *testing.T) {
 	}
 	res := formaPersister.Call(sender, markComplete)
 	assert.NoError(t, res.Error)
-	assert.True(t, res.Response.(bool))
+	assert.True(t, res.Response.(CommandPersistResult).OK)
 
 	// Verify the command was kept
 	loadResult := formaPersister.Call(sender, LoadFormaCommand{CommandID: formaCommand.ID})
 	assert.NoError(t, loadResult.Error)
-	loadedCommand, ok := loadResult.Response.(*forma_command.FormaCommand)
+	loadedCommandLoadRes, ok := loadResult.Response.(LoadFormaCommandResult)
+	var loadedCommand *forma_command.FormaCommand
+	if ok {
+		loadedCommand = loadedCommandLoadRes.Command
+	}
 	assert.True(t, ok, "Sync command with versions should be kept")
 	assert.NotNil(t, loadedCommand)
 	assert.Equal(t, forma_command.CommandStateSuccess, loadedCommand.State)
@@ -366,7 +388,7 @@ func TestFormaCommandPersister_KeepsApplyCommandWithNoVersions(t *testing.T) {
 	// Store the apply command
 	storeResult := formaPersister.Call(sender, StoreNewFormaCommand{Command: *formaCommand})
 	assert.NoError(t, storeResult.Error)
-	assert.True(t, storeResult.Response.(bool))
+	assert.True(t, storeResult.Response.(CommandPersistResult).OK)
 
 	// Mark the resource update as complete WITHOUT a version
 	resourceURI := formaCommand.ResourceUpdates[0].DesiredState.URI()
@@ -383,12 +405,16 @@ func TestFormaCommandPersister_KeepsApplyCommandWithNoVersions(t *testing.T) {
 	}
 	res := formaPersister.Call(sender, markComplete)
 	assert.NoError(t, res.Error)
-	assert.True(t, res.Response.(bool))
+	assert.True(t, res.Response.(CommandPersistResult).OK)
 
 	// Verify the command was kept (apply commands should not be deleted)
 	loadResult := formaPersister.Call(sender, LoadFormaCommand{CommandID: formaCommand.ID})
 	assert.NoError(t, loadResult.Error)
-	loadedCommand, ok := loadResult.Response.(*forma_command.FormaCommand)
+	loadedCommandLoadRes, ok := loadResult.Response.(LoadFormaCommandResult)
+	var loadedCommand *forma_command.FormaCommand
+	if ok {
+		loadedCommand = loadedCommandLoadRes.Command
+	}
 	assert.True(t, ok, "Apply command should always be kept")
 	assert.NotNil(t, loadedCommand)
 	assert.Equal(t, forma_command.CommandStateSuccess, loadedCommand.State)
@@ -415,12 +441,12 @@ func TestFormaCommandPersister_ProgressUpdate_HashesReadActualProperties(t *test
 
 	storeResult := formaPersister.Call(sender, StoreNewFormaCommand{Command: *formaCommand})
 	assert.NoError(t, storeResult.Error)
-	assert.True(t, storeResult.Response.(bool))
+	assert.True(t, storeResult.Response.(CommandPersistResult).OK)
 
 	// Resume exemption: the initial store must NOT hash the user's DesiredState input.
 	storedLoad := formaPersister.Call(sender, LoadFormaCommand{CommandID: formaCommand.ID})
 	assert.NoError(t, storedLoad.Error)
-	storedCommand := storedLoad.Response.(*forma_command.FormaCommand)
+	storedCommand := storedLoad.Response.(LoadFormaCommandResult).Command
 	assert.JSONEq(t, `{"SecretString":"initial-secret"}`, string(storedCommand.ResourceUpdates[0].DesiredState.Properties),
 		"DesiredState input must remain plaintext at initial store to support resume-to-completion")
 
@@ -444,11 +470,11 @@ func TestFormaCommandPersister_ProgressUpdate_HashesReadActualProperties(t *test
 	}
 	res := formaPersister.Call(sender, updateProgress)
 	assert.NoError(t, res.Error)
-	assert.True(t, res.Response.(bool))
+	assert.True(t, res.Response.(CommandPersistResult).OK)
 
 	loadResult := formaPersister.Call(sender, LoadFormaCommand{CommandID: formaCommand.ID})
 	assert.NoError(t, loadResult.Error)
-	loaded := loadResult.Response.(*forma_command.FormaCommand)
+	loaded := loadResult.Response.(LoadFormaCommandResult).Command
 
 	persistedProgress := loaded.ResourceUpdates[0].MostRecentProgressResult.ResourceProperties
 	assert.NotContains(t, string(persistedProgress), "polled-secret",
@@ -670,7 +696,7 @@ func TestFormaCommandPersister_CacheEvictionOnFinalState(t *testing.T) {
 	// Load the command again - this should work (from DB since cache was evicted)
 	loadResult := formaPersister.Call(sender, LoadFormaCommand{CommandID: formaCommand.ID})
 	assert.NoError(t, loadResult.Error)
-	loadedCommand := loadResult.Response.(*forma_command.FormaCommand)
+	loadedCommand := loadResult.Response.(LoadFormaCommandResult).Command
 	assert.Equal(t, forma_command.CommandStateSuccess, loadedCommand.State)
 }
 
@@ -738,7 +764,7 @@ func TestFormaCommandPersister_MultipleProgressUpdatesUseCacheHit(t *testing.T) 
 	// Verify both resources are updated
 	loadResult := formaPersister.Call(sender, LoadFormaCommand{CommandID: formaCommand.ID})
 	assert.NoError(t, loadResult.Error)
-	loadedCommand := loadResult.Response.(*forma_command.FormaCommand)
+	loadedCommand := loadResult.Response.(LoadFormaCommandResult).Command
 
 	assert.Equal(t, resource_update.ResourceUpdateStateInProgress, loadedCommand.ResourceUpdates[0].State)
 	assert.Equal(t, resource_update.ResourceUpdateStateInProgress, loadedCommand.ResourceUpdates[1].State)
@@ -780,7 +806,7 @@ func TestFormaCommandPersister_ProgressUpdate_PreservesPropertiesAndVersion(t *t
 	// Load and assert fields were updated
 	loadResult := formaPersister.Call(sender, LoadFormaCommand{CommandID: formaCommand.ID})
 	assert.NoError(t, loadResult.Error)
-	loaded := loadResult.Response.(*forma_command.FormaCommand)
+	loaded := loadResult.Response.(LoadFormaCommandResult).Command
 
 	assert.JSONEq(t, string(updatedProperties), string(loaded.ResourceUpdates[0].DesiredState.Properties))
 	assert.JSONEq(t, string(updatedReadOnlyProperties), string(loaded.ResourceUpdates[0].DesiredState.ReadOnlyProperties))
@@ -812,12 +838,12 @@ func TestFormaCommandPersister_Completion_PreservesProperties(t *testing.T) {
 	}
 	res := formaPersister.Call(sender, markComplete)
 	assert.NoError(t, res.Error)
-	assert.True(t, res.Response.(bool))
+	assert.True(t, res.Response.(CommandPersistResult).OK)
 
 	// Command is now in final state and persisted; load it back
 	loadResult := formaPersister.Call(sender, LoadFormaCommand{CommandID: formaCommand.ID})
 	assert.NoError(t, loadResult.Error)
-	loaded := loadResult.Response.(*forma_command.FormaCommand)
+	loaded := loadResult.Response.(LoadFormaCommandResult).Command
 
 	assert.JSONEq(t, string(finalProperties), string(loaded.ResourceUpdates[0].DesiredState.Properties))
 	assert.JSONEq(t, string(finalReadOnlyProperties), string(loaded.ResourceUpdates[0].DesiredState.ReadOnlyProperties))
@@ -847,7 +873,7 @@ func TestFormaCommandPersister_DuplicateCompletion_IsNoOp(t *testing.T) {
 	// First completion: valid, should succeed
 	res1 := formaPersister.Call(sender, markComplete)
 	assert.NoError(t, res1.Error)
-	assert.True(t, res1.Response.(bool))
+	assert.True(t, res1.Response.(CommandPersistResult).OK)
 
 	// Second completion for the same resource: the monotonic terminality guard treats this as
 	// a no-op. The resource is already in a terminal state (Success) so the late message is
@@ -855,7 +881,7 @@ func TestFormaCommandPersister_DuplicateCompletion_IsNoOp(t *testing.T) {
 	// when the command was evicted from cache and reloaded (countNonFinalResources=0).
 	res2 := formaPersister.Call(sender, markComplete)
 	assert.NoError(t, res2.Error, "duplicate completion must be a no-op, not an error")
-	assert.True(t, res2.Response.(bool))
+	assert.True(t, res2.Response.(CommandPersistResult).OK)
 }
 
 func TestIsResourceInFinalState_Success(t *testing.T) {
@@ -961,7 +987,7 @@ func TestFormaCommandPersister_TargetUpdateState_PersistedToDB(t *testing.T) {
 	// Store the command (target=NotStarted, resource=NotStarted).
 	storeResult := formaPersister.Call(sender, StoreNewFormaCommand{Command: *formaCommand})
 	assert.NoError(t, storeResult.Error)
-	assert.True(t, storeResult.Response.(bool))
+	assert.True(t, storeResult.Response.(CommandPersistResult).OK)
 
 	// Mark the target update as complete (Success).
 	// The resource update is still NotStarted, so the overall command stays InProgress
@@ -975,7 +1001,7 @@ func TestFormaCommandPersister_TargetUpdateState_PersistedToDB(t *testing.T) {
 	}
 	res := formaPersister.Call(sender, markTargetComplete)
 	assert.NoError(t, res.Error)
-	assert.True(t, res.Response.(bool))
+	assert.True(t, res.Response.(CommandPersistResult).OK)
 
 	// Spin up a second persister against the same database.
 	// This simulates a cache-miss (e.g. persister restart) and forces a fresh load from DB.
@@ -984,7 +1010,7 @@ func TestFormaCommandPersister_TargetUpdateState_PersistedToDB(t *testing.T) {
 
 	loadResult := secondPersister.Call(sender2, LoadFormaCommand{CommandID: formaCommand.ID})
 	assert.NoError(t, loadResult.Error)
-	loaded := loadResult.Response.(*forma_command.FormaCommand)
+	loaded := loadResult.Response.(LoadFormaCommandResult).Command
 
 	// The target update state must be Success, not reverted to NotStarted.
 	assert.Equal(t, types.TargetUpdateStateSuccess, loaded.TargetUpdates[0].State,
@@ -1041,7 +1067,7 @@ func TestFormaCommandPersister_LateCompletion_TerminalResourceGuard(t *testing.T
 	// Store the command: pendingCompletions=2
 	storeResult := formaPersister.Call(sender, StoreNewFormaCommand{Command: *formaCommand})
 	assert.NoError(t, storeResult.Error)
-	assert.True(t, storeResult.Response.(bool))
+	assert.True(t, storeResult.Response.(CommandPersistResult).OK)
 
 	now := util.TimeNow()
 
@@ -1068,12 +1094,12 @@ func TestFormaCommandPersister_LateCompletion_TerminalResourceGuard(t *testing.T
 	}
 	lateRes := formaPersister.Call(sender, lateComplete)
 	assert.NoError(t, lateRes.Error, "late completion for already-terminal resource must not return an error")
-	assert.True(t, lateRes.Response.(bool))
+	assert.True(t, lateRes.Response.(CommandPersistResult).OK)
 
 	// The resource state must still be Canceled (not overwritten to Success).
 	loadResult := formaPersister.Call(sender, LoadFormaCommand{CommandID: formaCommand.ID})
 	assert.NoError(t, loadResult.Error)
-	loaded := loadResult.Response.(*forma_command.FormaCommand)
+	loaded := loadResult.Response.(LoadFormaCommandResult).Command
 
 	ruByKsuid := make(map[string]*resource_update.ResourceUpdate)
 	for i := range loaded.ResourceUpdates {
@@ -1098,12 +1124,12 @@ func TestFormaCommandPersister_LateCompletion_TerminalResourceGuard(t *testing.T
 	}
 	normalRes := formaPersister.Call(sender, normalComplete)
 	assert.NoError(t, normalRes.Error, "normal completion after a guarded late write must succeed")
-	assert.True(t, normalRes.Response.(bool))
+	assert.True(t, normalRes.Response.(CommandPersistResult).OK)
 
 	// Both resources are now terminal; the overall command state must be Canceled.
 	finalLoad := formaPersister.Call(sender, LoadFormaCommand{CommandID: formaCommand.ID})
 	assert.NoError(t, finalLoad.Error)
-	finalCmd := finalLoad.Response.(*forma_command.FormaCommand)
+	finalCmd := finalLoad.Response.(LoadFormaCommandResult).Command
 	assert.Equal(t, forma_command.CommandStateCanceled, finalCmd.State,
 		"overall command state must be Canceled after all resources reach terminal state")
 }
@@ -1155,7 +1181,7 @@ func TestFormaCommandPersister_LateTargetCompletion_TerminalTargetGuard(t *testi
 	// Store the command with the target already Canceled.
 	storeResult := formaPersister.Call(sender, StoreNewFormaCommand{Command: *formaCommand})
 	assert.NoError(t, storeResult.Error)
-	assert.True(t, storeResult.Response.(bool))
+	assert.True(t, storeResult.Response.(CommandPersistResult).OK)
 
 	now := util.TimeNow()
 
@@ -1170,12 +1196,12 @@ func TestFormaCommandPersister_LateTargetCompletion_TerminalTargetGuard(t *testi
 	}
 	lateRes := formaPersister.Call(sender, lateTargetComplete)
 	assert.NoError(t, lateRes.Error, "late target completion for already-terminal target must not return an error")
-	assert.True(t, lateRes.Response.(bool))
+	assert.True(t, lateRes.Response.(CommandPersistResult).OK)
 
 	// The target update state must still be Canceled (not overwritten to Success).
 	loadResult := formaPersister.Call(sender, LoadFormaCommand{CommandID: formaCommand.ID})
 	assert.NoError(t, loadResult.Error)
-	loaded := loadResult.Response.(*forma_command.FormaCommand)
+	loaded := loadResult.Response.(LoadFormaCommandResult).Command
 
 	assert.Equal(t, types.TargetUpdateStateCanceled, loaded.TargetUpdates[0].State,
 		"terminal (Canceled) target state must not be overwritten by a late completion")
@@ -1230,7 +1256,7 @@ func TestFormaCommandPersister_UpdateTargetStates_MergesTerminalTargets(t *testi
 	// Store the command with the target already Canceled.
 	storeResult := formaPersister.Call(sender, StoreNewFormaCommand{Command: *formaCommand})
 	assert.NoError(t, storeResult.Error)
-	assert.True(t, storeResult.Response.(bool))
+	assert.True(t, storeResult.Response.(CommandPersistResult).OK)
 
 	// Send updateTargetStates with the same target but a non-terminal state (InProgress).
 	// Without the merge guard, this would overwrite the Canceled state with InProgress.
@@ -1249,12 +1275,12 @@ func TestFormaCommandPersister_UpdateTargetStates_MergesTerminalTargets(t *testi
 	}
 	lateRes := formaPersister.Call(sender, lateUpdate)
 	assert.NoError(t, lateRes.Error, "late updateTargetStates must not return an error")
-	assert.True(t, lateRes.Response.(bool))
+	assert.True(t, lateRes.Response.(CommandPersistResult).OK)
 
 	// The target must remain Canceled.
 	loadResult := formaPersister.Call(sender, LoadFormaCommand{CommandID: formaCommand.ID})
 	assert.NoError(t, loadResult.Error)
-	loaded := loadResult.Response.(*forma_command.FormaCommand)
+	loaded := loadResult.Response.(LoadFormaCommandResult).Command
 
 	assert.Equal(t, types.TargetUpdateStateCanceled, loaded.TargetUpdates[0].State,
 		"terminal (Canceled) target state must not be clobbered by a late updateTargetStates")
@@ -1351,7 +1377,7 @@ func TestFormaCommandPersister_BulkForceCancel_TerminalizesInFlightWork(t *testi
 	// Note: storeNewFormaCommand sets pendingCompletions = len(ResourceUpdates) = 3
 	storeResult := formaPersister.Call(sender, StoreNewFormaCommand{Command: *formaCommand})
 	assert.NoError(t, storeResult.Error)
-	assert.True(t, storeResult.Response.(bool))
+	assert.True(t, storeResult.Response.(CommandPersistResult).OK)
 
 	// Advance ksuid1 and ksuid2 to InProgress via UpdateResourceProgress
 	now := util.TimeNow()
@@ -1409,7 +1435,7 @@ func TestFormaCommandPersister_BulkForceCancel_TerminalizesInFlightWork(t *testi
 	// Reload from DB (command was finalized and evicted from cache)
 	loadResult := formaPersister.Call(sender, LoadFormaCommand{CommandID: formaCommand.ID})
 	assert.NoError(t, loadResult.Error)
-	loaded := loadResult.Response.(*forma_command.FormaCommand)
+	loaded := loadResult.Response.(LoadFormaCommandResult).Command
 
 	// Build lookup by ksuid
 	ruByKsuid := make(map[string]*resource_update.ResourceUpdate)
@@ -1437,12 +1463,12 @@ func TestFormaCommandPersister_BulkForceCancel_TerminalizesInFlightWork(t *testi
 	}
 	lateRes := formaPersister.Call(sender, lateComplete)
 	assert.NoError(t, lateRes.Error, "late completion for already-terminal resource must be a no-op")
-	assert.True(t, lateRes.Response.(bool))
+	assert.True(t, lateRes.Response.(CommandPersistResult).OK)
 
 	// State must still be Canceled after the late no-op
 	finalLoad := formaPersister.Call(sender, LoadFormaCommand{CommandID: formaCommand.ID})
 	assert.NoError(t, finalLoad.Error)
-	finalCmd := finalLoad.Response.(*forma_command.FormaCommand)
+	finalCmd := finalLoad.Response.(LoadFormaCommandResult).Command
 	assert.Equal(t, forma_command.CommandStateCanceled, finalCmd.State)
 }
 
@@ -1471,7 +1497,7 @@ func TestFormaCommandPersister_MarkCompleteRecordsFailureReason(t *testing.T) {
 
 	storeResult := formaPersister.Call(sender, StoreNewFormaCommand{Command: *formaCommand})
 	assert.NoError(t, storeResult.Error)
-	assert.True(t, storeResult.Response.(bool))
+	assert.True(t, storeResult.Response.(CommandPersistResult).OK)
 
 	resourceURI := formaCommand.ResourceUpdates[0].DesiredState.URI()
 	reason := "resource update failed before any plugin operation ran"
@@ -1487,11 +1513,15 @@ func TestFormaCommandPersister_MarkCompleteRecordsFailureReason(t *testing.T) {
 	}
 	markRes := formaPersister.Call(sender, markComplete)
 	assert.NoError(t, markRes.Error)
-	assert.True(t, markRes.Response.(bool))
+	assert.True(t, markRes.Response.(CommandPersistResult).OK)
 
 	loadResult := formaPersister.Call(sender, LoadFormaCommand{CommandID: formaCommand.ID})
 	assert.NoError(t, loadResult.Error)
-	loaded, ok := loadResult.Response.(*forma_command.FormaCommand)
+	loadedLoadRes, ok := loadResult.Response.(LoadFormaCommandResult)
+	var loaded *forma_command.FormaCommand
+	if ok {
+		loaded = loadedLoadRes.Command
+	}
 	assert.True(t, ok)
 
 	assert.Equal(t, reason, loaded.ResourceUpdates[0].FailureReason)
@@ -1511,7 +1541,7 @@ func TestFormaCommandPersister_SuccessfulRetryClearsPersistedFailureReason(t *te
 
 	storeResult := formaPersister.Call(sender, StoreNewFormaCommand{Command: *formaCommand})
 	assert.NoError(t, storeResult.Error)
-	assert.True(t, storeResult.Response.(bool))
+	assert.True(t, storeResult.Response.(CommandPersistResult).OK)
 
 	resourceURI := formaCommand.ResourceUpdates[0].DesiredState.URI()
 
@@ -1525,11 +1555,15 @@ func TestFormaCommandPersister_SuccessfulRetryClearsPersistedFailureReason(t *te
 	}
 	res := formaPersister.Call(sender, succeeded)
 	assert.NoError(t, res.Error)
-	assert.True(t, res.Response.(bool))
+	assert.True(t, res.Response.(CommandPersistResult).OK)
 
 	loadResult := formaPersister.Call(sender, LoadFormaCommand{CommandID: formaCommand.ID})
 	assert.NoError(t, loadResult.Error)
-	loaded, ok := loadResult.Response.(*forma_command.FormaCommand)
+	loadedLoadRes, ok := loadResult.Response.(LoadFormaCommandResult)
+	var loaded *forma_command.FormaCommand
+	if ok {
+		loaded = loadedLoadRes.Command
+	}
 	assert.True(t, ok)
 
 	assert.Empty(t, loaded.ResourceUpdates[0].FailureReason)

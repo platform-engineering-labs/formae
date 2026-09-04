@@ -414,7 +414,10 @@ func (p *recordOnlyGuardProcess) Log() gen.Log { return p.log }
 
 func (p *recordOnlyGuardProcess) Call(_ any, msg any) (any, error) {
 	p.calls = append(p.calls, msg)
-	return "resource-version-1", nil
+	if _, ok := msg.(PersistResourceUpdate); ok {
+		return PersistResourceUpdateResult{Version: "resource-version-1"}, nil
+	}
+	return true, nil
 }
 
 func (p *recordOnlyGuardProcess) reachedPluginSpawn() bool {

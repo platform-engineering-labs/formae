@@ -199,10 +199,10 @@ func synchronizeAllResources(state gen.Atom, data SynchronizerData, proc gen.Pro
 	}
 	pluginInfoByNamespace := make(map[string]pluginCache)
 	for namespace := range namespaceSeen {
-		response, err := proc.Call(
+		response, err := messages.UnwrapCall(proc.Call(
 			gen.ProcessID{Name: actornames.PluginCoordinator, Node: proc.Node().Name()},
 			messages.GetPluginInfo{Namespace: namespace},
-		)
+		))
 		if err != nil {
 			proc.Log().Debug("Failed to check plugin availability, skipping namespace=%s: %v",
 				namespace, err)
@@ -330,9 +330,9 @@ func synchronizeAllResources(state gen.Atom, data SynchronizerData, proc gen.Pro
 	data.commandID = syncCommand.ID
 	proc.Log().Debug("Synchronizer: created sync command commandID=%s resourceUpdateCount=%d", syncCommand.ID, len(allResourceUpdates))
 
-	_, err = proc.Call(
+	_, err = messages.UnwrapCall(proc.Call(
 		gen.ProcessID{Name: actornames.FormaCommandPersister, Node: proc.Node().Name()},
-		forma_persister.StoreNewFormaCommand{Command: *syncCommand})
+		forma_persister.StoreNewFormaCommand{Command: *syncCommand}))
 	if err != nil {
 		proc.Log().Error("failed to store batch forma command: %v", err)
 		return state, data, nil, gen.TerminateReasonPanic
@@ -434,16 +434,16 @@ func finalizeFailedCommand(cmd *forma_command.FormaCommand, proc gen.Process) {
 	}
 	persister := gen.ProcessID{Name: actornames.FormaCommandPersister, Node: proc.Node().Name()}
 	if len(refs) > 0 {
-		if _, err := proc.Call(persister, forma_persister.MarkResourcesAsFailed{
+		if _, err := messages.UnwrapCall(proc.Call(persister, forma_persister.MarkResourcesAsFailed{
 			CommandID:          cmd.ID,
 			Resources:          refs,
 			ResourceModifiedTs: time.Now(),
-		}); err != nil {
+		})); err != nil {
 			proc.Log().Error("Synchronizer: failed to mark resources as failed for aborted command commandID=%s: %v", cmd.ID, err)
 			return
 		}
 	}
-	if _, err := proc.Call(persister, forma_persister.FinalizeIncompleteCommand{CommandID: cmd.ID}); err != nil {
+	if _, err := messages.UnwrapCall(proc.Call(persister, forma_persister.FinalizeIncompleteCommand{CommandID: cmd.ID})); err != nil {
 		proc.Log().Error("Synchronizer: failed to finalize aborted command commandID=%s: %v", cmd.ID, err)
 	}
 }

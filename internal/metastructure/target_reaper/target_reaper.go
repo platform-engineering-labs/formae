@@ -182,7 +182,7 @@ func (r *TargetReaper) reap(candidate ReapCandidate, now time.Time) {
 	resourceURIs := r.announceToSynchronizer(candidate.TargetLabel)
 	defer r.unannounceFromSynchronizer(resourceURIs)
 
-	response, err := r.Call(
+	response, err := messages.UnwrapCall(r.Call(
 		gen.ProcessID{Name: actornames.ResourcePersister, Node: r.Node().Name()},
 		messages.PersistTargetReap{
 			Label:            candidate.TargetLabel,
@@ -191,7 +191,7 @@ func (r *TargetReaper) reap(candidate ReapCandidate, now time.Time) {
 			LastSampleBefore: now,
 			ReapedAt:         now,
 		},
-	)
+	))
 	if err != nil {
 		r.Log().Error("Failed to call PersistTargetReap for target label=%s: %v", candidate.TargetLabel, err)
 		return

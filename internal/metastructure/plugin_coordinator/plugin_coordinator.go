@@ -203,12 +203,19 @@ func (c *PluginCoordinator) Init(args ...any) error {
 	return nil
 }
 
+// HandleCall answers every request with a typed result carrying its own
+// success/failure status. Returning an error here would terminate the
+// coordinator without a reply, dropping every registered plugin with the
+// actor and starving the requests queued in its mailbox — so a namespace no
+// plugin serves is answered, not crashed on. An unknown request type is a
+// protocol bug and keeps the terminating error return.
 func (c *PluginCoordinator) HandleCall(from gen.PID, ref gen.Ref, request any) (any, error) {
 	switch req := request.(type) {
 	case messages.GetPluginNode:
 		plugin, ok := c.findPluginByNamespace(req.Namespace)
 		if !ok {
-			return nil, fmt.Errorf("plugin not found: %s", req.Namespace)
+			c.Log().Error("PluginCoordinator: plugin not found: %s", req.Namespace)
+			return messages.PluginNode{Error: fmt.Sprintf("plugin not found: %s", req.Namespace)}, nil
 		}
 		return messages.PluginNode{NodeName: plugin.NodeName}, nil
 
@@ -223,6 +230,7 @@ func (c *PluginCoordinator) HandleCall(from gen.PID, ref gen.Ref, request any) (
 		return c.getRegisteredPlugins(), nil
 
 	default:
+		c.Log().Error("PluginCoordinator: unknown request type %T", request)
 		return nil, fmt.Errorf("unknown request: %T", request)
 	}
 }

@@ -67,10 +67,10 @@ func ResolveOpaqueTargetConfig(proc gen.Process, target pkgmodel.Target) (json.R
 
 	for _, uri := range uris {
 		// Load the source resource from the persister.
-		rawResult, err := proc.Call(
+		rawResult, err := messages.UnwrapCall(proc.Call(
 			gen.ProcessID{Name: actornames.ResourcePersister, Node: proc.Node().Name()},
 			messages.LoadResource{ResourceURI: uri.Stripped()},
-		)
+		))
 		if err != nil {
 			proc.Log().Error(
 				"failed to load resource for opaque ref resolution uri=%s target=%s: %v",

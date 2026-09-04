@@ -55,8 +55,11 @@ type persistingProcess struct {
 }
 
 func (p *persistingProcess) Log() gen.Log { return p.log }
-func (p *persistingProcess) Call(_ any, _ any) (any, error) {
-	return "resource-version-1", nil
+func (p *persistingProcess) Call(_ any, request any) (any, error) {
+	if _, ok := request.(PersistResourceUpdate); ok {
+		return PersistResourceUpdateResult{Version: "resource-version-1"}, nil
+	}
+	return true, nil
 }
 
 // opaqueGenEnvelope builds a property document whose single property holds a

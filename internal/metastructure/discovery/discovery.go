@@ -297,10 +297,10 @@ func resumeDiscovery(from gen.PID, state gen.Atom, data DiscoveryData, message m
 
 // getPluginInfo fetches plugin info from PluginCoordinator
 func getPluginInfo(proc gen.Process, namespace string) (*messages.PluginInfoResponse, error) {
-	result, err := proc.Call(
+	result, err := messages.UnwrapCall(proc.Call(
 		gen.ProcessID{Name: actornames.PluginCoordinator, Node: proc.Node().Name()},
 		messages.GetPluginInfo{Namespace: namespace},
-	)
+	))
 	if err != nil {
 		return nil, fmt.Errorf("failed to get plugin info for %s: %w", namespace, err)
 	}
@@ -570,7 +570,7 @@ func scanTargetForResourceType(target pkgmodel.Target, op ListOperation, data Di
 	}
 
 	// Spawn PluginOperator via PluginCoordinator
-	spawnResult, err := proc.Call(
+	spawnResult, err := messages.UnwrapCall(proc.Call(
 		gen.ProcessID{Name: actornames.PluginCoordinator, Node: proc.Node().Name()},
 		messages.SpawnPluginOperator{
 			Namespace:   target.Namespace,
@@ -578,7 +578,7 @@ func scanTargetForResourceType(target pkgmodel.Target, op ListOperation, data Di
 			Operation:   string(operation),
 			OperationID: operationID,
 			RequestedBy: proc.PID(),
-		})
+		}))
 	if err != nil {
 		delete(data.outstandingListOperations, mapKey)
 		return fmt.Errorf("failed to spawn PluginOperator for %s: %w", uri, err)
@@ -782,9 +782,9 @@ func synchronizeResources(op ListOperation, namespace string, target pkgmodel.Ta
 	)
 
 	// store the forma command
-	_, err = proc.Call(actornames.FormaCommandPersister, forma_persister.StoreNewFormaCommand{
+	_, err = messages.UnwrapCall(proc.Call(actornames.FormaCommandPersister, forma_persister.StoreNewFormaCommand{
 		Command: *syncCommand,
-	})
+	}))
 	if err != nil {
 		proc.Log().Error("failed to store sync command: %v", err)
 		return "", err
@@ -1144,16 +1144,16 @@ func finalizeFailedSyncCommand(cmd *forma_command.FormaCommand, proc gen.Process
 	}
 	persister := actornames.FormaCommandPersister
 	if len(refs) > 0 {
-		if _, err := proc.Call(persister, forma_persister.MarkResourcesAsFailed{
+		if _, err := messages.UnwrapCall(proc.Call(persister, forma_persister.MarkResourcesAsFailed{
 			CommandID:          cmd.ID,
 			Resources:          refs,
 			ResourceModifiedTs: time.Now(),
-		}); err != nil {
+		})); err != nil {
 			slog.Error("Discovery: failed to mark resources as failed for aborted command", "commandID", cmd.ID, "error", err)
 			return
 		}
 	}
-	if _, err := proc.Call(persister, forma_persister.FinalizeIncompleteCommand{CommandID: cmd.ID}); err != nil {
+	if _, err := messages.UnwrapCall(proc.Call(persister, forma_persister.FinalizeIncompleteCommand{CommandID: cmd.ID})); err != nil {
 		slog.Error("Discovery: failed to finalize aborted command", "commandID", cmd.ID, "error", err)
 	}
 }

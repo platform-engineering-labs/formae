@@ -93,7 +93,15 @@ func TestChangesetExecutor_SingleResourceUpdate(t *testing.T) {
 		})
 		assert.NoError(t, err)
 
-		command, ok := commandRes.(*forma_command.FormaCommand)
+		commandLoadRes, ok := commandRes.(forma_persister.LoadFormaCommandResult)
+
+		var command *forma_command.FormaCommand
+
+		if ok {
+
+			command = commandLoadRes.Command
+
+		}
 		assert.True(t, ok)
 		assert.Equal(t, forma_command.CommandStateSuccess, command.State)
 		assert.Len(t, command.ResourceUpdates, 1)
@@ -197,7 +205,15 @@ func TestChangesetExecutor_DependentResources(t *testing.T) {
 		})
 		assert.NoError(t, err)
 
-		command, ok := commandRes.(*forma_command.FormaCommand)
+		commandLoadRes, ok := commandRes.(forma_persister.LoadFormaCommandResult)
+
+		var command *forma_command.FormaCommand
+
+		if ok {
+
+			command = commandLoadRes.Command
+
+		}
 		assert.True(t, ok)
 		assert.Equal(t, forma_command.CommandStateSuccess, command.State)
 		assert.Len(t, command.ResourceUpdates, 2)
@@ -291,7 +307,15 @@ func TestChangesetExecutor_CascadeFailure(t *testing.T) {
 		})
 		assert.NoError(t, err)
 
-		command, ok := commandRes.(*forma_command.FormaCommand)
+		commandLoadRes, ok := commandRes.(forma_persister.LoadFormaCommandResult)
+
+		var command *forma_command.FormaCommand
+
+		if ok {
+
+			command = commandLoadRes.Command
+
+		}
 		assert.True(t, ok)
 
 		// VPC should have failed, subnet should also have failed (cascade)
@@ -451,7 +475,15 @@ func TestChangesetExecutor_HashesAllResourcesOnCompletion(t *testing.T) {
 		})
 		assert.NoError(t, err)
 
-		command, ok := commandRes.(*forma_command.FormaCommand)
+		commandLoadRes, ok := commandRes.(forma_persister.LoadFormaCommandResult)
+
+		var command *forma_command.FormaCommand
+
+		if ok {
+
+			command = commandLoadRes.Command
+
+		}
 		assert.True(t, ok)
 		assert.Equal(t, forma_command.CommandStateSuccess, command.State)
 	})
@@ -523,7 +555,15 @@ func TestChangesetExecutor_HashesAllResourcesOnFailure(t *testing.T) {
 		})
 		assert.NoError(t, err)
 
-		command, ok := commandRes.(*forma_command.FormaCommand)
+		commandLoadRes, ok := commandRes.(forma_persister.LoadFormaCommandResult)
+
+		var command *forma_command.FormaCommand
+
+		if ok {
+
+			command = commandLoadRes.Command
+
+		}
 		assert.True(t, ok)
 		// Verify the resource update failed
 		assert.Len(t, command.ResourceUpdates, 1)
