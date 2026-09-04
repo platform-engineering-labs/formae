@@ -126,7 +126,6 @@ func agentView(a pkgmodel.AgentConfig, mask string) map[string]any {
 		"discovery": map[string]any{
 			"enabled":                 a.Discovery.Enabled,
 			"interval":                dur(a.Discovery.Interval),
-			"labelTagKeys":            a.Discovery.LabelTagKeys,
 			"resourceTypesToDiscover": a.Discovery.ResourceTypesToDiscover,
 		},
 		"logging": map[string]any{

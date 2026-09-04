@@ -42,10 +42,6 @@ agent {
     }
     discovery {
         enabled = true
-        labelTagKeys = new Listing<String> {
-            "Name"
-            "Environment"
-        }
         interval = 20.min
     }
     logging {

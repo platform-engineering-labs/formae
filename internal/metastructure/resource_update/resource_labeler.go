@@ -33,31 +33,22 @@ func NewResourceLabeler(ds ResourceDataLookup) *ResourceLabeler {
 
 // LabelForUnmanagedResource generates a label for a discovered resource.
 // Uses JSONPath query from labelConfig to extract label value from properties.
-// Falls back to legacy tagLabelKeys, then to nativeID if no label can be extracted.
+// Falls back to nativeID if no label can be extracted.
 //
 // Resolution order:
 // 1. Plugin's ResourceOverrides[resourceType] (if exists)
 // 2. Plugin's DefaultQuery
-// 3. Legacy tagLabelKeys (for backwards compatibility)
-// 4. NativeID (fallback)
+// 3. NativeID (fallback)
 func (l *ResourceLabeler) LabelForUnmanagedResource(
 	nativeID string,
 	resourceType string,
 	properties json.RawMessage,
 	labelConfig pkgmodel.LabelConfig,
-	legacyTagKeys []string,
 ) string {
 	// Try JSONPath query first (from LabelConfig)
 	query := labelConfig.QueryForResourceType(resourceType)
 	if query != "" {
 		if label := l.extractLabelFromQuery(properties, query); label != "" {
-			return l.ensureUnique(label)
-		}
-	}
-
-	// Legacy fallback: use tag keys from config
-	if len(legacyTagKeys) > 0 {
-		if label := l.extractLabelFromLegacyTagKeys(properties, legacyTagKeys); label != "" {
 			return l.ensureUnique(label)
 		}
 	}
@@ -109,28 +100,6 @@ func (l *ResourceLabeler) extractLabelFromQuery(properties json.RawMessage, quer
 	}
 
 	return strings.Join(parts, labelSeparator)
-}
-
-// extractLabelFromLegacyTagKeys extracts a label using the legacy tag-based approach.
-// This is kept for backwards compatibility with existing configurations.
-func (l *ResourceLabeler) extractLabelFromLegacyTagKeys(properties json.RawMessage, tagKeys []string) string {
-	tags := pkgmodel.GetTagsFromProperties(properties)
-	tagMap := make(map[string]string)
-	for _, tag := range tags {
-		tagMap[tag.Key] = tag.Value
-	}
-
-	var labelParts []string
-	for _, key := range tagKeys {
-		if value, exists := tagMap[key]; exists && value != "" {
-			labelParts = append(labelParts, value)
-		}
-	}
-
-	if len(labelParts) > 0 {
-		return strings.Join(labelParts, labelSeparator)
-	}
-	return ""
 }
 
 // ensureUnique returns a label that no existing resource holds, incrementing

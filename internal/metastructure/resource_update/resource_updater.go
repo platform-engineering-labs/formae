@@ -218,7 +218,6 @@ type ResourceUpdateData struct {
 	resourceUpdate  *ResourceUpdate
 	commandID       string
 	labelConfig     pkgmodel.LabelConfig // JSONPath-based label extraction config from plugin
-	labelTagKeys    []string             // Legacy tag-based label keys for backwards compatibility
 	resourceLabeler *ResourceLabeler
 	retryConfig     pkgmodel.RetryConfig
 	requestedBy     gen.PID
@@ -269,13 +268,6 @@ func (r *ResourceUpdater) Init(args ...any) (statemachine.StateMachineSpec[Resou
 		return statemachine.StateMachineSpec[ResourceUpdateData]{}, fmt.Errorf("resourceUpdater: missing 'RetryConfig' environment variable")
 	}
 	data.retryConfig = pluginCfg.(pkgmodel.RetryConfig)
-
-	discoveryCfg, ok := r.Env("DiscoveryConfig")
-	if !ok {
-		r.Log().Error("ResourceUpdater: missing 'DiscoveryConfig' environment variable")
-		return statemachine.StateMachineSpec[ResourceUpdateData]{}, fmt.Errorf("resourceUpdater: missing 'DiscoveryConfig' environment variable")
-	}
-	data.labelTagKeys = discoveryCfg.(pkgmodel.DiscoveryConfig).LabelTagKeys
 
 	ds, ok := r.Env("Datastore")
 	if !ok {
@@ -1112,7 +1104,6 @@ func handleProgressUpdate(from gen.PID, state gen.Atom, data ResourceUpdateData,
 				data.resourceUpdate.DesiredState.Type,
 				data.resourceUpdate.DesiredState.Properties,
 				data.labelConfig,
-				data.labelTagKeys,
 			)
 		}
 
