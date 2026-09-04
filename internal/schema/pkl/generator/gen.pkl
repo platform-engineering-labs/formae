@@ -1517,6 +1517,39 @@ local function formatNestedContent(map: Map<String, Any>, indent: String): Strin
   ))
     lines.join("\n")
 
+/// PKL keywords cannot stand as a bare property name; a key shaped like one
+/// still needs escaping. Not the full grammar — only the words that can
+/// plausibly arrive as a data key.
+local pklKeywords: Set<String> = Set(
+  "abstract", "amends", "as", "class", "const", "else", "extends", "external",
+  "false", "fixed", "for", "function", "hidden", "if", "import", "in", "is",
+  "let", "local", "module", "new", "nothing", "null", "open", "out", "outer",
+  "read", "super", "this", "throw", "trace", "true", "typealias", "unknown",
+  "when"
+)
+
+/// True when `key` can stand unescaped as a PKL property name.
+local function isPklIdentifier(key: String): Boolean =
+  key.matches(Regex("[A-Za-z_$][A-Za-z0-9_$]*")) && !pklKeywords.contains(key)
+
+/// Renders a data key so the generated forma parses. Dots, slashes and hyphens
+/// are ordinary in provider data (Kubernetes annotations, `x-kubernetes-*` CRD
+/// flags, HTTP header names) and none of them may stand bare.
+///
+/// A `Mapping` takes entries, so its keys are always bracketed. Everywhere else
+/// the key is a property — of a typed class or of a Dynamic — and a bracketed
+/// entry would be rejected on a typed class, so escaping is by backticks.
+local function renderDataKey(key: String, isMapping: Boolean): String =
+  // ponytail: a key containing a backtick cannot be backtick-escaped; bracket
+  // it, which is right for Dynamic and Mapping. A typed class cannot carry
+  // such a property name in the first place.
+  if (isMapping || key.contains(":") || key.contains("`"))
+    "[\"" + key + "\"]"
+  else if (isPklIdentifier(key))
+    key
+  else
+    "`" + key + "`"
+
 local function formatNestedContentWithTypes(map: Map<String, Any>, indent: String): String =
   let (isMapping = map.getOrNull("__type__") == "Mapping")
   // Tag classes (Tag, DefinedTag, FreeformTag, etc.) use hidden lowercase properties
@@ -1532,10 +1565,8 @@ local function formatNestedContentWithTypes(map: Map<String, Any>, indent: Strin
       let (formattedKey =
         if (isTag)
           key.take(1).toLowerCase() + key.drop(1)
-        else if (key.contains(":") || isMapping)
-          "[\"" + key + "\"]"
         else
-          key
+          renderDataKey(key, isMapping)
       )
       let (formattedValue =
         if (value is List && key == "tags")
@@ -1553,13 +1584,12 @@ local function formatNestedContentWithTypes(map: Map<String, Any>, indent: Strin
     lines.join("\n")
 
 local function mapToPklStringWithTypes(map: Map<String, Any>, indent: String): String =
+  // Reads its own tag: `isMapping` used to be read from the enclosing module,
+  // where nothing declares it, so every map reaching this function died with
+  // "Cannot find property `isMapping`".
+  let (isMapping = map.getOrNull("__type__") == "Mapping")
   let (lines = map.fold(List(), (acc: List<String>, key: String, value:Any) ->
-    let (formattedKey =
-      if (key.contains(":") || isMapping)
-        "[\"" + key + "\"]"
-      else
-        key
-    )
+    let (formattedKey = renderDataKey(key, isMapping))
     let (formattedValue = formatValueWithTypes(value, indent + "  "))
     let (line = (indent + "  ") + formattedKey + " = " + formattedValue)
       acc.add(line)

@@ -1270,6 +1270,56 @@ facts {
         rendered.contains("\\(")
     }
 
+    // --- Non-identifier keys in untyped content (PLA-465) ---
+
+    ["untyped nested content quotes keys that are not PKL identifiers"] {
+        // Kubernetes annotations and CRD schema flags are ordinary content in an
+        // opaque field. Rendered bare, the generated forma does not parse.
+        let (nested = new Dynamic {
+            ["__type__"] = "Dynamic"
+            ["objectset.rio.cattle.io/applied"] = "H4"
+            ["x-kubernetes-preserve-unknown-fields"] = true
+            ["plain"] = "ok"
+        })
+        let (rendered = gen.genMapToPklStringWithTypes("TestResource", Map("spec", nested), "test"))
+        // Backticks, not brackets: the same renderer serves typed classes, which
+        // take properties and reject entries.
+        rendered.contains("`objectset.rio.cattle.io/applied` = \"H4\"")
+          && rendered.contains("`x-kubernetes-preserve-unknown-fields` = true")
+          && rendered.contains("plain = \"ok\"")
+    }
+
+    ["untyped map without a type tag quotes keys that are not PKL identifiers"] {
+        let (nested = new Dynamic {
+            ["prometheus.io/scrape"] = "true"
+            ["plain"] = "ok"
+        })
+        let (rendered = gen.genMapToPklStringWithTypes("TestResource", Map("spec", nested), "test"))
+        rendered.contains("`prometheus.io/scrape` = \"true\"")
+          && rendered.contains("plain = \"ok\"")
+    }
+
+    ["a Mapping still renders its keys as entries"] {
+        let (nested = new Dynamic {
+            ["__type__"] = "Mapping"
+            ["prometheus.io/scrape"] = "true"
+            ["plain"] = "ok"
+        })
+        let (rendered = gen.genMapToPklStringWithTypes("TestResource", Map("spec", nested), "test"))
+        rendered.contains("[\"prometheus.io/scrape\"] = \"true\"")
+          && rendered.contains("[\"plain\"] = \"ok\"")
+    }
+
+    ["a key shaped like a PKL keyword is escaped"] {
+        let (nested = new Dynamic {
+            ["__type__"] = "Dynamic"
+            ["module"] = "cattle"
+            ["for"] = "everyone"
+        })
+        let (rendered = gen.genMapToPklStringWithTypes("TestResource", Map("spec", nested), "test"))
+        rendered.contains("`module` = \"cattle\"") && rendered.contains("`for` = \"everyone\"")
+    }
+
     // --- String escaping (roundtrip) tests ---
 
     ["String type conversion preserves quotes (escaping is a serialization concern)"] {
