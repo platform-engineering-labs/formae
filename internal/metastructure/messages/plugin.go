@@ -63,10 +63,14 @@ type GetPluginNode struct {
 	Namespace string
 }
 
-// PluginNode is the response containing the plugin's Ergo node name
+// PluginNode is the response containing the plugin's Ergo node name, or the
+// failure that prevented the lookup (no plugin serves the namespace).
 type PluginNode struct {
 	NodeName gen.Atom
+	Error    string
 }
+
+func (r PluginNode) CallError() string { return r.Error }
 
 // GetPluginInfo requests plugin metadata from PluginCoordinator
 type GetPluginInfo struct {

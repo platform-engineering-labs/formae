@@ -178,6 +178,16 @@ type ResolveTimedOut struct{}
 
 type Shutdown struct{}
 
+// PersistResourceUpdateResult is the reply to a PersistResourceUpdate call:
+// the stored version hash on success (empty when the update needed no
+// persist), or the failure that refused the write.
+type PersistResourceUpdateResult struct {
+	Version string
+	Error   string
+}
+
+func (r PersistResourceUpdateResult) CallError() string { return r.Error }
+
 // PersistResourceUpdate is sent to the ResourcePersister actor to store a resource update
 // in the datastore after a successful plugin operation.
 type PersistResourceUpdate struct {
@@ -354,7 +364,7 @@ func onStateChange(oldState gen.Atom, newState gen.Atom, data ResourceUpdateData
 
 	if newState == StateFinishedSuccessfully || newState == StateFinishedWithError || newState == StateRejected {
 		proc.Log().Debug("ResourceUpdater: sending completion message to forma command persister state=%s commandID=%s", newState, data.commandID)
-		_, err := proc.Call(
+		_, err := messages.UnwrapCall(proc.Call(
 			formaCommandPersisterProcess(proc),
 			messages.MarkResourceUpdateAsComplete{
 				CommandID:                  data.commandID,
@@ -368,7 +378,7 @@ func onStateChange(oldState gen.Atom, newState gen.Atom, data ResourceUpdateData
 				Version:                    data.resourceUpdate.Version,
 				FailureReason:              data.resourceUpdate.FailureReason,
 			},
-		)
+		))
 		if err != nil {
 			proc.Log().Error("Failed to send MarkAsComplete message to forma command persister commandID=%s ksuid=%s operation=%s: %v",
 				data.commandID, data.originalResourceKsuidURI.KSUID(), data.resourceUpdate.Operation, err)
@@ -434,9 +444,9 @@ func start(from gen.PID, state gen.Atom, data ResourceUpdateData, message StartR
 
 	// Get LabelConfig from PluginCoordinator (handles both external and local plugins)
 	namespace := data.resourceUpdate.DesiredState.Namespace()
-	result, err := proc.Call(
+	result, err := messages.UnwrapCall(proc.Call(
 		gen.ProcessID{Name: actornames.PluginCoordinator, Node: proc.Node().Name()},
-		messages.GetPluginInfo{Namespace: namespace})
+		messages.GetPluginInfo{Namespace: namespace}))
 	if err == nil {
 		if infoResp, ok := result.(messages.PluginInfoResponse); ok && infoResp.Found {
 			data.labelConfig = infoResp.LabelConfig
@@ -1136,12 +1146,12 @@ func handleProgressUpdate(from gen.PID, state gen.Atom, data ResourceUpdateData,
 		}
 
 		operation := currentOperation(state)
-		hash, err := proc.Call(resourcePersisterProcess(proc), PersistResourceUpdate{
+		persisted, err := messages.UnwrapCall(proc.Call(resourcePersisterProcess(proc), PersistResourceUpdate{
 			CommandID:         data.commandID,
 			ResourceOperation: data.resourceUpdate.Operation,
 			PluginOperation:   operation,
 			ResourceUpdate:    *data.resourceUpdate,
-		})
+		}))
 
 		if err != nil {
 			proc.Log().Error("failed to persist resource update: %v", err)
@@ -1149,11 +1159,12 @@ func handleProgressUpdate(from gen.PID, state gen.Atom, data ResourceUpdateData,
 			data.resourceUpdate.MarkAsFailed()
 			return StateFinishedWithError, data, nil, nil
 		}
-		data.resourceUpdate.Version = hash.(string)
+		version := persisted.(PersistResourceUpdateResult).Version
+		data.resourceUpdate.Version = version
 
 		// If we successfully persisted the read operation in the Synchronizing state, we should reject the resource update
 		// and exit the state machine.
-		if state == StateSynchronizing && data.resourceUpdate.Operation != OperationRead && operation == resource.OperationRead && hash != "" && !data.resourceUpdate.IsDelete() {
+		if state == StateSynchronizing && data.resourceUpdate.Operation != OperationRead && operation == resource.OperationRead && version != "" && !data.resourceUpdate.IsDelete() {
 			proc.Log().Debug("Resource update rejected as a change to the resource was detected previousProperties=%s currentProperties=%s",
 				pkgmodel.RedactOpaqueJSONForLog(data.resourceUpdate.PreviousProperties),
 				pkgmodel.RedactOpaqueJSONForLog(data.resourceUpdate.DesiredState.Properties))
@@ -1168,7 +1179,7 @@ func handleProgressUpdate(from gen.PID, state gen.Atom, data ResourceUpdateData,
 		// command re-run will handle it correctly (idempotent).
 		proc.Log().Debug("ResourceUpdater: persisting success progress after resource persist state=%s resourceURI=%v",
 			state, data.resourceUpdate.DesiredState.URI())
-		_, err = proc.Call(
+		_, err = messages.UnwrapCall(proc.Call(
 			formaCommandPersisterProcess(proc),
 			messages.UpdateResourceProgress{
 				CommandID:           data.commandID,
@@ -1180,7 +1191,7 @@ func handleProgressUpdate(from gen.PID, state gen.Atom, data ResourceUpdateData,
 				Progress:            message,
 				ResolvedRootDigests: data.resourceUpdate.ResolvedRootDigests,
 			},
-		)
+		))
 		if err != nil {
 			proc.Log().Error("failed to send UpdateResourceProgress after resource persist: %v", err)
 			// Resource is already persisted; don't fail the update for a
@@ -1195,7 +1206,7 @@ func handleProgressUpdate(from gen.PID, state gen.Atom, data ResourceUpdateData,
 	// to the command record immediately.
 	proc.Log().Debug("ResourceUpdater: sending progress update to the forma command persister state=%s resourceURI=%v progress=%s",
 		state, data.resourceUpdate.DesiredState.URI(), message.Operation)
-	_, err = proc.Call(
+	_, err = messages.UnwrapCall(proc.Call(
 		formaCommandPersisterProcess(proc),
 		messages.UpdateResourceProgress{
 			CommandID:           data.commandID,
@@ -1207,7 +1218,7 @@ func handleProgressUpdate(from gen.PID, state gen.Atom, data ResourceUpdateData,
 			Progress:            message,
 			ResolvedRootDigests: data.resourceUpdate.ResolvedRootDigests,
 		},
-	)
+	))
 	if err != nil {
 		proc.Log().Error("failed to send UpdateResourceProgress message to forma command persister: %v", err)
 		data.resourceUpdate.MarkAsFailed()
@@ -1300,7 +1311,7 @@ func doPluginOperation(resourceURI pkgmodel.FormaeURI, operation plugin.PluginOp
 	proc.Log().Debug("Spawning plugin operator via PluginCoordinator resourceURI=%v operation=%s namespace=%s",
 		resourceURI, string(operation.Operation()), operation.PluginNamespace())
 
-	spawnResult, err := proc.Call(
+	spawnResult, err := messages.UnwrapCall(proc.Call(
 		gen.ProcessID{Name: actornames.PluginCoordinator, Node: proc.Node().Name()},
 		messages.SpawnPluginOperator{
 			Namespace:   operation.PluginNamespace(),
@@ -1308,7 +1319,7 @@ func doPluginOperation(resourceURI pkgmodel.FormaeURI, operation plugin.PluginOp
 			Operation:   string(operation.Operation()),
 			OperationID: operationID,
 			RequestedBy: proc.PID(),
-		})
+		}))
 	if err != nil {
 		proc.Log().Error("failed to spawn plugin operator: %v", err)
 		return nil, nil, fmt.Errorf("failed to spawn plugin operator: %w", err)

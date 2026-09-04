@@ -14,10 +14,15 @@ type LoadResource struct {
 	ResourceURI pkgmodel.FormaeURI
 }
 
+// LoadResourceResult is the reply to a LoadResource call: the resource and
+// its target on success, or the failure that prevented the load.
 type LoadResourceResult struct {
 	Resource pkgmodel.Resource
 	Target   pkgmodel.Target
+	Error    string
 }
+
+func (r LoadResourceResult) CallError() string { return r.Error }
 
 // CleanupEmptyStacks is sent to ResourcePersister after a changeset completes
 // to delete any stacks that no longer have resources.
@@ -65,4 +70,7 @@ type PersistTargetReap struct {
 type PersistTargetReapResult struct {
 	Reaped            bool
 	ReapedStackLabels []string
+	Error             string
 }
+
+func (r PersistTargetReapResult) CallError() string { return r.Error }

@@ -24,6 +24,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_persister"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/generator_update"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
@@ -273,10 +274,10 @@ func (g *GeneratorRotator) startRotation(info datastore.GeneratorRotationInfo) (
 		return "", nil
 	}
 
-	_, err = g.Call(
+	_, err = messages.UnwrapCall(g.Call(
 		gen.ProcessID{Name: actornames.FormaCommandPersister, Node: g.Node().Name()},
 		forma_persister.StoreNewFormaCommand{Command: *result.command},
-	)
+	))
 	if err != nil {
 		return "", fmt.Errorf("failed to store rotation command: %w", err)
 	}

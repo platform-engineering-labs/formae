@@ -75,7 +75,11 @@ func TestResourcePersister_StoresResourceUpdate(t *testing.T) {
 	})
 
 	assert.NoError(t, result.Error)
-	hash, ok := result.Response.(string)
+	hashRes, ok := result.Response.(resource_update.PersistResourceUpdateResult)
+	var hash string
+	if ok {
+		hash = hashRes.Version
+	}
 	assert.True(t, ok)
 	assert.NotEmpty(t, hash)
 
@@ -195,7 +199,11 @@ func TestResourcePersister_Create(t *testing.T) {
 	})
 
 	assert.NoError(t, result.Error)
-	hash, ok := result.Response.(string)
+	hashRes, ok := result.Response.(resource_update.PersistResourceUpdateResult)
+	var hash string
+	if ok {
+		hash = hashRes.Version
+	}
 	assert.True(t, ok)
 	assert.NotEmpty(t, hash)
 
@@ -255,7 +263,11 @@ func TestResourcePersister_Update(t *testing.T) {
 		ResourceUpdate:    initialResource,
 	})
 	assert.NoError(t, createResult.Error)
-	hash, ok := createResult.Response.(string)
+	hashRes, ok := createResult.Response.(resource_update.PersistResourceUpdateResult)
+	var hash string
+	if ok {
+		hash = hashRes.Version
+	}
 	assert.True(t, ok)
 	assert.NotEmpty(t, hash)
 
@@ -303,7 +315,11 @@ func TestResourcePersister_Update(t *testing.T) {
 	})
 
 	assert.NoError(t, updateResult.Error)
-	latestHash, ok := updateResult.Response.(string)
+	latestHashRes, ok := updateResult.Response.(resource_update.PersistResourceUpdateResult)
+	var latestHash string
+	if ok {
+		latestHash = latestHashRes.Version
+	}
 	assert.True(t, ok)
 	assert.NotEmpty(t, latestHash)
 
@@ -678,15 +694,22 @@ func TestResourcePersister_MissingRequiredFields(t *testing.T) {
 
 	// Validation should fail, returning empty hash
 	assert.NoError(t, result.Error)
-	hash, ok := result.Response.(string)
+	hashRes, ok := result.Response.(resource_update.PersistResourceUpdateResult)
+	var hash string
+	if ok {
+		hash = hashRes.Version
+	}
 	assert.True(t, ok)
 	assert.Empty(t, hash)
 
-	// Verify the resource was not loaded
+	// Verify the resource was not stored: the load is answered with a failure.
 	loadResult := persister.Call(sender, messages.LoadResource{
 		ResourceURI: resourceUpdate.URI(),
 	})
-	assert.Error(t, loadResult.Error)
+	assert.NoError(t, loadResult.Error)
+	loadRes, ok := loadResult.Response.(messages.LoadResourceResult)
+	assert.True(t, ok, "expected a typed load reply, got %T", loadResult.Response)
+	assert.NotEmpty(t, loadRes.Error, "loading the never-stored resource must be answered with a failure")
 }
 
 func TestResourcePersister_IdempotentCreate(t *testing.T) {
@@ -732,7 +755,11 @@ func TestResourcePersister_IdempotentCreate(t *testing.T) {
 		ResourceUpdate:    resourceUpdate,
 	})
 	assert.NoError(t, result1.Error)
-	hash1, ok := result1.Response.(string)
+	hash1Res, ok := result1.Response.(resource_update.PersistResourceUpdateResult)
+	var hash1 string
+	if ok {
+		hash1 = hash1Res.Version
+	}
 	assert.True(t, ok)
 	assert.NotEmpty(t, hash1)
 
@@ -743,7 +770,11 @@ func TestResourcePersister_IdempotentCreate(t *testing.T) {
 		ResourceUpdate:    resourceUpdate,
 	})
 	assert.NoError(t, result2.Error)
-	hash2, ok := result2.Response.(string)
+	hash2Res, ok := result2.Response.(resource_update.PersistResourceUpdateResult)
+	var hash2 string
+	if ok {
+		hash2 = hash2Res.Version
+	}
 	assert.True(t, ok)
 	assert.NotEmpty(t, hash2)
 
@@ -2004,7 +2035,11 @@ func TestResourcePersister_ReadOfUnchangedSecretDoesNotDrift(t *testing.T) {
 		ResourceUpdate:    createUpdate,
 	})
 	require.NoError(t, createResult.Error)
-	createHash, ok := createResult.Response.(string)
+	createHashRes, ok := createResult.Response.(resource_update.PersistResourceUpdateResult)
+	var createHash string
+	if ok {
+		createHash = createHashRes.Version
+	}
 	require.True(t, ok)
 	require.NotEmpty(t, createHash)
 
@@ -2053,7 +2088,11 @@ func TestResourcePersister_ReadOfUnchangedSecretDoesNotDrift(t *testing.T) {
 		ResourceUpdate:    readUpdate,
 	})
 	require.NoError(t, readResult.Error)
-	readHash, ok := readResult.Response.(string)
+	readHashRes, ok := readResult.Response.(resource_update.PersistResourceUpdateResult)
+	var readHash string
+	if ok {
+		readHash = readHashRes.Version
+	}
 	require.True(t, ok)
 	assert.Empty(t, readHash,
 		"a read-back of an unchanged secret must not be treated as drift and re-persisted")
@@ -2174,7 +2213,10 @@ func TestResourcePersister_InlinePolicyDeleteFailsWithoutStackID(t *testing.T) {
 		},
 		StackIDMap: map[string]string{},
 	})
-	require.Error(t, result.Error, "an inline delete without a resolvable stack ID must fail")
+	require.NoError(t, result.Error, "the failed delete must be answered, not terminate the persister")
+	failedReply, ok := result.Response.(messages.PersistVersionsResult)
+	require.True(t, ok, "expected a typed persist reply, got %T", result.Response)
+	require.NotEmpty(t, failedReply.Error, "an inline delete without a resolvable stack ID must fail")
 
 	inlinePolicies, err := ds.GetInlinePoliciesForStack(stack.ID)
 	require.NoError(t, err)
@@ -2376,7 +2418,10 @@ func TestResourcePersister_CreateGeneratorFailsWithoutStackID(t *testing.T) {
 		},
 		StackIDMap: map[string]string{},
 	})
-	require.Error(t, result.Error)
+	require.NoError(t, result.Error, "a failed generator write must be answered, not terminate the persister")
+	failed, ok := result.Response.(messages.PersistVersionsResult)
+	require.True(t, ok, "the caller must receive a typed reply, got %T", result.Response)
+	require.NotEmpty(t, failed.Error)
 }
 
 // TestResourcePersister_UpdateGenerator covers an in-place spec change: the

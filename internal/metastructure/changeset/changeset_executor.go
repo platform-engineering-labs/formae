@@ -359,10 +359,10 @@ func resume(from gen.PID, state gen.Atom, data ChangesetData, message Resume, pr
 func cancelBeforeStart(from gen.PID, state gen.Atom, data ChangesetData, message Cancel, proc gen.Process) (gen.Atom, ChangesetData, CancelResponse, []statemachine.Action, error) {
 	proc.Log().Debug("ChangesetExecutor received cancel before start commandID=%s force=%t", message.CommandID, message.Force)
 
-	_, err := proc.Call(
+	_, err := messages.UnwrapCall(proc.Call(
 		gen.ProcessID{Node: proc.Node().Name(), Name: gen.Atom("FormaCommandPersister")},
 		forma_persister.MarkCommandResourcesAsCanceled{CommandID: message.CommandID},
-	)
+	))
 	if err != nil {
 		proc.Log().Error("Failed to cancel command before start commandID=%s: %v", message.CommandID, err)
 		return state, data, CancelResponse{ErrorMessage: fmt.Sprintf("cancel-before-start persist failed: %v", err)}, nil, nil
@@ -430,7 +430,7 @@ func targetUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, mess
 	node, exists := data.changeset.DAG.Nodes[message.NodeURI]
 	if exists {
 		if tu, ok := node.Update.(*target_update.TargetUpdate); ok && tu.Operation != target_update.TargetOperationResolve {
-			_, err := proc.Call(
+			_, err := messages.UnwrapCall(proc.Call(
 				gen.ProcessID{Name: gen.Atom("FormaCommandPersister"), Node: proc.Node().Name()},
 				messages.MarkTargetUpdateAsComplete{
 					CommandID:       data.changeset.CommandID,
@@ -439,7 +439,7 @@ func targetUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, mess
 					FinalState:      message.State,
 					ModifiedTs:      util.TimeNow(),
 				},
-			)
+			))
 			if err != nil {
 				proc.Log().Error("Failed to update target state in persister target=%s: %v", tu.Target.Label, err)
 			}
@@ -675,23 +675,23 @@ func handleUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, even
 		now := util.TimeNow()
 
 		if len(failedResources) > 0 {
-			_, err = proc.Call(persisterPID, forma_persister.MarkResourcesAsFailed{
+			_, err = messages.UnwrapCall(proc.Call(persisterPID, forma_persister.MarkResourcesAsFailed{
 				CommandID:          data.changeset.CommandID,
 				Resources:          failedResources,
 				ResourceModifiedTs: now,
 				FailureReason:      event.failureReason,
-			})
+			}))
 			if err != nil {
 				proc.Log().Error("Failed to mark resources as failed in persister commandID=%s: %v", data.changeset.CommandID, err)
 			}
 		}
 
 		if len(failedTargets) > 0 {
-			_, err = proc.Call(persisterPID, forma_persister.MarkTargetsAsFailed{
+			_, err = messages.UnwrapCall(proc.Call(persisterPID, forma_persister.MarkTargetsAsFailed{
 				CommandID:        data.changeset.CommandID,
 				Targets:          failedTargets,
 				TargetModifiedTs: now,
-			})
+			}))
 			if err != nil {
 				proc.Log().Error("Failed to mark targets as failed in persister commandID=%s: %v", data.changeset.CommandID, err)
 			}
@@ -880,13 +880,13 @@ func cancel(from gen.PID, state gen.Atom, data ChangesetData, message Cancel, pr
 
 	// Mark NotStarted resources as canceled
 	if len(resourcesToCancel) > 0 {
-		_, err := proc.Call(
+		_, err := messages.UnwrapCall(proc.Call(
 			gen.ProcessID{Node: proc.Node().Name(), Name: gen.Atom("FormaCommandPersister")},
 			forma_persister.MarkResourcesAsCanceled{
 				CommandID: data.changeset.CommandID,
 				Resources: resourcesToCancel,
 			},
-		)
+		))
 		if err != nil {
 			proc.Log().Error("Failed to mark resources as canceled commandID=%s: %v", data.changeset.CommandID, err)
 		}
@@ -965,14 +965,14 @@ func forceCancel(state gen.Atom, data ChangesetData, message Cancel, proc gen.Pr
 
 	// Persist FIRST. BulkForceCancel terminalizes all in-flight resource and target
 	// updates and recomputes the command's derived state to terminal Canceled at commit.
-	result, err := proc.Call(
+	result, err := messages.UnwrapCall(proc.Call(
 		gen.ProcessID{Node: proc.Node().Name(), Name: gen.Atom("FormaCommandPersister")},
 		forma_persister.BulkForceCancel{
 			CommandID: data.changeset.CommandID,
 			Resources: resourcesToCancel,
 			Targets:   targetsToCancel,
 		},
-	)
+	))
 	if err != nil {
 		// Persist-before-terminate: on persister error, terminate NO actors and stay
 		// in the current state. The durable DB state is still non-terminal; the user

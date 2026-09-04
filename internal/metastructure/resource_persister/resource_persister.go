@@ -69,37 +69,41 @@ func (rp *ResourcePersister) Init(args ...any) error {
 	return nil
 }
 
+// HandleCall answers every request with a typed result carrying its own
+// success/failure status. Returning an error here would terminate the actor
+// without a reply: the caller times out, every request queued in the mailbox
+// dies with it, and the supervisor respawns the actor only for the next bad
+// request to repeat the cycle. The error return keeps the meaning ergo
+// assigns to it — terminate — and is reserved for genuine faults: an unknown
+// request type is a protocol bug, and the persister crashes on it.
 func (rp *ResourcePersister) HandleCall(from gen.PID, ref gen.Ref, request any) (any, error) {
 	switch req := request.(type) {
 	case resource_update.PersistResourceUpdate:
 		hash, err := rp.storeResourceUpdate(req.CommandID, req.ResourceOperation, req.PluginOperation, &req.ResourceUpdate)
-		return hash, err
+		if err != nil {
+			rp.Log().Error("ResourcePersister: persist of %s failed: %s", req.ResourceUpdate.DesiredState.Label, err)
+			return resource_update.PersistResourceUpdateResult{Error: err.Error()}, nil
+		}
+		return resource_update.PersistResourceUpdateResult{Version: hash}, nil
 	case target_update.PersistTargetUpdates:
 		versions, err := rp.persistTargetUpdates(req.TargetUpdates, req.CommandID)
-		if err != nil {
-			return nil, err
-		}
-		return versions, nil
+		return persistVersionsResult(rp, "target updates", versions, err), nil
 	case stack_update.PersistStackUpdates:
 		versions, err := rp.persistStackUpdates(req.StackUpdates, req.CommandID)
-		if err != nil {
-			return nil, err
-		}
-		return versions, nil
+		return persistVersionsResult(rp, "stack updates", versions, err), nil
 	case policy_update.PersistPolicyUpdates:
 		versions, err := rp.persistPolicyUpdates(req.PolicyUpdates, req.CommandID, req.StackIDMap)
-		if err != nil {
-			return nil, err
-		}
-		return versions, nil
+		return persistVersionsResult(rp, "policy updates", versions, err), nil
 	case generator_update.PersistGeneratorUpdates:
 		versions, err := rp.persistGeneratorUpdates(req.GeneratorUpdates, req.CommandID, req.StackIDMap)
-		if err != nil {
-			return nil, err
-		}
-		return versions, nil
+		return persistVersionsResult(rp, "generator updates", versions, err), nil
 	case messages.LoadResource:
-		return rp.loadResource(req.ResourceURI)
+		result, err := rp.loadResource(req.ResourceURI)
+		if err != nil {
+			rp.Log().Error("ResourcePersister: load of %s failed: %s", req.ResourceURI, err)
+			return messages.LoadResourceResult{Error: err.Error()}, nil
+		}
+		return result, nil
 	case messages.PersistTargetReap:
 		reaped, reapedStacks, err := rp.datastore.PersistTargetReap(datastore.PersistTargetReapRequest{
 			Label:            req.Label,
@@ -109,7 +113,8 @@ func (rp *ResourcePersister) HandleCall(from gen.PID, ref gen.Ref, request any) 
 			ReapedAt:         req.ReapedAt,
 		})
 		if err != nil {
-			return nil, err
+			rp.Log().Error("ResourcePersister: target reap of %s failed: %s", req.Label, err)
+			return messages.PersistTargetReapResult{Error: err.Error()}, nil
 		}
 		if reaped && len(reapedStacks) > 0 {
 			// The reap tombstoned the last live resource(s) of one or more
@@ -124,6 +129,15 @@ func (rp *ResourcePersister) HandleCall(from gen.PID, ref gen.Ref, request any) 
 		rp.Log().Error("ResourcePersister: unknown request type=%s", fmt.Sprintf("%T", request))
 		return nil, fmt.Errorf("resource persister: unknown request type %T", request)
 	}
+}
+
+// persistVersionsResult folds one bulk-persist outcome into its reply.
+func persistVersionsResult(rp *ResourcePersister, what string, versions []string, err error) messages.PersistVersionsResult {
+	if err != nil {
+		rp.Log().Error("ResourcePersister: persist of %s failed: %s", what, err)
+		return messages.PersistVersionsResult{Error: err.Error()}
+	}
+	return messages.PersistVersionsResult{Versions: versions}
 }
 
 // HandleMessage handles asynchronous messages (sent via proc.Send).
