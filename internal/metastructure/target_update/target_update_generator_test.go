@@ -1527,3 +1527,50 @@ func TestGenerateTargetUpdates_RejectsSubFloorReapAfter(t *testing.T) {
 	_, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, false)
 	require.Error(t, err, "a reap-after below the floor must be rejected at admission")
 }
+
+// TestGenerateTargetUpdates_ProviderDefaultReaping verifies the reaping
+// precedence around the provider default carried on ConfigSchema (from the
+// Config class ConfigHint annotation): a target with no explicit reaping
+// takes its provider's default over the global one, a target whose schema
+// carries no default falls through to the global default, and an explicit
+// per-target reaping still wins over the provider default.
+func TestGenerateTargetUpdates_ProviderDefaultReaping(t *testing.T) {
+	mockDS := &mockTargetDatastore{}
+	generator := NewTargetUpdateGenerator(mockDS)
+
+	neverReapSchema := pkgmodel.ConfigSchema{DefaultReap: json.RawMessage(`{"Kind":"never"}`)}
+	targets := []pkgmodel.Target{
+		{Label: "aws-target", Namespace: "AWS", Config: json.RawMessage(`{"Region":"us-east-1"}`), ConfigSchema: neverReapSchema},
+		{Label: "k8s-target", Namespace: "K8S", Config: json.RawMessage(`{"Context":"c"}`)},
+		{
+			Label: "aws-explicit", Namespace: "AWS", Config: json.RawMessage(`{"Region":"eu-west-1"}`),
+			ConfigSchema: neverReapSchema,
+			Reaping:      json.RawMessage(`{"Kind":"after","MaxUnreachableSeconds":86400}`),
+		},
+	}
+
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, false)
+	require.NoError(t, err)
+	require.Len(t, updates, 3)
+
+	byLabel := map[string]pkgmodel.Target{}
+	for _, u := range updates {
+		byLabel[u.Target.Label] = u.Target
+	}
+
+	awsReap, err := pkgmodel.ParseReaping(byLabel["aws-target"].Reaping)
+	require.NoError(t, err)
+	_, isNever := awsReap.(*pkgmodel.NeverReap)
+	assert.True(t, isNever, "the provider default on ConfigSchema must reach admission, got %T", awsReap)
+
+	k8sReap, err := pkgmodel.ParseReaping(byLabel["k8s-target"].Reaping)
+	require.NoError(t, err)
+	k8sAfter, isAfter := k8sReap.(*pkgmodel.ReapAfter)
+	require.True(t, isAfter, "a target without a provider default falls to the global default, got %T", k8sReap)
+	assert.Equal(t, pkgmodel.DefaultReapMaxUnreachableSeconds, k8sAfter.MaxUnreachableSeconds)
+
+	explicitReap, err := pkgmodel.ParseReaping(byLabel["aws-explicit"].Reaping)
+	require.NoError(t, err)
+	_, isAfter = explicitReap.(*pkgmodel.ReapAfter)
+	assert.True(t, isAfter, "an explicit per-target reaping must win over the provider default, got %T", explicitReap)
+}

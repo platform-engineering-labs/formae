@@ -27,10 +27,6 @@ type TargetDatastore interface {
 
 type TargetUpdateGenerator struct {
 	datastore TargetDatastore
-	// manifestDefaultReap is the plugin-manifest default reaping behaviour used
-	// when a target declares none. It is nil when no manifest default is wired,
-	// in which case admission falls through to the global reaping default.
-	manifestDefaultReap pkgmodel.ReapingBehaviour
 	// minReapDuration is the floor enforced on any target's explicit reap-after
 	// duration (see resolveTargetReaping). It defaults to reaping.MinReapDuration
 	// (derived from the nominal/default sync interval); WithMinReapDuration lets
@@ -212,8 +208,9 @@ func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, c
 
 	// Preserve existing ConfigSchema when the incoming target doesn't provide one.
 	// Without this, persistTargetUpdate would write an empty schema, silently
-	// clearing mutability metadata for future applies.
-	if len(target.ConfigSchema.Hints) == 0 && existing != nil && len(existing.ConfigSchema.Hints) > 0 {
+	// clearing mutability metadata (and the provider's default reaping) for
+	// future applies.
+	if target.ConfigSchema.IsZero() && existing != nil && !existing.ConfigSchema.IsZero() {
 		target.ConfigSchema = existing.ConfigSchema
 	}
 
@@ -245,7 +242,18 @@ func (tp *TargetUpdateGenerator) resolveTargetReaping(target *pkgmodel.Target) e
 		return fmt.Errorf("invalid reaping for target %s: %w", target.Label, err)
 	}
 
-	resolved := pkgmodel.ResolveReaping(explicit, tp.manifestDefaultReap)
+	// The provider default comes from the target Config class's ConfigHint,
+	// riding the ConfigSchema that eval attached to the target (or the
+	// preserved schema of the existing row). An invalid declaration is logged
+	// and skipped rather than rejecting the target: the namespace then falls
+	// to the global reaping default.
+	providerDefault, err := pkgmodel.ParseReaping(target.ConfigSchema.DefaultReap)
+	if err != nil {
+		slog.Warn("Ignoring invalid ConfigHint default reap", "target", target.Label, "error", err)
+		providerDefault = nil
+	}
+
+	resolved := pkgmodel.ResolveReaping(explicit, providerDefault)
 
 	if after, ok := resolved.(*pkgmodel.ReapAfter); ok {
 		floor := int64(tp.minReapDuration.Seconds())

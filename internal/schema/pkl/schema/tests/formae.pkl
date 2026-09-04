@@ -418,6 +418,26 @@ local class TestConfig {
     fixed AccountId: String? = accountId
 }
 
+// Config class with a class-level ConfigHint declaring the provider's
+// default reaping behaviour.
+@formae.ConfigHint { reap = new formae.NeverReap {} }
+local class NeverReapConfig {
+    hidden fixed type: String = "RootCloud"
+    hidden region: String
+
+    fixed Type: String = type
+    fixed Region: String = region
+}
+
+local testTargetNeverReapConfig = new formae.Target {
+    label = "never-reap-target"
+    namespace = "ROOTCLOUD"
+    discoverable = true
+    config = new NeverReapConfig {
+        region = "us-east-1"
+    }
+}
+
 // Config class with no ConfigFieldHint annotations
 local class PlainConfig {
     hidden fixed type: String = "Plain"
@@ -1018,6 +1038,17 @@ facts {
         let (rendered = testTaskDefNoContainers.render())
         let (props = rendered.Properties)
         !props.toMap().containsKey("ContainerDefinitions")
+    }
+
+    ["ConfigHint default reap rides ConfigSchema"] {
+        testTargetNeverReapConfig.ConfigSchema != null &&
+        testTargetNeverReapConfig.ConfigSchema.DefaultReap != null &&
+        testTargetNeverReapConfig.ConfigSchema.DefaultReap.Kind == "never"
+    }
+
+    ["ConfigHint absent leaves DefaultReap null"] {
+        testTargetWithSchema.ConfigSchema != null &&
+        testTargetWithSchema.ConfigSchema.DefaultReap == null
     }
 
     ["ConfigSchema generated for annotated config"] {
