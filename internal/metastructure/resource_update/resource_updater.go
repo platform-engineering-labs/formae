@@ -8,14 +8,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"time"
 
 	"ergo.services/actor/statemachine"
 	"ergo.services/ergo/gen"
 	"github.com/google/uuid"
-	"github.com/theory/jsonpath"
-	"github.com/theory/jsonpath/registry"
 	"go.opentelemetry.io/otel"
 	otelmetric "go.opentelemetry.io/otel/metric"
 
@@ -29,9 +26,6 @@ import (
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
-
-// jsonpathParser is a package-level parser with RFC 9535 function extensions (match, search, etc.)
-var jsonpathParser = jsonpath.NewParser(jsonpath.WithRegistry(registry.New()))
 
 // convertResourceForPlugin converts a resource's properties to plugin format
 // by extracting $value from opaque value structures (e.g., {"$value": "secret", "$visibility": "Opaque"})
@@ -1343,114 +1337,14 @@ func resourceFailedToResolve(from gen.PID, state gen.Atom, data ResourceUpdateDa
 }
 
 // ShouldFilterByMatchFilter checks if a resource should be filtered using declarative MatchFilter.
-// Returns true if all conditions match (AND logic), indicating the resource should be excluded.
+//
+// The evaluation itself lives on the filter, in pkg/model, so that plugins can
+// test the filters they declare against the same code the agent runs.
 func ShouldFilterByMatchFilter(filter *pkgmodel.MatchFilter, properties json.RawMessage) bool {
 	if filter == nil {
 		return false
 	}
-
-	// A filter naming no conditions excludes nothing. Reading it as a vacuous
-	// AND would make it exclude everything it is scoped to, so the emptiest
-	// filter anyone can write would be the most destructive one.
-	if len(filter.Conditions) == 0 {
-		return false
-	}
-
-	// All conditions must match (AND logic) to exclude
-	for _, cond := range filter.Conditions {
-		if !evaluateCondition(cond, properties) {
-			return false
-		}
-	}
-
-	return true // All conditions matched - exclude this resource
-}
-
-// evaluateCondition evaluates a single filter condition using JSONPath.
-// PropertyPath is a JSONPath expression to query properties.
-// PropertyValue: empty = existence check, non-empty = exact string match.
-func evaluateCondition(cond pkgmodel.FilterCondition, properties json.RawMessage) bool {
-	var data any
-	if err := json.Unmarshal(properties, &data); err != nil {
-		return false
-	}
-
-	path, err := jsonpathParser.Parse(cond.PropertyPath)
-	if err != nil {
-		// Invalid JSONPath expression - no match
-		return false
-	}
-
-	nodes, ok := selectNodes(path, cond.PropertyPath, data)
-	if !ok || len(nodes) == 0 {
-		// No value found
-		return false
-	}
-
-	// Empty PropertyValue = existence check (path returned something)
-	if cond.PropertyValue == "" {
-		return true
-	}
-
-	// Non-empty PropertyValue = exact string match against any result
-	for _, node := range nodes {
-		if matchValue(node, cond.PropertyValue) {
-			return true
-		}
-	}
-	return false
-}
-
-// selectNodes runs a parsed JSONPath against the document, reporting whether
-// the evaluation completed.
-//
-// Parsing cleanly is not enough: a function extension applied to a member the
-// document does not carry reaches the extension with nothing to read, and the
-// evaluator dereferences it. This runs against every discovered resource, so
-// letting that escape would take discovery down over one badly written filter
-// expression. A failed evaluation is reported as a miss, the same answer an
-// unparseable expression already gets. Failing towards "matches nothing" is the
-// safe direction, because a match evicts the resource's inventory row; it is
-// also why the failure is logged rather than swallowed, since a filter that
-// quietly stopped working would leave substrate exposed with no signal.
-func selectNodes(path *jsonpath.Path, expression string, data any) (nodes []any, ok bool) {
-	defer func() {
-		if r := recover(); r != nil {
-			slog.Warn("Discovery filter expression could not be evaluated",
-				"expression", expression,
-				"panic", r,
-			)
-			nodes, ok = nil, false
-		}
-	}()
-
-	return path.Select(data), true
-}
-
-// matchValue compares a JSONPath result against an expected string value.
-// Handles various result types including arrays and nested structures.
-func matchValue(val any, expected string) bool {
-	switch v := val.(type) {
-	case string:
-		return v == expected
-	case []any:
-		// JSONPath filter expressions can return arrays
-		for _, item := range v {
-			if matchValue(item, expected) {
-				return true
-			}
-		}
-		return false
-	case map[string]any:
-		// Check if it's a tag-like structure with Value field
-		if value, ok := v["Value"]; ok {
-			return matchValue(value, expected)
-		}
-		return false
-	default:
-		// Convert other types to string for comparison
-		return fmt.Sprintf("%v", v) == expected
-	}
+	return filter.Excludes(properties)
 }
 
 func currentOperation(state gen.Atom) resource.Operation {
