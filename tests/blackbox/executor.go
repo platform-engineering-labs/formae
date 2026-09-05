@@ -3136,9 +3136,27 @@ func (h *TestHarness) executeSetTTLPolicy(t *testing.T, op *Operation, model *St
 	overrides := model.LabelOverrides(model.StackIndexByLabel(stackLabel))
 	if model.Pool != nil {
 		forma = FormaFromPoolResources(model.Pool, stackLabel, model.ProviderStackLabel, existingIDs,
-			resourceProperties(stackLabel, existingIDs), defaultDestroyChildProps, overrides, model.LabelOverrides(0))
+			defaultDestroyParentProps, defaultDestroyChildProps, overrides, model.LabelOverrides(0))
 	} else {
-		forma = FormaFromStackResources(stackLabel, existingIDs, overrides, resourceProperties(stackLabel, existingIDs))
+		forma = FormaFromStackResources(stackLabel, existingIDs, overrides)
+	}
+	// Setting a policy must not rewrite resource names, values or collections.
+	// Keep each slot's predicted properties; the builders supply the reference
+	// envelopes that the normalized model intentionally stores as plain values.
+	for i := range forma.Resources {
+		res := &forma.Resources[i]
+		si, slot, found := model.findResourceSlot(res.Stack, res.Label)
+		require.True(t, found, "policy resource must have a model slot")
+		var props map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal([]byte(model.Resource(si, slot).Properties), &props))
+		if model.Pool != nil && !model.Pool.IsParent(slot) {
+			var declared map[string]json.RawMessage
+			require.NoError(t, json.Unmarshal(res.Properties, &declared))
+			props["ParentId"] = declared["ParentId"]
+		}
+		var err error
+		res.Properties, err = json.Marshal(props)
+		require.NoError(t, err)
 	}
 	for i := range forma.Stacks {
 		if forma.Stacks[i].Label == stackLabel {
