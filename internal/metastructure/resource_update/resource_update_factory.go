@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"slices"
 
+	"github.com/platform-engineering-labs/formae/internal/constants"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/patch"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
@@ -102,6 +103,7 @@ func NewResourceUpdateForExisting(
 	var patchDocument json.RawMessage
 	var createOnlyPatch json.RawMessage
 	var onlyForceResent bool
+	frozenRefs := classifyFrozenSetOnceRefs(existingResource.Properties, filteredProps)
 
 	// Provenance classification runs BEFORE any opaque suppression or patch
 	// generation: it decides per reference occurrence whether the source
@@ -109,6 +111,9 @@ func NewResourceUpdateForExisting(
 	// flattening seam, and produces the immutable records regeneration reads
 	// back after recovery.
 	provenanceRecords := buildProvenanceRecords(filteredProps, existingResource.Properties, resolvableProperties, newResource.Schema, force)
+	if err := recordFrozenSetOnceRefs(provenanceRecords, frozenRefs); err != nil {
+		return nil, err
+	}
 
 	if hasChanges {
 		// Drop opaque values that are unchanged from what is stored so a sibling
@@ -117,7 +122,15 @@ func NewResourceUpdateForExisting(
 		// stay, so rotation still produces a patch op. filteredProps is left
 		// untouched for DesiredState.Properties below — only the patch inputs are
 		// stripped.
-		existingForPatch, desiredForPatch, err := SuppressUnchangedOpaqueValues(existingResource.Properties, filteredProps, newResource.Schema, newResource.Type)
+		existingForPatch, err := stripFrozenSetOnceRefs(existingResource.Properties, frozenRefs)
+		if err != nil {
+			return nil, err
+		}
+		desiredForPatch, err := stripFrozenSetOnceRefs(filteredProps, frozenRefs)
+		if err != nil {
+			return nil, err
+		}
+		existingForPatch, desiredForPatch, err = SuppressUnchangedOpaqueValues(existingForPatch, desiredForPatch, newResource.Schema, newResource.Type)
 		if err != nil {
 			return nil, fmt.Errorf("failed to suppress unchanged opaque values for resource %s: %w", existingResource.Label, err)
 		}
@@ -169,9 +182,27 @@ func NewResourceUpdateForExisting(
 			// simpler suppressions above produce.
 			recordOnly = true
 		}
+		if err := validateFrozenSetOncePatch(patchDocument, createOnlyPatch, frozenRefs, newResource.Schema.RequiredOnUpdate()); err != nil {
+			return nil, fmt.Errorf("cannot update resource %s: %w; supply a usable secret value for this operation", existingResource.Label, err)
+		}
+
 	} else {
 		patchDocument = json.RawMessage(`[]`)
 		filteredProps = existingResource.Properties
+	}
+
+	// Every retained operation must preserve array identity, including a
+	// synthetic metadata update. Only a genuine planning no-op may freeze
+	// array members. Required fields matter only when a provider is called.
+	patchEmpty := len(patchDocument) == 0 || string(patchDocument) == "[]"
+	metadataOnly := patchEmpty && ((existingResource.Stack == constants.UnmanagedStack && newResource.Stack != constants.UnmanagedStack) ||
+		(labelChanged && !stackChanged && existingResource.Target == newResource.Target))
+	required := newResource.Schema.RequiredOnUpdate()
+	if metadataOnly {
+		required = nil
+	}
+	if err := validateFrozenSetOnceWrite(frozenRefs, required); err != nil {
+		return nil, fmt.Errorf("cannot update resource %s: %w; supply a usable secret value for this operation", existingResource.Label, err)
 	}
 
 	if len(createOnlyPatch) > 0 {
@@ -184,7 +215,12 @@ func NewResourceUpdateForExisting(
 	}
 
 	// Extract resolvables for the new resource
-	newRemainingResolvables := resolver.ExtractResolvableURIs(newResource)
+	resolutionResource := newResource
+	resolutionResource.Properties, err = stripFrozenSetOnceRefs(newResource.Properties, frozenRefs)
+	if err != nil {
+		return nil, err
+	}
+	newRemainingResolvables := resolver.ExtractResolvableURIs(resolutionResource)
 
 	// Runs after the patch is derived, so what the provider is asked to do is
 	// unaffected: a stable occurrence is already suppressed from the diff.

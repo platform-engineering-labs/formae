@@ -1483,6 +1483,7 @@ func RunResourceUpdateProvenanceRoundTrip(t *testing.T, newDS func(t *testing.T)
 		digest := "v1:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 		records := []resource_update.OccurrenceRecord{{
 			DestinationPath:   "Password",
+			FrozenSetOnce:     &resource_update.FrozenSetOnceRef{Path: "Password", Pointer: "/Password", HintPath: "Password"},
 			DesiredIdentity:   resource_update.OccurrenceIdentity{Ksuid: "2abcdefghijklmnopqrstuvwxyz", PropertyPath: "S"},
 			StoredIdentity:    resource_update.OccurrenceIdentity{Ksuid: "2abcdefghijklmnopqrstuvwxyz", PropertyPath: "S"},
 			HasStoredWritten:  true,

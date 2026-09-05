@@ -120,6 +120,10 @@ func NormalizeOccurrenceIdentity(envelope gjson.Result, tripletLookup TripletLoo
 // execution-time regeneration. It carries only digests, identities, and
 // paths - never a value.
 type OccurrenceRecord struct {
+	// FrozenSetOnce records a destination-preservation decision separately
+	// from source movement. It uses the existing immutable JSON column, so
+	// all datastores retain the decision across progress and recovery.
+	FrozenSetOnce *FrozenSetOnceRef `json:"FrozenSetOnce,omitempty"`
 	// DestinationPath is the consumer-side dotted path of the occurrence
 	// (unique per document; the resolver's walk convention).
 	DestinationPath string `json:"DestinationPath"`
