@@ -9,10 +9,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 	"unicode/utf8"
+
+	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
 
 // fakeReporter is a local testReporter fake, shaped like collectingReporter,
@@ -214,6 +217,41 @@ func TestKeepTempDirRequested(t *testing.T) {
 				t.Errorf("expected no log messages for a well-formed value, got %v", r.logs)
 			}
 		})
+	}
+}
+
+func TestRetryOnRecoverableBacksOffAcrossRecoverableFailures(t *testing.T) {
+	var (
+		calls  int
+		delays []time.Duration
+	)
+	h := &TestHarness{
+		t: t,
+		retrySleep: func(delay time.Duration) {
+			delays = append(delays, delay)
+		},
+	}
+	results := []resource.ProgressResult{
+		{OperationStatus: resource.OperationStatusFailure, ErrorCode: resource.OperationErrorCodeThrottling},
+		{OperationStatus: resource.OperationStatusFailure, ErrorCode: resource.OperationErrorCodeResourceConflict},
+		{OperationStatus: resource.OperationStatusSuccess},
+	}
+
+	progress, err := h.retryOnRecoverable("OOB delete", func() (*pluginOperationResult, error) {
+		result := results[calls]
+		calls++
+		return &pluginOperationResult{initialProgress: result}, nil
+	})
+
+	if err != nil {
+		t.Fatalf("retryOnRecoverable() error = %v", err)
+	}
+	if progress.OperationStatus != resource.OperationStatusSuccess {
+		t.Fatalf("retryOnRecoverable() status = %s, want Success", progress.OperationStatus)
+	}
+	want := []time.Duration{10 * time.Second, 20 * time.Second}
+	if !slices.Equal(delays, want) {
+		t.Fatalf("retry delays = %v, want %v", delays, want)
 	}
 }
 

@@ -77,6 +77,10 @@ type TestHarness struct {
 	// Plugin info for cleanup operations
 	lastPluginBinaryPath string
 	lastPluginNamespace  string
+
+	// retrySleep is injectable so retry policy tests do not wait in real time.
+	// Production harnesses leave it nil and use time.Sleep.
+	retrySleep func(time.Duration)
 }
 
 // getFreePort asks the kernel for a free open port that is ready to use.
@@ -1976,7 +1980,14 @@ func oobOperationTimeout() time.Duration {
 // The opFn performs the actor call and returns the initial result. The caller's label is used for logging.
 func (h *TestHarness) retryOnRecoverable(label string, opFn func() (*pluginOperationResult, error)) (resource.ProgressResult, error) {
 	const maxRetries = 6
-	const retryDelay = 10 * time.Second
+	retryStrategy := resource.RetryStrategy{
+		MaxRetries: maxRetries,
+		BaseDelay:  10 * time.Second,
+	}
+	sleep := time.Sleep
+	if h.retrySleep != nil {
+		sleep = h.retrySleep
+	}
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		res, err := opFn()
@@ -1998,9 +2009,10 @@ func (h *TestHarness) retryOnRecoverable(label string, opFn func() (*pluginOpera
 
 		if progress.OperationStatus == resource.OperationStatusFailure {
 			if resource.IsRecoverable(progress.ErrorCode) && attempt < maxRetries {
-				h.t.Logf("%s failed with recoverable error (code: %s), retry %d/%d: %s",
-					label, progress.ErrorCode, attempt+1, maxRetries, progress.StatusMessage)
-				time.Sleep(retryDelay)
+				delay := retryStrategy.Backoff(attempt + 1)
+				h.t.Logf("%s failed with recoverable error (code: %s), retry %d/%d after %s: %s",
+					label, progress.ErrorCode, attempt+1, maxRetries, delay, progress.StatusMessage)
+				sleep(delay)
 				continue
 			}
 			return resource.ProgressResult{}, fmt.Errorf("%s failed: %s (code: %s)", label, progress.StatusMessage, progress.ErrorCode)
