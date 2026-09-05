@@ -172,9 +172,12 @@ func TestOpaqueSetOnceRef_EmptyPatchDispatchRefused(t *testing.T) {
 			desired.Stack = "new-stack"
 			desired.Properties = json.RawMessage(tc.desired)
 			updates, err := NewResourceUpdateForExisting(resolver.NewResolvableProperties(), nil, prior, desired, pkgmodel.Target{}, pkgmodel.Target{}, pkgmodel.FormaApplyModeReconcile, FormaCommandSourceUser, false, false)
-			require.NoError(t, err)
-			require.Len(t, updates, 1)
-			ru := &updates[0]
+			require.Error(t, err, "refuse before sibling operations can execute")
+			require.Empty(t, updates)
+			// The dispatch guard also protects updates persisted by an older planner.
+			records := buildProvenanceRecords(desired.Properties, prior.Properties, resolver.NewResolvableProperties(), tc.schema, false)
+			require.NoError(t, recordFrozenSetOnceRefs(records, classifyFrozenSetOnceRefs(prior.Properties, desired.Properties)))
+			ru := &ResourceUpdate{Operation: OperationUpdate, PriorState: prior, DesiredState: desired, PreviousProperties: prior.Properties, ProvenanceRecords: records}
 			require.Empty(t, ru.DesiredState.PatchDocument)
 			ru.ResourceTarget = pkgmodel.Target{Config: json.RawMessage(`{}`)}
 			proc := newOperationCapturingProcess()
@@ -190,5 +193,16 @@ func TestOpaqueSetOnceRef_EmptyPatchDispatchRefused(t *testing.T) {
 func TestOpaqueSetOnceRef_EntitySetConverges(t *testing.T) {
 	updates, err := planFrozenRef(t, `{"Entries":[{"Name":"a","Password":`+frozenRef+`}]}`, `{"Entries":[{"Name":"a","Password":`+bareFrozenRef+`}]}`, pkgmodel.Schema{Fields: []string{"Entries"}, Hints: map[string]pkgmodel.FieldHint{"Entries": {UpdateMethod: pkgmodel.FieldUpdateMethodEntitySet, IndexField: "Name"}}})
 	require.NoError(t, err)
+	require.Empty(t, updates)
+}
+
+func TestOpaqueSetOnceRef_MetadataArrayRefusedAtPlanning(t *testing.T) {
+	prior := pkgmodel.Resource{Label: "db", Stack: "stack", Type: "TEST::DB", Properties: json.RawMessage(`{"Entries":[{"Name":"a","Password":` + frozenRef + `}]}`), Schema: pkgmodel.Schema{Fields: []string{"Entries"}}}
+	desired := prior
+	desired.Label = "renamed"
+	desired.Alias = "db"
+	desired.Properties = json.RawMessage(`{"Entries":[{"Name":"a","Password":` + bareFrozenRef + `}]}`)
+	updates, err := NewResourceUpdateForExisting(resolver.NewResolvableProperties(), nil, prior, desired, pkgmodel.Target{}, pkgmodel.Target{}, pkgmodel.FormaApplyModeReconcile, FormaCommandSourceUser, false, false)
+	require.Error(t, err, "even a synthetic rename cannot safely restore array entries by their planning-time indices")
 	require.Empty(t, updates)
 }

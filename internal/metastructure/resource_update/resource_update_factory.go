@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"reflect"
 
+	"github.com/platform-engineering-labs/formae/internal/constants"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/patch"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
@@ -151,6 +152,20 @@ func NewResourceUpdateForExisting(
 	} else {
 		patchDocument = json.RawMessage(`[]`)
 		filteredProps = existingResource.Properties
+	}
+
+	// Every retained operation must preserve array identity, including a
+	// synthetic metadata update. Only a genuine planning no-op may freeze
+	// array members. Required fields matter only when a provider is called.
+	patchEmpty := len(patchDocument) == 0 || string(patchDocument) == "[]"
+	metadataOnly := patchEmpty && ((existingResource.Stack == constants.UnmanagedStack && newResource.Stack != constants.UnmanagedStack) ||
+		(labelChanged && !stackChanged && existingResource.Target == newResource.Target))
+	required := newResource.Schema.RequiredOnUpdate()
+	if metadataOnly {
+		required = nil
+	}
+	if err := validateFrozenSetOnceWrite(frozenRefs, required); err != nil {
+		return nil, fmt.Errorf("cannot update resource %s: %w; supply a usable secret value for this operation", existingResource.Label, err)
 	}
 
 	if len(createOnlyPatch) > 0 {
