@@ -151,10 +151,18 @@ func (ru *ResourceUpdate) ListResolvables() []pkgmodel.FormaeURI {
 // use identical semantics or a reconcile-planned removal can silently
 // vanish when a resolvable resolves at execution time.
 func (ru *ResourceUpdate) ResolveValue(formaeUri pkgmodel.FormaeURI, value string, mode pkgmodel.FormaApplyMode) error {
-	properties, err := resolver.ResolvePropertyReferences(formaeUri, ru.DesiredState.Properties, value)
+	resolutionProps, err := stripFrozenSetOnceRefs(ru.DesiredState.Properties, ru.frozenSetOnceRefs())
+	if err != nil {
+		return err
+	}
+	properties, err := resolver.ResolvePropertyReferences(formaeUri, resolutionProps, value)
 	if err != nil {
 		slog.Error("Failed to resolve dynamic properties", "error", err)
 		return fmt.Errorf("failed to resolve dynamic properties: %w", err)
+	}
+	properties, err = restoreFrozenSetOnceRefs(properties, ru.DesiredState.Properties, ru.frozenSetOnceRefs())
+	if err != nil {
+		return err
 	}
 	ru.DesiredState.Properties = properties
 
@@ -341,8 +349,16 @@ func (ru *ResourceUpdate) reDerivePatchAfterSubstitution(mode pkgmodel.FormaAppl
 // patch semantics. Returns (patch, createOnlyPatch, err); the caller decides
 // what to do with a createOnly diff surfaced this late.
 func (ru *ResourceUpdate) regeneratePatchDocument(mode pkgmodel.FormaApplyMode) (json.RawMessage, json.RawMessage, error) {
-	existingForPatch, desiredForPatch, err := SuppressUnchangedOpaqueValues(
-		ru.PriorState.Properties, ru.DesiredState.Properties, ru.DesiredState.Schema, ru.DesiredState.Type)
+	existingForPatch, err := stripFrozenSetOnceRefs(ru.PriorState.Properties, ru.frozenSetOnceRefs())
+	if err != nil {
+		return nil, nil, err
+	}
+	desiredForPatch, err := stripFrozenSetOnceRefs(ru.DesiredState.Properties, ru.frozenSetOnceRefs())
+	if err != nil {
+		return nil, nil, err
+	}
+	existingForPatch, desiredForPatch, err = SuppressUnchangedOpaqueValues(
+		existingForPatch, desiredForPatch, ru.DesiredState.Schema, ru.DesiredState.Type)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to suppress unchanged opaque values: %w", err)
 	}
@@ -413,6 +429,9 @@ func (ru *ResourceUpdate) regeneratePatchDocument(mode pkgmodel.FormaApplyMode) 
 		return nil, nil, err
 	}
 
+	if err := validateFrozenSetOncePatch(patchDoc, createOnlyPatch, ru.frozenSetOnceRefs(), ru.DesiredState.Schema.RequiredOnUpdate()); err != nil {
+		return nil, nil, err
+	}
 	return patchDoc, createOnlyPatch, nil
 }
 
@@ -701,7 +720,18 @@ func (ru *ResourceUpdate) updateResourceProperties(incomingProperties string, wr
 	if writeOrigin {
 		digests = ru.ResolvedRootDigests
 	}
-	return ru.updateProperties(incomingProperties, &ru.DesiredState.Properties, &ru.DesiredState.ReadOnlyProperties, writeOrigin, digests)
+	if err := ru.updateProperties(incomingProperties, &ru.DesiredState.Properties, &ru.DesiredState.ReadOnlyProperties, writeOrigin, digests); err != nil {
+		return err
+	}
+	// These destinations were not written. Preserve their original envelope,
+	// including its digest and provenance, rather than attesting the source
+	// or provider echo as a value this update supplied.
+	props, err := restoreFrozenSetOnceRefs(ru.DesiredState.Properties, ru.PreviousProperties, ru.frozenSetOnceRefs())
+	if err != nil {
+		return err
+	}
+	ru.DesiredState.Properties = props
+	return nil
 }
 
 func (ru *ResourceUpdate) updateExistingResourceProperties(incomingProperties string) error {

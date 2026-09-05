@@ -890,6 +890,14 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 	}
 	desiredForPlugin.Properties = frozenProperties
 
+	frozenProperties, err = freezeSetOnceRefsForPlugin(desiredForPlugin.Properties, data.resourceUpdate.frozenSetOnceRefs())
+	if err != nil {
+		data.resourceUpdate.FailureReason = updateRequestFailureReason(err)
+		data.resourceUpdate.MarkAsFailed()
+		return StateFinishedWithError, data, nil, nil
+	}
+	desiredForPlugin.Properties = frozenProperties
+
 	// Convert properties to plugin format (extracts $value from opaque structures).
 	// DesiredState is the NEW value being written to the cloud as DesiredProperties,
 	// so this stays guarded: a stored hash must never be sent to a plugin in place
