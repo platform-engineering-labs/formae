@@ -1638,14 +1638,55 @@ func findDependencyUpdates(allDeleteUpdates []ResourceUpdate, replacedKsuids map
 // points at a resource in deletedKsuids via a CreateOnly field on dep's
 // schema. A single CreateOnly ref to a deletion target forces cascade-replace
 // for the whole dependent (mixed-refs case).
+//
+// A reference counts as CreateOnly when its destination path sits at or below
+// a CreateOnly-hinted field — the same at-or-below matching the patch
+// pipeline uses to classify createOnly ops — so a hint on a wrapper object
+// covers a reference on one of its members, matching how such an update
+// would be judged at execution time.
 func anyRefIsCreateOnly(dep pkgmodel.Resource, deletedKsuids map[string]bool) bool {
+	createOnlyFields := dep.Schema.CreateOnly()
 	for _, ref := range resolver.ExtractResolvableRefs(dep) {
 		ksuid := strings.TrimPrefix(string(ref.URI), "formae://")
 		if !deletedKsuids[ksuid] {
 			continue
 		}
-		hint := dep.Schema.Hints[stripArrayIndicesForHintLookup(ref.TargetPath)]
-		if hint.CreateOnly {
+		if pathIsAtOrBelowAnyField(ref.TargetPath, createOnlyFields) {
+			return true
+		}
+	}
+	return false
+}
+
+// pathIsAtOrBelowAnyField reports whether a destination path (pathkey-escaped,
+// possibly with array-index segments) targets one of the dotted schema field
+// paths or a nested path within one. Comparison is by segments so a literal
+// dotted key stays one segment and never matches a field that merely spells
+// its dot-prefix.
+func pathIsAtOrBelowAnyField(path string, fields []string) bool {
+	segments := pathkey.Split(path)
+	var pathSegments []string
+	for _, segment := range segments {
+		// A lone all-digits segment is a top-level field name, not an array
+		// index — an index can only appear under a field.
+		if isAllDigits(segment) && len(segments) > 1 {
+			continue
+		}
+		pathSegments = append(pathSegments, segment)
+	}
+	for _, field := range fields {
+		fieldSegments := strings.Split(field, ".")
+		if len(pathSegments) < len(fieldSegments) {
+			continue
+		}
+		matched := true
+		for i, fs := range fieldSegments {
+			if pathSegments[i] != fs {
+				matched = false
+				break
+			}
+		}
+		if matched {
 			return true
 		}
 	}
