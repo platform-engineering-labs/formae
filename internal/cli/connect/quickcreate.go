@@ -30,8 +30,8 @@ const (
 	// Template 0.2.0: the shared OIDC provider rides in the role template
 	// behind CreateProvider, so quick-create emits exactly one link.
 	roleTemplateKey       = "formae-connect-role.yaml"
-	roleTemplateVersionID = "xxcZ8mU5TG82MLf5iyJrlmnB4i2wOZ_f"
-	roleTemplateSHA256    = "12fe0ff79a73387c2e591fb0348558406f5b085917d879b91dc9b21de2306ee2"
+	roleTemplateVersionID = "3HS6qBEG_iQ0xWskLMcfnDTM42seWsRw"
+	roleTemplateSHA256    = "9c732a3dc510c1a289c85cc935da4fa423191dcb50ee8c3241ef4debe1e01c61"
 
 	quickCreateConsole = "https://us-east-1.console.aws.amazon.com/cloudformation/home?region=us-east-1#/stacks/create/review"
 )
