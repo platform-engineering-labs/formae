@@ -483,6 +483,8 @@ github.com/platform-engineering-labs/oox/gcpname v0.0.0-20260825170105-3bd97cb18
 github.com/platform-engineering-labs/oox/gcpname v0.0.0-20260825170105-3bd97cb18d15/go.mod h1:wytVDQEOgo/0PLmMj0nOnisBzzqwemanNy9gpueH9Ik=
 github.com/platform-engineering-labs/oox/provx v0.0.0-20260831005205-99489fc5e7ca h1:ryZD/AytTmkmulsezbuBEH5BbOPpbbPU1cnHUF0OOUY=
 github.com/platform-engineering-labs/oox/provx v0.0.0-20260831005205-99489fc5e7ca/go.mod h1:ySd/XvwrvHJv9Qqb4JM5SOrvmMf3BdQMGo2Ae77U+UM=
+github.com/platform-engineering-labs/oox/provx v0.0.0-20260905021850-40f9d81e8f38 h1:mXV1j81cMGKoEKal3trLT617utgH8l04I1xzHoUHACA=
+github.com/platform-engineering-labs/oox/provx v0.0.0-20260905021850-40f9d81e8f38/go.mod h1:ySd/XvwrvHJv9Qqb4JM5SOrvmMf3BdQMGo2Ae77U+UM=
 github.com/platform-engineering-labs/orbital v0.2.5 h1:7rihasWnR68ORytqLubR5WMJchv/mxoWSCB7MqaB9tU=
 github.com/platform-engineering-labs/orbital v0.2.5/go.mod h1:wwVPqOmW5RO78dDzL/G5CN1Ioao0P/aUsOZVrPVx64s=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
