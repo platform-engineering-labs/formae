@@ -318,6 +318,59 @@ func TestGenerateSourceCode_GeneratorRotation_RoundTrips(t *testing.T) {
 	assert.Equal(t, 3600, round.Rotation.EverySeconds)
 }
 
+// TestGenerateSourceCode_NonIdentifierKeys_RoundTripThroughPkl verifies that a
+// key which cannot stand as a bare PKL identifier survives extraction: it is
+// escaped in the emitted source, that source evaluates, and the key comes back
+// spelled exactly as it was stored. An opaque field carries provider data
+// verbatim — Kubernetes annotations, `x-kubernetes-*` CRD flags, HTTP header
+// names — and none of those are identifiers. Rendered bare, the emitted
+// forma does not parse at all, so generateAndEvaluate fails before any
+// assertion here runs.
+func TestGenerateSourceCode_NonIdentifierKeys_RoundTripThroughPkl(t *testing.T) {
+	forma := &model.Forma{
+		Stacks:  []model.Stack{{Label: "default"}},
+		Targets: []model.Target{fakeawsTarget()},
+		Resources: []model.Resource{{
+			Label:  "dotted-policy",
+			Type:   "FakeAWS::IAM::RolePolicy",
+			Stack:  "default",
+			Target: "aws",
+			Properties: []byte(`{
+				"policyName": "p",
+				"roleName": "r",
+				"policyDocument": {
+					"objectset.rio.cattle.io/applied": "H4",
+					"x-kubernetes-preserve-unknown-fields": true,
+					"Content-Type": "application/json",
+					"class": "nginx",
+					"plain": "ok"
+				}
+			}`),
+		}},
+	}
+
+	generated, evaluated := generateAndEvaluate(t, forma)
+
+	// Escaped by backticks, not brackets: the same renderer serves typed
+	// classes, which take properties and reject entries.
+	assert.Contains(t, generated, "`objectset.rio.cattle.io/applied` = \"H4\"")
+	assert.Contains(t, generated, "`x-kubernetes-preserve-unknown-fields` = true")
+	assert.Contains(t, generated, "`Content-Type` = \"application/json\"")
+	// A key shaped like a PKL keyword needs the same escape.
+	assert.Contains(t, generated, "`class` = \"nginx\"")
+	// An ordinary key stays bare.
+	assert.Contains(t, generated, "plain = \"ok\"")
+
+	// The schema's field mapping capitalizes the property; the data keys under
+	// it are the plugin's own and come back untouched.
+	doc := gjson.Get(evaluated.ToJSON(), `Resources.#(Label=="dotted-policy").Properties.PolicyDocument`)
+	assert.Equal(t, "H4", doc.Get(`objectset\.rio\.cattle\.io/applied`).String())
+	assert.True(t, doc.Get(`x-kubernetes-preserve-unknown-fields`).Bool())
+	assert.Equal(t, "application/json", doc.Get(`Content-Type`).String())
+	assert.Equal(t, "nginx", doc.Get("class").String())
+	assert.Equal(t, "ok", doc.Get("plain").String())
+}
+
 func TestGenerateSourceCode_GeneratorBinding_RoundTripsThroughPkl(t *testing.T) {
 	forma := &model.Forma{
 		Stacks:  []model.Stack{{Label: "secrets"}},
