@@ -1541,11 +1541,12 @@ local function isPklIdentifier(key: String): Boolean =
 /// the key is a property — of a typed class or of a Dynamic — and a bracketed
 /// entry would be rejected on a typed class, so escaping is by backticks.
 local function renderDataKey(key: String, isMapping: Boolean): String =
-  // A key containing a backtick cannot be backtick-escaped; bracket it,
-  // which is right for Dynamic and Mapping. A typed class cannot carry such
-  // a property name in the first place. The bracketed form is a quoted
-  // string, so the key's own specials are escaped like any string value.
-  if (isMapping || key.contains(":") || key.contains("`"))
+  // A key containing a backtick cannot be backtick-escaped, and a backtick
+  // identifier cannot span lines; bracket both, which is right for Dynamic
+  // and Mapping. A typed class cannot carry such a property name in the
+  // first place. The bracketed form is a quoted string, so the key's own
+  // specials are escaped like any string value.
+  if (isMapping || key.contains(":") || key.contains("`") || key.contains("\n") || key.contains("\r"))
     "[\"" + escapeString(key) + "\"]"
   else if (isPklIdentifier(key))
     key

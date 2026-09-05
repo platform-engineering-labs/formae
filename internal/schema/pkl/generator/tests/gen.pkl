@@ -1332,6 +1332,17 @@ facts {
         rendered.contains("`switch` = \"on\"") && rendered.contains("`delete` = \"never\"")
     }
 
+    ["a key containing a line break is bracketed and escaped"] {
+        // A backtick identifier cannot span lines, so such a key must take
+        // the bracketed form, where the break is escaped like any string.
+        let (nested = new Dynamic {
+            ["__type__"] = "Dynamic"
+            ["line\nbreak"] = "v"
+        })
+        let (rendered = gen.genMapToPklStringWithTypes("TestResource", Map("spec", nested), "test"))
+        rendered.contains("[\"line\\nbreak\"] = \"v\"")
+    }
+
     ["a bracketed key with string-literal specials is escaped"] {
         // A Mapping key is rendered inside a quoted string, so a quote or a
         // backslash in the key must be escaped or the emitted forma does not
