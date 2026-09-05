@@ -1518,14 +1518,15 @@ local function formatNestedContent(map: Map<String, Any>, indent: String): Strin
     lines.join("\n")
 
 /// PKL keywords cannot stand as a bare property name; a key shaped like one
-/// still needs escaping. Not the full grammar — only the words that can
-/// plausibly arrive as a data key.
+/// still needs escaping. Includes the words the grammar reserves for future
+/// use ("case", "switch", ...), which it refuses as bare identifiers today.
 local pklKeywords: Set<String> = Set(
-  "abstract", "amends", "as", "class", "const", "else", "extends", "external",
-  "false", "fixed", "for", "function", "hidden", "if", "import", "in", "is",
-  "let", "local", "module", "new", "nothing", "null", "open", "out", "outer",
-  "read", "super", "this", "throw", "trace", "true", "typealias", "unknown",
-  "when"
+  "abstract", "amends", "as", "case", "class", "const", "delete", "else",
+  "extends", "external", "false", "fixed", "for", "function", "hidden", "if",
+  "import", "in", "is", "let", "local", "module", "new", "nothing", "null",
+  "open", "out", "outer", "override", "protected", "read", "record", "super",
+  "switch", "this", "throw", "trace", "true", "typealias", "unknown",
+  "vararg", "when"
 )
 
 /// True when `key` can stand unescaped as a PKL property name.
@@ -1540,11 +1541,12 @@ local function isPklIdentifier(key: String): Boolean =
 /// the key is a property — of a typed class or of a Dynamic — and a bracketed
 /// entry would be rejected on a typed class, so escaping is by backticks.
 local function renderDataKey(key: String, isMapping: Boolean): String =
-  // ponytail: a key containing a backtick cannot be backtick-escaped; bracket
-  // it, which is right for Dynamic and Mapping. A typed class cannot carry
-  // such a property name in the first place.
+  // A key containing a backtick cannot be backtick-escaped; bracket it,
+  // which is right for Dynamic and Mapping. A typed class cannot carry such
+  // a property name in the first place. The bracketed form is a quoted
+  // string, so the key's own specials are escaped like any string value.
   if (isMapping || key.contains(":") || key.contains("`"))
-    "[\"" + key + "\"]"
+    "[\"" + escapeString(key) + "\"]"
   else if (isPklIdentifier(key))
     key
   else

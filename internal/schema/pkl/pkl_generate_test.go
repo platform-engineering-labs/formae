@@ -323,9 +323,9 @@ func TestGenerateSourceCode_GeneratorRotation_RoundTrips(t *testing.T) {
 // escaped in the emitted source, that source evaluates, and the key comes back
 // spelled exactly as it was stored. An opaque field carries provider data
 // verbatim — Kubernetes annotations, `x-kubernetes-*` CRD flags, HTTP header
-// names — and none of those are identifiers. Rendered bare (the PLA-465
-// behavior) the emitted forma does not parse at all, so generateAndEvaluate
-// fails before any assertion here runs.
+// names — and none of those are identifiers. Rendered bare, the emitted
+// forma does not parse at all, so generateAndEvaluate fails before any
+// assertion here runs.
 func TestGenerateSourceCode_NonIdentifierKeys_RoundTripThroughPkl(t *testing.T) {
 	forma := &model.Forma{
 		Stacks:  []model.Stack{{Label: "default"}},

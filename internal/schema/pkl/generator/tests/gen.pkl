@@ -1270,7 +1270,7 @@ facts {
         rendered.contains("\\(")
     }
 
-    // --- Non-identifier keys in untyped content (PLA-465) ---
+    // --- Non-identifier keys in untyped content ---
 
     ["untyped nested content quotes keys that are not PKL identifiers"] {
         // Kubernetes annotations and CRD schema flags are ordinary content in an
@@ -1318,6 +1318,32 @@ facts {
         })
         let (rendered = gen.genMapToPklStringWithTypes("TestResource", Map("spec", nested), "test"))
         rendered.contains("`module` = \"cattle\"") && rendered.contains("`for` = \"everyone\"")
+    }
+
+    ["a key shaped like a reserved-for-future word is escaped"] {
+        // "switch", "case" and friends are not keywords yet, but the grammar
+        // already refuses them as bare property names.
+        let (nested = new Dynamic {
+            ["__type__"] = "Dynamic"
+            ["switch"] = "on"
+            ["delete"] = "never"
+        })
+        let (rendered = gen.genMapToPklStringWithTypes("TestResource", Map("spec", nested), "test"))
+        rendered.contains("`switch` = \"on\"") && rendered.contains("`delete` = \"never\"")
+    }
+
+    ["a bracketed key with string-literal specials is escaped"] {
+        // A Mapping key is rendered inside a quoted string, so a quote or a
+        // backslash in the key must be escaped or the emitted forma does not
+        // parse.
+        let (nested = new Dynamic {
+            ["__type__"] = "Mapping"
+            ["say \"hi\""] = "v"
+            ["back\\slash"] = "w"
+        })
+        let (rendered = gen.genMapToPklStringWithTypes("TestResource", Map("spec", nested), "test"))
+        rendered.contains("[\"say \\\"hi\\\"\"] = \"v\"")
+          && rendered.contains("[\"back\\\\slash\"] = \"w\"")
     }
 
     // --- String escaping (roundtrip) tests ---
