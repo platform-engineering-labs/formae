@@ -157,3 +157,38 @@ func TestOpaqueSetOnceRef_ForceResentOnlyStillConverges(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, updates)
 }
+
+func TestOpaqueSetOnceRef_EmptyPatchDispatchRefused(t *testing.T) {
+	for _, tc := range []struct {
+		name, stored, desired string
+		schema                pkgmodel.Schema
+	}{
+		{"array", `{"Entries":[{"Name":"a","Password":` + frozenRef + `}]}`, `{"Entries":[{"Name":"a","Password":` + bareFrozenRef + `}]}`, pkgmodel.Schema{Fields: []string{"Entries"}}},
+		{"required", `{"Password":` + frozenRef + `}`, `{"Password":` + bareFrozenRef + `}`, pkgmodel.Schema{Fields: []string{"Password"}, Hints: map[string]pkgmodel.FieldHint{"Password": {RequiredOnUpdate: true}}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prior := pkgmodel.Resource{Label: "db", Stack: "old-stack", Type: "TEST::DB", Properties: json.RawMessage(tc.stored), Schema: tc.schema}
+			desired := prior
+			desired.Stack = "new-stack"
+			desired.Properties = json.RawMessage(tc.desired)
+			updates, err := NewResourceUpdateForExisting(resolver.NewResolvableProperties(), nil, prior, desired, pkgmodel.Target{}, pkgmodel.Target{}, pkgmodel.FormaApplyModeReconcile, FormaCommandSourceUser, false, false)
+			require.NoError(t, err)
+			require.Len(t, updates, 1)
+			ru := &updates[0]
+			require.Empty(t, ru.DesiredState.PatchDocument)
+			ru.ResourceTarget = pkgmodel.Target{Config: json.RawMessage(`{}`)}
+			proc := newOperationCapturingProcess()
+			state, _, _, err := update(StateUpdating, ResourceUpdateData{resourceUpdate: ru}, proc)
+			require.NoError(t, err)
+			require.Nil(t, proc.operation, "an empty patch must not bypass the frozen-value boundary")
+			require.Equal(t, StateFinishedWithError, state)
+			require.Contains(t, ru.FailureReason, "usable")
+		})
+	}
+}
+
+func TestOpaqueSetOnceRef_EntitySetConverges(t *testing.T) {
+	updates, err := planFrozenRef(t, `{"Entries":[{"Name":"a","Password":`+frozenRef+`}]}`, `{"Entries":[{"Name":"a","Password":`+bareFrozenRef+`}]}`, pkgmodel.Schema{Fields: []string{"Entries"}, Hints: map[string]pkgmodel.FieldHint{"Entries": {UpdateMethod: pkgmodel.FieldUpdateMethodEntitySet, IndexField: "Name"}}})
+	require.NoError(t, err)
+	require.Empty(t, updates)
+}

@@ -145,7 +145,7 @@ func NewResourceUpdateForExisting(
 			return []ResourceUpdate{}, nil
 		}
 		if err := validateFrozenSetOncePatch(patchDocument, createOnlyPatch, frozenRefs, newResource.Schema.RequiredOnUpdate()); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("cannot update resource %s: %w; supply a usable secret value for this operation", existingResource.Label, err)
 		}
 
 	} else {

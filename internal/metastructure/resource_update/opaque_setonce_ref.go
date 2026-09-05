@@ -151,6 +151,22 @@ func validateFrozenSetOncePatch(patch, createOnly json.RawMessage, refs []Frozen
 		return nil
 	}
 	ancestor := func(a, b string) bool { return a == b || strings.HasPrefix(b, a+"/") }
+	if err := validateFrozenSetOnceWrite(refs, required); err != nil {
+		return err
+	}
+	for _, ref := range refs {
+		for _, op := range ops {
+			if ancestor(op.Path, ref.Pointer) {
+				return fmt.Errorf("enclosing update requires a usable value for a frozen SetOnce secret reference")
+			}
+		}
+	}
+	return nil
+}
+
+// validateFrozenSetOnceWrite applies whenever a provider Update is dispatched,
+// even if stack/metadata changes kept an otherwise empty patch in the plan.
+func validateFrozenSetOnceWrite(refs []FrozenSetOnceRef, required []string) error {
 	for _, ref := range refs {
 		// Positional pairing cannot preserve an array member's identity
 		// through a provider response that reorders members. No-op arrays
@@ -161,11 +177,6 @@ func validateFrozenSetOncePatch(patch, createOnly json.RawMessage, refs []Frozen
 		for _, field := range required {
 			if field == ref.HintPath || strings.HasPrefix(ref.HintPath, field+".") {
 				return fmt.Errorf("update requires a usable value for a frozen SetOnce secret reference")
-			}
-		}
-		for _, op := range ops {
-			if ancestor(op.Path, ref.Pointer) {
-				return fmt.Errorf("enclosing update requires a usable value for a frozen SetOnce secret reference")
 			}
 		}
 	}
