@@ -1529,9 +1529,10 @@ local pklKeywords: Set<String> = Set(
   "vararg", "when"
 )
 
-/// True when `key` can stand unescaped as a PKL property name.
+/// True when `key` can stand unescaped as a PKL property name. A standalone
+/// underscore matches the identifier shape but is placeholder syntax.
 local function isPklIdentifier(key: String): Boolean =
-  key.matches(Regex("[A-Za-z_$][A-Za-z0-9_$]*")) && !pklKeywords.contains(key)
+  key.matches(Regex("[A-Za-z_$][A-Za-z0-9_$]*")) && !pklKeywords.contains(key) && key != "_"
 
 /// Renders a data key so the generated forma parses. Dots, slashes and hyphens
 /// are ordinary in provider data (Kubernetes annotations, `x-kubernetes-*` CRD

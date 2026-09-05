@@ -1332,6 +1332,17 @@ facts {
         rendered.contains("`switch` = \"on\"") && rendered.contains("`delete` = \"never\"")
     }
 
+    ["a standalone underscore key is escaped"] {
+        // "_" matches the identifier shape but is placeholder syntax, not a
+        // usable bare property name.
+        let (nested = new Dynamic {
+            ["__type__"] = "Dynamic"
+            ["_"] = "x"
+        })
+        let (rendered = gen.genMapToPklStringWithTypes("TestResource", Map("spec", nested), "test"))
+        rendered.contains("`_` = \"x\"")
+    }
+
     ["a key containing a line break is bracketed and escaped"] {
         // A backtick identifier cannot span lines, so such a key must take
         // the bracketed form, where the break is escaped like any string.
