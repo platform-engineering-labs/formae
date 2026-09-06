@@ -58,7 +58,7 @@
               "name": "[parameters('identityName')]",
               "location": "[parameters('location')]",
               "tags": {
-                "formae:owned": "true"
+                "formae-owned": "true"
               }
             },
             {
