@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
@@ -156,14 +157,22 @@ func (ru *ResourceUpdate) ListResolvables() []pkgmodel.FormaeURI {
 // use identical semantics or a reconcile-planned removal can silently
 // vanish when a resolvable resolves at execution time.
 func (ru *ResourceUpdate) ResolveValue(formaeUri pkgmodel.FormaeURI, value string, mode pkgmodel.FormaApplyMode) error {
-	properties, err := resolver.ResolvePropertyReferences(formaeUri, ru.DesiredState.Properties, value)
+	resolutionProps, err := stripFrozenSetOnceRefs(ru.DesiredState.Properties, ru.frozenSetOnceRefs())
+	if err != nil {
+		return err
+	}
+	properties, err := resolver.ResolvePropertyReferences(formaeUri, resolutionProps, value)
 	if err != nil {
 		slog.Error("Failed to resolve dynamic properties", "error", err)
 		return fmt.Errorf("failed to resolve dynamic properties: %w", err)
 	}
+	properties, err = restoreFrozenSetOnceRefs(properties, ru.DesiredState.Properties, ru.frozenSetOnceRefs())
+	if err != nil {
+		return err
+	}
 	ru.DesiredState.Properties = properties
 
-	return ru.reDerivePatchAfterSubstitution(mode, string(formaeUri))
+	return ru.reDerivePatchAfterSubstitution(mode, string(formaeUri), formaeUri)
 }
 
 // ResolveGeneratorValue delivers a generator's freshly drawn value to every
@@ -250,7 +259,7 @@ func (ru *ResourceUpdate) PrepareGeneratorValues(generatorKsuid string, values m
 func (ru *ResourceUpdate) CommitGeneratorValues(prepared *PreparedGenDelivery, generatorKsuid string, generationID string, mode pkgmodel.FormaApplyMode) error {
 	ru.DesiredState.Properties = prepared.properties
 	ru.stampDrawnGeneration(generatorKsuid, prepared.outputs, generationID)
-	return ru.reDerivePatchAfterSubstitution(mode, "generator "+generatorKsuid)
+	return ru.reDerivePatchAfterSubstitution(mode, "generator "+generatorKsuid, "")
 }
 
 // ResolveGeneratorValue prepares and commits in one step, for a caller
@@ -307,7 +316,7 @@ func (ru *ResourceUpdate) stampDrawnGeneration(generatorKsuid string, outputs []
 // Only Updates need a fresh patch — Create/Delete/Replace carry full
 // desired/prior state to the provider rather than a diff. Patch regen is also
 // a no-op when no Schema is available (sync/discovery paths).
-func (ru *ResourceUpdate) reDerivePatchAfterSubstitution(mode pkgmodel.FormaApplyMode, subject string) error {
+func (ru *ResourceUpdate) reDerivePatchAfterSubstitution(mode pkgmodel.FormaApplyMode, subject string, deliveredURI pkgmodel.FormaeURI) error {
 	if ru.Operation != OperationUpdate || len(ru.DesiredState.Schema.Fields) == 0 {
 		return nil
 	}
@@ -317,11 +326,30 @@ func (ru *ResourceUpdate) reDerivePatchAfterSubstitution(mode pkgmodel.FormaAppl
 		return fmt.Errorf("failed to re-derive patch document after resolving %s: %w", subject, derr)
 	}
 	if len(createOnlyPatch) > 0 {
-		fields, ferr := createOnlyPatchFields(createOnlyPatch)
+		// References deliver one at a time, and each delivery re-derives the
+		// patch. A path whose own reference has not delivered yet — its
+		// envelope holds no value, or its URI is still queued for delivery —
+		// cannot be judged on this re-derivation: a placeholder or a carried
+		// value is not the value the update will execute with. Its turn comes
+		// when its own delivery arrives. Only ops on fully-delivered paths
+		// count against the guard.
+		queued := make(map[string]bool, len(ru.RemainingResolvables))
+		for _, uri := range ru.RemainingResolvables {
+			if uri != deliveredURI {
+				queued[string(uri)] = true
+			}
+		}
+		judgeable, ferr := opsOutsidePendingReferences(createOnlyPatch, ru.DesiredState.Properties, queued)
 		if ferr != nil {
 			return fmt.Errorf("failed to inspect createOnly patch after resolving %s: %w", subject, ferr)
 		}
-		return LateCreateOnlyChangeError{ResourceLabel: ru.DesiredState.Label, Fields: fields}
+		if len(judgeable) > 0 {
+			fields, ferr := createOnlyPatchFields(judgeable)
+			if ferr != nil {
+				return fmt.Errorf("failed to inspect createOnly patch after resolving %s: %w", subject, ferr)
+			}
+			return LateCreateOnlyChangeError{ResourceLabel: ru.DesiredState.Label, Fields: fields}
+		}
 	}
 	ru.DesiredState.PatchDocument = patchDoc
 
@@ -346,8 +374,16 @@ func (ru *ResourceUpdate) reDerivePatchAfterSubstitution(mode pkgmodel.FormaAppl
 // patch semantics. Returns (patch, createOnlyPatch, err); the caller decides
 // what to do with a createOnly diff surfaced this late.
 func (ru *ResourceUpdate) regeneratePatchDocument(mode pkgmodel.FormaApplyMode) (json.RawMessage, json.RawMessage, error) {
-	existingForPatch, desiredForPatch, err := SuppressUnchangedOpaqueValues(
-		ru.PriorState.Properties, ru.DesiredState.Properties, ru.DesiredState.Schema, ru.DesiredState.Type)
+	existingForPatch, err := stripFrozenSetOnceRefs(ru.PriorState.Properties, ru.frozenSetOnceRefs())
+	if err != nil {
+		return nil, nil, err
+	}
+	desiredForPatch, err := stripFrozenSetOnceRefs(ru.DesiredState.Properties, ru.frozenSetOnceRefs())
+	if err != nil {
+		return nil, nil, err
+	}
+	existingForPatch, desiredForPatch, err = SuppressUnchangedOpaqueValues(
+		existingForPatch, desiredForPatch, ru.DesiredState.Schema, ru.DesiredState.Type)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to suppress unchanged opaque values: %w", err)
 	}
@@ -419,6 +455,9 @@ func (ru *ResourceUpdate) regeneratePatchDocument(mode pkgmodel.FormaApplyMode) 
 		return nil, nil, err
 	}
 
+	if err := validateFrozenSetOncePatch(patchDoc, createOnlyPatch, ru.frozenSetOnceRefs(), ru.DesiredState.Schema.RequiredOnUpdate()); err != nil {
+		return nil, nil, err
+	}
 	return patchDoc, createOnlyPatch, nil
 }
 
@@ -458,10 +497,117 @@ func (ru *ResourceUpdate) ConvergenceOnly() bool {
 	return true
 }
 
-// createOnlyPatchFields extracts the distinct top-level field names touched
-// by a createOnly patch document, in first-seen order, so
-// LateCreateOnlyChangeError can name what changed without exposing the raw
-// JSON-patch op shape to callers.
+// opsOutsidePendingReferences returns the subset of createOnly patch ops that
+// can be judged now: ops whose path does not touch a reference that has not
+// delivered its value yet. An op at, under, or above a pending destination is
+// diffing a placeholder or a carried value rather than the value the update
+// will execute with, so it is excluded; it gets judged on the re-derivation
+// its own delivery triggers. queuedURIs names the references still awaiting
+// delivery, keyed by their $ref URI.
+func opsOutsidePendingReferences(createOnlyPatch json.RawMessage, desiredProperties json.RawMessage, queuedURIs map[string]bool) (json.RawMessage, error) {
+	var ops []map[string]any
+	if err := json.Unmarshal(createOnlyPatch, &ops); err != nil {
+		return nil, fmt.Errorf("failed to parse createOnly patch ops: %w", err)
+	}
+	pending, err := unresolvedReferencePaths(desiredProperties, queuedURIs)
+	if err != nil {
+		return nil, err
+	}
+	if len(pending) == 0 {
+		return createOnlyPatch, nil
+	}
+
+	var judgeable []map[string]any
+	for _, op := range ops {
+		path, _ := op["path"].(string)
+		segments := jsonPointerSegments(path)
+		touchesPending := false
+		for _, p := range pending {
+			if segmentsOverlap(segments, p) {
+				touchesPending = true
+				break
+			}
+		}
+		if !touchesPending {
+			judgeable = append(judgeable, op)
+		}
+	}
+	if len(judgeable) == 0 {
+		return nil, nil
+	}
+	out, err := json.Marshal(judgeable)
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize judgeable createOnly patch ops: %w", err)
+	}
+	return out, nil
+}
+
+// unresolvedReferencePaths lists the destination paths, as raw key segments,
+// of reference envelopes that have not delivered their value: envelopes
+// holding a $ref without a $value (the set the flatten step renders as
+// placeholders), plus envelopes whose $ref URI is in queuedURIs — a queued
+// reference's carried value is a prior delivery's, not this update's.
+// Numeric segments index arrays.
+func unresolvedReferencePaths(properties json.RawMessage, queuedURIs map[string]bool) ([][]string, error) {
+	var doc map[string]any
+	if err := json.Unmarshal(properties, &doc); err != nil {
+		return nil, fmt.Errorf("failed to parse desired properties: %w", err)
+	}
+	var paths [][]string
+	var walk func(prefix []string, node any)
+	walk = func(prefix []string, node any) {
+		switch n := node.(type) {
+		case map[string]any:
+			if ref, hasRef := n["$ref"]; hasRef {
+				_, hasVal := n["$value"]
+				refURI, _ := ref.(string)
+				if !hasVal || queuedURIs[refURI] {
+					paths = append(paths, append([]string{}, prefix...))
+				}
+				return
+			}
+			for k, v := range n {
+				walk(append(prefix, k), v)
+			}
+		case []any:
+			for i, elem := range n {
+				walk(append(prefix, strconv.Itoa(i)), elem)
+			}
+		}
+	}
+	walk(nil, doc)
+	return paths, nil
+}
+
+// jsonPointerSegments splits an RFC 6901 JSON Pointer into raw key segments,
+// unescaping ~1 to '/' and ~0 to '~' so segments compare against document
+// keys as written.
+func jsonPointerSegments(path string) []string {
+	segments := strings.Split(strings.TrimPrefix(path, "/"), "/")
+	for i, s := range segments {
+		s = strings.ReplaceAll(s, "~1", "/")
+		segments[i] = strings.ReplaceAll(s, "~0", "~")
+	}
+	return segments
+}
+
+// segmentsOverlap reports whether one segment path is equal to or a prefix of
+// the other — an op at, under, or above a pending destination.
+func segmentsOverlap(a, b []string) bool {
+	n := min(len(a), len(b))
+	for i := 0; i < n; i++ {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// createOnlyPatchFields extracts the distinct field paths touched by a
+// createOnly patch document, in first-seen order and at full depth
+// ("LinkedNetwork.Uri", not "LinkedNetwork"), so LateCreateOnlyChangeError
+// names the member that actually changed without exposing the raw JSON-patch
+// op shape to callers.
 func createOnlyPatchFields(createOnlyPatch json.RawMessage) ([]string, error) {
 	var ops []struct {
 		Path string `json:"path"`
@@ -473,7 +619,7 @@ func createOnlyPatchFields(createOnlyPatch json.RawMessage) ([]string, error) {
 	seen := make(map[string]struct{}, len(ops))
 	var fields []string
 	for _, op := range ops {
-		field, _, _ := strings.Cut(strings.TrimPrefix(op.Path, "/"), "/")
+		field := strings.Join(jsonPointerSegments(op.Path), ".")
 		if field == "" {
 			continue
 		}
@@ -738,7 +884,18 @@ func (ru *ResourceUpdate) updateResourceProperties(incomingProperties string, wr
 	if writeOrigin {
 		digests = ru.ResolvedRootDigests
 	}
-	return ru.updateProperties(incomingProperties, &ru.DesiredState.Properties, &ru.DesiredState.ReadOnlyProperties, writeOrigin, digests)
+	if err := ru.updateProperties(incomingProperties, &ru.DesiredState.Properties, &ru.DesiredState.ReadOnlyProperties, writeOrigin, digests); err != nil {
+		return err
+	}
+	// These destinations were not written. Preserve their original envelope,
+	// including its digest and provenance, rather than attesting the source
+	// or provider echo as a value this update supplied.
+	props, err := restoreFrozenSetOnceRefs(ru.DesiredState.Properties, ru.PreviousProperties, ru.frozenSetOnceRefs())
+	if err != nil {
+		return err
+	}
+	ru.DesiredState.Properties = props
+	return nil
 }
 
 func (ru *ResourceUpdate) updateExistingResourceProperties(incomingProperties string) error {

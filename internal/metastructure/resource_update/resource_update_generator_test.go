@@ -1155,6 +1155,15 @@ func TestFindDependencyUpdates_CreateOnlyBranch(t *testing.T) {
 		`{"ImmutableRef":{"$ref":"formae://%s#/Name","$value":"parent-v1"},"MutableRef":{"$ref":"formae://%s#/Other","$value":"x"}}`,
 		parentKsuid, otherKsuid,
 	)
+	nestedWrapperRefJSON := fmt.Sprintf(
+		`{"LinkedNetwork":{"Uri":{"$ref":"formae://%s#/SelfLink","$value":"https://net-1"}}}`, parentKsuid,
+	)
+	literalDottedKeyRefJSON := fmt.Sprintf(
+		`{"Foo.Bar":{"$ref":"formae://%s#/Name","$value":"parent-v1"}}`, parentKsuid,
+	)
+	digitFieldRefJSON := fmt.Sprintf(
+		`{"42":{"$ref":"formae://%s#/Name","$value":"parent-v1"}}`, parentKsuid,
+	)
 
 	cases := []struct {
 		name              string
@@ -1193,6 +1202,38 @@ func TestFindDependencyUpdates_CreateOnlyBranch(t *testing.T) {
 			name: "array-indexed path uses stripped hint key",
 			dependent: makeDependent(parentRefArrayJSON, map[string]pkgmodel.FieldHint{
 				"Refs.Target": {CreateOnly: true},
+			}),
+			wantCascadeDelete: true,
+		},
+		{
+			// A CreateOnly hint on a wrapper field covers references nested
+			// inside it — the same at-or-below matching the patch pipeline
+			// uses to classify createOnly ops, so a schema annotating the
+			// provider's immutability unit (the wrapper object) cascades the
+			// same way one annotating the leaf member does.
+			name: "wrapper-level createOnly covers a nested ref",
+			dependent: makeDependent(nestedWrapperRefJSON, map[string]pkgmodel.FieldHint{
+				"LinkedNetwork": {CreateOnly: true},
+			}),
+			wantCascadeDelete: true,
+		},
+		{
+			// A literal dotted key is one segment, not nesting: a ref under
+			// the top-level key "Foo.Bar" does not sit below a field named
+			// "Foo", so a CreateOnly hint there must not force a replacement.
+			name: "literal dotted key is not below a dot-prefix field",
+			dependent: makeDependent(literalDottedKeyRefJSON, map[string]pkgmodel.FieldHint{
+				"Foo": {CreateOnly: true},
+			}),
+			wantCascadeDelete: false,
+		},
+		{
+			// A single all-digits segment is a top-level field name, not an
+			// array index — an index can only appear under a field. Its hint
+			// must still be found.
+			name: "digit-named top-level field keeps its hint",
+			dependent: makeDependent(digitFieldRefJSON, map[string]pkgmodel.FieldHint{
+				"42": {CreateOnly: true},
 			}),
 			wantCascadeDelete: true,
 		},

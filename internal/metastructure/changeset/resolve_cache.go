@@ -135,20 +135,22 @@ func (r *ResolveCache) startResolve(from gen.PID, resourceURI pkgmodel.FormaeURI
 
 	// Load the resource from the stack to get the native id
 	r.Log().Debug("Cache miss for resource URI uri=%v", resourceURI)
-	stackerResult, err := r.Call(
+	stackerResult, err := messages.UnwrapCall(r.Call(
 		gen.ProcessID{Name: actornames.ResourcePersister, Node: r.Node().Name()},
 		messages.LoadResource{
 			ResourceURI: resourceURI.Stripped(),
-		})
+		}))
 	if err != nil {
 		r.Log().Error("Failed to load resource from resource persister resourceURI=%v: %v", resourceURI, err)
-		_ = r.Send(from, messages.FailedToResolveValue{ResourceURI: resourceURI})
+		_ = r.Send(from, messages.FailedToResolveValue{ResourceURI: resourceURI,
+			Reason: fmt.Sprintf("could not resolve reference %q: %v", string(resourceURI), err)})
 		return
 	}
 	loadResourceResult, ok := stackerResult.(messages.LoadResourceResult)
 	if !ok {
 		r.Log().Error("Unexpected result type from resource persister resultType=%v", reflect.TypeOf(stackerResult))
-		_ = r.Send(from, messages.FailedToResolveValue{ResourceURI: resourceURI})
+		_ = r.Send(from, messages.FailedToResolveValue{ResourceURI: resourceURI,
+			Reason: fmt.Sprintf("could not resolve reference %q: unexpected reply from the resource store", string(resourceURI))})
 		return
 	}
 

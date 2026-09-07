@@ -35,7 +35,7 @@ func ReadResourceViaPlugin(proc gen.Process, res pkgmodel.Resource, targetConfig
 	}
 
 	operationID := uuid.New().String()
-	spawnResult, err := proc.Call(
+	spawnResult, err := messages.UnwrapCall(proc.Call(
 		gen.ProcessID{Name: actornames.PluginCoordinator, Node: proc.Node().Name()},
 		messages.SpawnPluginOperator{
 			Namespace:   res.Namespace(),
@@ -43,7 +43,7 @@ func ReadResourceViaPlugin(proc gen.Process, res pkgmodel.Resource, targetConfig
 			Operation:   string(resource.OperationRead),
 			OperationID: operationID,
 			RequestedBy: proc.PID(),
-		})
+		}))
 	if err != nil {
 		return nil, fmt.Errorf("failed to spawn plugin operator: %w", err)
 	}

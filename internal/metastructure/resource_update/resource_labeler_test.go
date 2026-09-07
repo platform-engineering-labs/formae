@@ -18,12 +18,6 @@ import (
 )
 
 // Helper to create properties JSON from tags
-func tagsToProperties(tags []pkgmodel.Tag) json.RawMessage {
-	props := map[string]any{"Tags": tags}
-	data, _ := json.Marshal(props)
-	return data
-}
-
 // Tests for JSONPath-based label extraction (new LabelConfig)
 
 func TestLabelForUnmanagedResource_UsesJSONPathQuery(t *testing.T) {
@@ -34,7 +28,7 @@ func TestLabelForUnmanagedResource_UsesJSONPathQuery(t *testing.T) {
 	}
 
 	l := newResourceLabelerForTest(t)
-	label := l.LabelForUnmanagedResource(nativeId, "AWS::EC2::Instance", properties, labelConfig, nil)
+	label := l.LabelForUnmanagedResource(nativeId, "AWS::EC2::Instance", properties, labelConfig)
 	assert.Equal(t, "MyInstance", label)
 }
 
@@ -49,7 +43,7 @@ func TestLabelForUnmanagedResource_UsesResourceOverride(t *testing.T) {
 	}
 
 	l := newResourceLabelerForTest(t)
-	label := l.LabelForUnmanagedResource(nativeId, "AWS::IAM::Policy", properties, labelConfig, nil)
+	label := l.LabelForUnmanagedResource(nativeId, "AWS::IAM::Policy", properties, labelConfig)
 	assert.Equal(t, "MyPolicy", label)
 }
 
@@ -61,7 +55,7 @@ func TestLabelForUnmanagedResource_FallsBackToNativeID_WhenQueryReturnsNoResult(
 	}
 
 	l := newResourceLabelerForTest(t)
-	label := l.LabelForUnmanagedResource(nativeId, "AWS::EC2::Instance", properties, labelConfig, nil)
+	label := l.LabelForUnmanagedResource(nativeId, "AWS::EC2::Instance", properties, labelConfig)
 	assert.Equal(t, nativeId, label)
 }
 
@@ -71,7 +65,7 @@ func TestLabelForUnmanagedResource_FallsBackToNativeID_WhenNoLabelConfig(t *test
 	labelConfig := pkgmodel.LabelConfig{} // Empty config
 
 	l := newResourceLabelerForTest(t)
-	label := l.LabelForUnmanagedResource(nativeId, "AWS::EC2::Instance", properties, labelConfig, nil)
+	label := l.LabelForUnmanagedResource(nativeId, "AWS::EC2::Instance", properties, labelConfig)
 	assert.Equal(t, nativeId, label)
 }
 
@@ -83,7 +77,7 @@ func TestLabelForUnmanagedResource_HandlesEmptyProperties(t *testing.T) {
 	}
 
 	l := newResourceLabelerForTest(t)
-	label := l.LabelForUnmanagedResource(nativeId, "AWS::EC2::Instance", properties, labelConfig, nil)
+	label := l.LabelForUnmanagedResource(nativeId, "AWS::EC2::Instance", properties, labelConfig)
 	assert.Equal(t, nativeId, label)
 }
 
@@ -94,7 +88,7 @@ func TestLabelForUnmanagedResource_HandlesNilProperties(t *testing.T) {
 	}
 
 	l := newResourceLabelerForTest(t)
-	label := l.LabelForUnmanagedResource(nativeId, "AWS::EC2::Instance", nil, labelConfig, nil)
+	label := l.LabelForUnmanagedResource(nativeId, "AWS::EC2::Instance", nil, labelConfig)
 	assert.Equal(t, nativeId, label)
 }
 
@@ -107,54 +101,12 @@ func TestLabelForUnmanagedResource_ConcatenatesMultipleQueryResults(t *testing.T
 	}
 
 	l := newResourceLabelerForTest(t)
-	label := l.LabelForUnmanagedResource(nativeId, "AWS::EC2::Instance", properties, labelConfig, nil)
+	label := l.LabelForUnmanagedResource(nativeId, "AWS::EC2::Instance", properties, labelConfig)
 	// Should concatenate both matching tag values with separator
 	assert.Equal(t, "MyInstance-Production", label)
 }
 
 // Tests for legacy tag-based label extraction (backwards compatibility)
-
-func TestLabelForUnmanagedResource_FallsBackToLegacyTagKeys(t *testing.T) {
-	nativeId := "i-1234567890abcdef0"
-	properties := tagsToProperties([]pkgmodel.Tag{
-		{Key: "Name", Value: "MyInstance"},
-		{Key: "Project", Value: "Alpha"},
-	})
-	labelConfig := pkgmodel.LabelConfig{} // Empty config, should fall back to legacy
-	legacyTagKeys := []string{"Name", "Project"}
-
-	l := newResourceLabelerForTest(t)
-	label := l.LabelForUnmanagedResource(nativeId, "FakeAWS::S3::Bucket", properties, labelConfig, legacyTagKeys)
-	assert.Equal(t, "MyInstance-Alpha", label)
-}
-
-func TestLabelForUnmanagedResource_ReturnsNativeIdWhenNoTagKeysAreFound(t *testing.T) {
-	nativeId := "i-1234567890abcdef0"
-	properties := tagsToProperties([]pkgmodel.Tag{
-		{Key: "Environment", Value: "Production"},
-		{Key: "Owner", Value: "Alice"},
-	})
-	labelConfig := pkgmodel.LabelConfig{}
-	legacyTagKeys := []string{"Name", "Project"}
-
-	l := newResourceLabelerForTest(t)
-	label := l.LabelForUnmanagedResource(nativeId, "FakeAWS::S3::Bucket", properties, labelConfig, legacyTagKeys)
-	assert.Equal(t, nativeId, label)
-}
-
-func TestLabelForUnmanagedResource_HandlesMissingTagValuesGracefully(t *testing.T) {
-	nativeId := "i-1234567890abcdef0"
-	properties := tagsToProperties([]pkgmodel.Tag{
-		{Key: "Name", Value: "MyInstance"},
-		{Key: "Environment", Value: "Production"},
-	})
-	labelConfig := pkgmodel.LabelConfig{}
-	legacyTagKeys := []string{"Name", "Project"}
-
-	l := newResourceLabelerForTest(t)
-	label := l.LabelForUnmanagedResource(nativeId, "FakeAWS::S3::Bucket", properties, labelConfig, legacyTagKeys)
-	assert.Equal(t, "MyInstance", label)
-}
 
 // Tests for label uniqueness
 
@@ -170,7 +122,7 @@ func TestLabelForUnmanagedResource_AppendsIncrementingNumberForDuplicates(t *tes
 		assert.NoError(t, err)
 	})
 
-	label := l.LabelForUnmanagedResource(nativeId, "AWS::EC2::Instance", properties, labelConfig, nil)
+	label := l.LabelForUnmanagedResource(nativeId, "AWS::EC2::Instance", properties, labelConfig)
 	assert.Equal(t, "MyInstance-1", label)
 }
 
@@ -186,7 +138,7 @@ func TestLabelForUnmanagedResource_IncrementsExistingVersion(t *testing.T) {
 		assert.NoError(t, err)
 	})
 
-	label := l.LabelForUnmanagedResource(nativeId, "AWS::EC2::Instance", properties, labelConfig, nil)
+	label := l.LabelForUnmanagedResource(nativeId, "AWS::EC2::Instance", properties, labelConfig)
 	assert.Equal(t, "MyInstance-6", label)
 }
 
@@ -206,7 +158,7 @@ func TestLabelForUnmanagedResource_DoesNotMintTakenNumericNeighbor(t *testing.T)
 		}
 	})
 
-	label := l.LabelForUnmanagedResource("i-00000000000000002", "AWS::EC2::Instance", properties, labelConfig, nil)
+	label := l.LabelForUnmanagedResource("i-00000000000000002", "AWS::EC2::Instance", properties, labelConfig)
 	assert.NotEqual(t, "server-1", label)
 	assert.NotEqual(t, "server-2", label)
 }
@@ -229,7 +181,7 @@ func TestLabelForUnmanagedResource_RepeatedDuplicateNamesStayUnique(t *testing.T
 
 	seen := make(map[string]bool)
 	for i := 0; i < 3; i++ {
-		label := l.LabelForUnmanagedResource("i-00000000000000000", "AWS::EC2::Instance", properties, labelConfig, nil)
+		label := l.LabelForUnmanagedResource("i-00000000000000000", "AWS::EC2::Instance", properties, labelConfig)
 		assert.False(t, seen[label], "label %q minted twice", label)
 		seen[label] = true
 
@@ -239,20 +191,6 @@ func TestLabelForUnmanagedResource_RepeatedDuplicateNamesStayUnique(t *testing.T
 }
 
 // Tests for LabelConfig priority (JSONPath query takes precedence over legacy tag keys)
-
-func TestLabelForUnmanagedResource_JSONPathQueryTakesPrecedenceOverLegacyTagKeys(t *testing.T) {
-	nativeId := "i-1234567890abcdef0"
-	properties := json.RawMessage(`{"Tags":[{"Key":"Name","Value":"FromJSONPath"},{"Key":"LegacyTag","Value":"FromLegacy"}]}`)
-	labelConfig := pkgmodel.LabelConfig{
-		DefaultQuery: `$.Tags[?(@.Key=='Name')].Value`,
-	}
-	legacyTagKeys := []string{"LegacyTag"}
-
-	l := newResourceLabelerForTest(t)
-	label := l.LabelForUnmanagedResource(nativeId, "AWS::EC2::Instance", properties, labelConfig, legacyTagKeys)
-	// Should use JSONPath query result, not legacy tag keys
-	assert.Equal(t, "FromJSONPath", label)
-}
 
 func newResourceLabelerForTest(t *testing.T, setup ...func(datastore.Datastore)) *resource_update.ResourceLabeler {
 	t.Helper()

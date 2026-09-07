@@ -233,7 +233,6 @@ func TestPkl_FormaeConfig(t *testing.T) {
 
 	assert.True(t, config.Agent.Discovery.Enabled)
 	assert.Equal(t, 20*time.Minute, config.Agent.Discovery.Interval)
-	assert.Equal(t, []string{"Name", "Environment"}, config.Agent.Discovery.LabelTagKeys)
 
 	assert.Equal(t, "/var/log/formae.log", config.Agent.Logging.FilePath)
 	assert.Equal(t, slog.LevelDebug, config.Agent.Logging.FileLogLevel)

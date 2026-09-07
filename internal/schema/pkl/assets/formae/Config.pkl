@@ -122,10 +122,6 @@ class RetryConfig {
 class DiscoveryConfig {
     enabled: Boolean = true
 
-    labelTagKeys: Listing<String> = new Listing<String> {
-        "Name"
-    }
-
     interval: Duration = 10.min
 
     resourceTypesToDiscover: Listing<String> = new Listing<String> { }

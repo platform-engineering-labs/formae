@@ -321,10 +321,12 @@ func (m *Metastructure) callActor(targetPID gen.ProcessID, message any) (any, er
 		return nil, fmt.Errorf("failed to send request to MetastructureBridge: %w", err)
 	}
 
-	// Wait for either success or error response
+	// Wait for either success or error response. A CallFailed reply is a
+	// request-scoped failure answered by the target actor; fold it into the
+	// error return so every callActor site sees one (result, error) contract.
 	select {
 	case response := <-successChan:
-		return response, nil
+		return messages.UnwrapCall(response, nil)
 	case err := <-errorChan:
 		return nil, err
 	case <-time.After(actorCallTimeout):

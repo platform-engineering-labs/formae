@@ -948,3 +948,26 @@ func TestCorrectModelFromCommandOutcome_UpdateChangingIdentityIsViolation(t *tes
 		require.Equal(t, ViolationRenameIdentityChanged, v.Kind)
 	}
 }
+
+// The patch prediction for an array-typed field must mirror the agent's
+// EnsureExists semantics: a patch never removes array elements. A desired
+// array no shorter than the current one converges element-wise onto the
+// desired value, while a shorter one leaves the current elements in place and
+// appends only the desired elements not already present.
+func TestMergePatchProperties_ArrayFieldNeverRemovesElements(t *testing.T) {
+	hints := map[string]pkgmodel.FieldHint{
+		"A": {UpdateMethod: pkgmodel.FieldUpdateMethodArray},
+	}
+	cases := []struct{ name, current, patch, want string }{
+		{"removal-only keeps current", `{"A":["a","b","c"]}`, `{"A":["a","b"]}`, `{"A":["a","b","c"]}`},
+		{"equal length converges", `{"A":["a","b","c"]}`, `{"A":["a","X","c"]}`, `{"A":["a","X","c"]}`},
+		{"longer converges", `{"A":["a","b","c"]}`, `{"A":["a","b","c","d"]}`, `{"A":["a","b","c","d"]}`},
+		{"shorter with new element appends it", `{"A":["a","b","c"]}`, `{"A":["X","b"]}`, `{"A":["a","b","c","X"]}`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := mergePatchProperties(c.current, c.patch, hints)
+			assert.JSONEq(t, c.want, got)
+		})
+	}
+}

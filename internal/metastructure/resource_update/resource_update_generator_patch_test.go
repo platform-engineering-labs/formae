@@ -565,3 +565,79 @@ func TestTargetReplace_Patch_NonPortable_Rejected(t *testing.T) {
 	assert.Equal(t, "aws-prod", nonPortableErr.TargetLabel)
 	assert.NotEmpty(t, nonPortableErr.Resources)
 }
+
+// A createOnly reference whose target was replaced by an EARLIER command is
+// judged at plan time from the target's persisted state: the provider-assigned
+// source property lives in the target row's ReadOnlyProperties, plan-time
+// classification resolves it from there, and the resulting createOnly diff
+// plans a replacement of the dependent instead of an in-place update that
+// would only discover the change at execution time.
+func TestGenerateResourceUpdatesForPatch_StaleCreateOnlyRefPlansReplace(t *testing.T) {
+	ds, _ := GetDeps(t)
+
+	netKsuid := util.NewID()
+	spokeKsuid := util.NewID()
+
+	network := pkgmodel.Resource{
+		Label: "net", Type: "GCP::Compute::Network", Stack: "infrastructure", Target: "test-target",
+		Ksuid: netKsuid, NativeID: "net-native-2",
+		Schema:     pkgmodel.Schema{Identifier: "Name", Fields: []string{"Name"}},
+		Properties: json.RawMessage(`{"Name": "net"}`),
+		// The provider-assigned output as the latest replacement's echo left it.
+		ReadOnlyProperties: json.RawMessage(`{"SelfLink": "https://net-NEW"}`),
+	}
+	spokeSchema := pkgmodel.Schema{
+		Identifier: "Name",
+		Fields:     []string{"Name", "Description", "LinkedNetwork"},
+		Hints:      map[string]pkgmodel.FieldHint{"LinkedNetwork": {CreateOnly: true}},
+	}
+	storedSpoke := pkgmodel.Resource{
+		Label: "spoke", Type: "GCP::NetworkConnectivity::Spoke", Stack: "infrastructure", Target: "test-target",
+		Ksuid: spokeKsuid, NativeID: "spoke-native-1",
+		Schema: spokeSchema,
+		Properties: json.RawMessage(fmt.Sprintf(
+			`{"Name": "spoke", "Description": "old", "LinkedNetwork": {"Uri": {"$ref": "formae://%s#/SelfLink", "$value": "https://net-OLD", "$applied": "https://net-OLD"}}}`,
+			netKsuid)),
+	}
+	_, err := ds.StoreStack(&pkgmodel.Forma{
+		Stacks:    []pkgmodel.Stack{{Label: "infrastructure"}},
+		Resources: []pkgmodel.Resource{network, storedSpoke},
+	}, "earlier-command")
+	require.NoError(t, err)
+
+	desiredSpoke := storedSpoke
+	desiredSpoke.NativeID = ""
+	desiredSpoke.Properties = json.RawMessage(fmt.Sprintf(
+		`{"Name": "spoke", "Description": "new", "LinkedNetwork": {"Uri": {"$ref": "formae://%s#/SelfLink"}}}`,
+		netKsuid))
+	forma := &pkgmodel.Forma{
+		Stacks:    []pkgmodel.Stack{{Label: "infrastructure"}},
+		Resources: []pkgmodel.Resource{desiredSpoke},
+	}
+	targetMap := map[string]*pkgmodel.Target{
+		"test-target": {Label: "test-target", Namespace: "GCP", Config: json.RawMessage(`{}`)},
+	}
+
+	updates, err := generateResourceUpdatesForApply(forma, pkgmodel.FormaApplyModePatch, FormaCommandSourceUser, targetMap, targetMap, ds, nil, false)
+	require.NoError(t, err)
+
+	var deleteHalf, createHalf *ResourceUpdate
+	for i := range updates {
+		if updates[i].DesiredState.Label != "spoke" {
+			continue
+		}
+		switch updates[i].Operation {
+		case OperationDelete:
+			deleteHalf = &updates[i]
+		case OperationCreate:
+			createHalf = &updates[i]
+		case OperationUpdate:
+			t.Fatalf("the stale createOnly reference must plan a replacement, not an in-place update")
+		}
+	}
+	require.NotNil(t, deleteHalf, "replacement must carry a delete half")
+	require.NotNil(t, createHalf, "replacement must carry a create half")
+	assert.Equal(t, deleteHalf.GroupID, createHalf.GroupID, "the halves must be grouped as one replacement")
+	assert.Contains(t, string(deleteHalf.CreateOnlyPatch), "LinkedNetwork",
+		"the replacement must name the immutable field that forced it")
+}

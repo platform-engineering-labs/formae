@@ -421,10 +421,10 @@ func startReconcile(proc gen.Process, data *AutoReconcilerData, stackLabel strin
 	proc.Log().Debug("Generated resource updates for stack=%s, starting reconcile command=%s", stackLabel, result.command.ID)
 
 	// Store the forma command
-	_, err = proc.Call(
+	_, err = messages.UnwrapCall(proc.Call(
 		gen.ProcessID{Name: actornames.FormaCommandPersister, Node: proc.Node().Name()},
 		forma_persister.StoreNewFormaCommand{Command: *result.command},
-	)
+	))
 	if err != nil {
 		return "", fmt.Errorf("failed to store reconcile command: %w", err)
 	}
