@@ -296,7 +296,7 @@ func (h *TestHarness) commandFromDB(commandID string) (*apimodel.Command, error)
 	defer db.Close() //nolint:errcheck
 
 	rows, err := db.Query(
-		"SELECT state, operation, stack_label, resource FROM resource_updates WHERE command_id = ? ORDER BY ksuid ASC",
+		"SELECT ksuid, state, operation, stack_label, resource, most_recent_progress, is_cascade FROM resource_updates WHERE command_id = ? ORDER BY ksuid ASC",
 		commandID)
 	if err != nil {
 		return nil, err
@@ -304,9 +304,10 @@ func (h *TestHarness) commandFromDB(commandID string) (*apimodel.Command, error)
 	defer rows.Close() //nolint:errcheck
 
 	for rows.Next() {
-		var state, operation, stackLabel string
-		var resourceJSON []byte
-		if err := rows.Scan(&state, &operation, &stackLabel, &resourceJSON); err != nil {
+		var ksuid, state, operation, stackLabel string
+		var resourceJSON, progressJSON []byte
+		var isCascade bool
+		if err := rows.Scan(&ksuid, &state, &operation, &stackLabel, &resourceJSON, &progressJSON, &isCascade); err != nil {
 			return nil, err
 		}
 		var desired pkgmodel.Resource
@@ -315,7 +316,21 @@ func (h *TestHarness) commandFromDB(commandID string) (*apimodel.Command, error)
 				return nil, fmt.Errorf("decoding resource update of command %s: %w", commandID, err)
 			}
 		}
+		// The resource column is the planning-time declaration. Generated native
+		// IDs live in persisted plugin progress, and the KSUID is a row column.
+		// Omitting them silently disables failure injection after a create.
+		desired.Ksuid = ksuid
+		var progress plugin.TrackedProgress
+		if len(progressJSON) > 0 {
+			if err := json.Unmarshal(progressJSON, &progress); err != nil {
+				return nil, fmt.Errorf("decoding resource progress of command %s: %w", commandID, err)
+			}
+			if progress.NativeID != "" {
+				desired.NativeID = progress.NativeID
+			}
+		}
 		cmd.ResourceUpdates = append(cmd.ResourceUpdates, apimodel.ResourceUpdate{
+			IsCascade:     isCascade,
 			ResourceID:    desired.Ksuid,
 			ResourceType:  desired.Type,
 			ResourceLabel: desired.Label,

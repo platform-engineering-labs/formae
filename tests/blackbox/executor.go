@@ -380,20 +380,21 @@ func (h *TestHarness) reconcileCompletedAcceptedCommands(t *testing.T, model *St
 	var completed []completedCmd
 	remaining := make([]AcceptedCommand, 0, len(model.AcceptedCommands))
 	for _, ac := range model.AcceptedCommands {
-		statusResp, err := h.client.GetFormaCommandsStatus("id:"+ac.CommandID, clientID, 1, apimodel.CommandScopeAgent)
-		if err != nil || statusResp == nil || len(statusResp.Commands) == 0 {
+		// Scheduler commands are absent from the user-command API. Use the
+		// same persisted outcomes as the final drain for every accepted command.
+		cmd, err := h.commandFromDB(ac.CommandID)
+		if err != nil || cmd == nil {
 			remaining = append(remaining, ac)
 			continue
 		}
 
-		cmd := statusResp.Commands[0]
 		h.ObserveCommandState(t, cmd.CommandID, cmd.State)
 		if cmd.State != "Success" && cmd.State != "Failed" && cmd.State != "Canceled" {
 			remaining = append(remaining, ac)
 			continue
 		}
 
-		completed = append(completed, completedCmd{ac: ac, cmd: cmd})
+		completed = append(completed, completedCmd{ac: ac, cmd: *cmd})
 	}
 
 	// Process completed commands in REVERSE order (most recent first) so
@@ -1123,6 +1124,18 @@ func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *
 							model.Stack(stackIdx).Label, slotIdx)
 						res.State = StateExists
 					}
+					// An implicit delete can target a resource missing from the
+					// optimistic model. Its persisted delete declaration contains
+					// the pre-delete properties even when we have no snapshot.
+					if res.Properties == "" && len(ru.Properties) > 0 {
+						res.Properties = model.NormalizePropertiesForResource(stackIdx, slotIdx, string(ru.Properties))
+					}
+					if model.GetNativeID(stackIdx, slotIdx) == "" {
+						model.SetNativeID(stackIdx, slotIdx, ru.NativeID)
+					}
+					if model.GetKsuid(stackIdx, slotIdx) == "" {
+						model.SetKsuid(stackIdx, slotIdx, ru.ResourceID)
+					}
 				}
 			}
 		}
@@ -1284,10 +1297,18 @@ func (h *TestHarness) executeApply(t *testing.T, op *Operation, model *StateMode
 		performRename = found
 	}
 
+	// Reconcile also deletes resources omitted from the declaration. Those
+	// operations have drawn outcomes just like explicitly requested updates.
+	var implicitDeletes cascadeDeletePlan
+	if op.ApplyMode == "reconcile" {
+		implicitDeletes = planDeletes(op, model, omittedResourceIDs(model, op.StackIndex, op.ResourceIDs), false)
+	}
+
 	// Program response sequences before submitting the command.
 	var programmedSeqs []testcontrol.PluginOpSequence
 	if op.DrawnOutcomes != nil {
 		programmedSeqs = buildPluginOpSequences(op.DrawnOutcomes, op.StackIndex, stackLabel, op.ResourceIDs, model, false, model.Pool)
+		programmedSeqs = append(programmedSeqs, implicitDeletes.sequences(op, model)...)
 		if len(programmedSeqs) > 0 {
 			h.ProgramResponses(t, programmedSeqs)
 		}
@@ -1368,10 +1389,7 @@ func (h *TestHarness) executeApply(t *testing.T, op *Operation, model *StateMode
 		model.ApplyCreatedResolved(op.StackIndex, resolvedProps)
 	}
 	if op.ApplyMode == "reconcile" {
-		// Reconcile guarantee: resources NOT in the forma are deleted by the
-		// agent. Implicit deletes have no failure injection programmed, so
-		// they always succeed. Apply the guarantee regardless of DrawnOutcomes.
-		applyReconcileGuarantee(model, op.StackIndex, op.ResourceIDs)
+		implicitDeletes.apply(model)
 		// Save the reconcile state for ForceReconcile prediction.
 		resolvedProps := model.ResolvePropertiesForResources(op.StackIndex, op.ResourceIDs, op.Properties, op.ChildProperties)
 		model.SaveLastReconcile(op.StackIndex, op.ResourceIDs, resolvedProps)
@@ -1427,10 +1445,12 @@ func (h *TestHarness) executeDestroyDefault(t *testing.T, op *Operation, model *
 
 	forma := FormaFromStackResources(stackLabel, existingIDs, model.LabelOverrides(op.StackIndex))
 
+	plan := planDeletes(op, model, existingIDs, false)
+
 	// Program response sequences before submitting the command.
 	var programmedSeqs []testcontrol.PluginOpSequence
 	if op.DrawnOutcomes != nil {
-		programmedSeqs = buildPluginOpSequences(op.DrawnOutcomes, op.StackIndex, stackLabel, existingIDs, model, true, model.Pool)
+		programmedSeqs = plan.sequences(op, model)
 		if len(programmedSeqs) > 0 {
 			h.ProgramResponses(t, programmedSeqs)
 		}
@@ -1460,12 +1480,9 @@ func (h *TestHarness) executeDestroyDefault(t *testing.T, op *Operation, model *
 	snapshots := model.SnapshotResources(op.StackIndex, existingIDs)
 
 	// Immediate model update: predict outcomes at submission time.
-	successIDs := successfulResourceIDs(op, op.StackIndex, existingIDs, model.Pool, true, model)
-	if len(successIDs) > 0 {
-		model.ApplyDestroyed(op.StackIndex, successIDs)
-	}
+	plan.apply(model)
 	model.TrackAcceptedCommand(commandID, snapshots, requestedSlotRefs(op.StackIndex, existingIDs), h.currentOperationLogSize(t), false)
-	t.Logf("[op %d] Destroy stack=%s resources %v → accepted, model updated (success=%v)", op.SequenceNum, stackLabel, existingIDs, successIDs)
+	t.Logf("[op %d] Destroy stack=%s resources %v → accepted, model updated (success=%v)", op.SequenceNum, stackLabel, existingIDs, plan.successful)
 }
 
 // executeDestroyAbort handles destroy with on-dependents="abort". If any resource
@@ -1507,10 +1524,12 @@ func (h *TestHarness) executeDestroyAbort(t *testing.T, op *Operation, model *St
 	}
 
 	// No dependents (or simulation confirmed no cascades) — proceed with real destroy.
+	plan := planDeletes(op, model, existingIDs, false)
+
 	// Program response sequences before submitting the command.
 	var programmedSeqs []testcontrol.PluginOpSequence
 	if op.DrawnOutcomes != nil {
-		programmedSeqs = buildPluginOpSequences(op.DrawnOutcomes, op.StackIndex, stackLabel, existingIDs, model, true, model.Pool)
+		programmedSeqs = plan.sequences(op, model)
 		if len(programmedSeqs) > 0 {
 			h.ProgramResponses(t, programmedSeqs)
 		}
@@ -1542,12 +1561,9 @@ func (h *TestHarness) executeDestroyAbort(t *testing.T, op *Operation, model *St
 	// Since the abort path only proceeds when simulation confirmed no cascades,
 	// only the explicitly drawn resources can be affected — descendants are safe.
 	// Immediate model update: predict outcomes at submission time.
-	successIDs := successfulResourceIDs(op, op.StackIndex, existingIDs, model.Pool, true, model)
-	if len(successIDs) > 0 {
-		model.ApplyDestroyed(op.StackIndex, successIDs)
-	}
+	plan.apply(model)
 	model.TrackAcceptedCommand(commandID, snapshots, requestedSlotRefs(op.StackIndex, existingIDs), h.currentOperationLogSize(t), false)
-	t.Logf("[op %d] Destroy (abort) stack=%s resources %v → accepted, model updated (success=%v)", op.SequenceNum, stackLabel, existingIDs, successIDs)
+	t.Logf("[op %d] Destroy (abort) stack=%s resources %v → accepted, model updated (success=%v)", op.SequenceNum, stackLabel, existingIDs, plan.successful)
 }
 
 // executeDestroyCascade handles destroy with on-dependents="cascade". The agent
@@ -1558,10 +1574,13 @@ func (h *TestHarness) executeDestroyCascade(t *testing.T, op *Operation, model *
 
 	forma := FormaFromPoolResources(model.Pool, stackLabel, model.ProviderStackLabel, existingIDs, defaultDestroyParentProps, defaultDestroyChildProps, model.LabelOverrides(op.StackIndex), model.LabelOverrides(0))
 
-	// Program response sequences before submitting the command.
+	// Plan the complete deletion closure, including implicit cross-stack dependents.
+	plan := planCascadeDeletes(op, model, existingIDs)
+
+	// Program only operations the dependency graph can actually execute.
 	var programmedSeqs []testcontrol.PluginOpSequence
 	if op.DrawnOutcomes != nil {
-		programmedSeqs = buildPluginOpSequences(op.DrawnOutcomes, op.StackIndex, stackLabel, existingIDs, model, true, model.Pool)
+		programmedSeqs = plan.sequences(op, model)
 		if len(programmedSeqs) > 0 {
 			h.ProgramResponses(t, programmedSeqs)
 		}
@@ -1587,26 +1606,16 @@ func (h *TestHarness) executeDestroyCascade(t *testing.T, op *Operation, model *
 	commandID := resp.CommandID
 	t.Logf("[op %d] Destroy (cascade) stack=%s resources %v → command %s", op.SequenceNum, stackLabel, existingIDs, commandID)
 
-	// Snapshot slots that will actually change: cascade destroys only affect
-	// Exists slots. Slots already NotExist can't be destroyed, and including
-	// them causes false reverts when concurrent commands create those slots.
 	var snapshots []ResourceSnapshot
-	for _, si := range model.ComputeAffectedStacks(op.StackIndex, existingIDs, op.OnDependents) {
-		for id, res := range model.Stack(si).Resources {
-			if res.State == StateExists {
-				snapshots = append(snapshots, model.SnapshotResources(si, []int{id})...)
-			}
-		}
+	for _, ref := range plan.affected {
+		snapshots = append(snapshots, model.SnapshotResources(ref.StackIndex, []int{ref.SlotIndex})...)
 	}
 
-	// Immediate model update: predict outcomes at submission time.
-	// For cascade destroy, successful resources and all their descendants are destroyed.
-	successIDs := successfulResourceIDs(op, op.StackIndex, existingIDs, model.Pool, true, model)
-	for _, idx := range successIDs {
-		model.ApplyCascadeDestroyed(op.StackIndex, idx)
-	}
+	// A failed dependent blocks its ancestors, but independent siblings can
+	// still be deleted. Preserve failed and blocked slots, including properties.
+	plan.apply(model)
 	model.TrackAcceptedCommand(commandID, snapshots, requestedSlotRefs(op.StackIndex, existingIDs), h.currentOperationLogSize(t), false)
-	t.Logf("[op %d] Destroy (cascade) stack=%s resources %v → accepted, model updated (success=%v)", op.SequenceNum, stackLabel, existingIDs, successIDs)
+	t.Logf("[op %d] Destroy (cascade) stack=%s resources %v → accepted, model updated (success=%v)", op.SequenceNum, stackLabel, existingIDs, plan.successful)
 }
 
 // allResourceIDs returns all resource indices for a stack.
@@ -3136,9 +3145,27 @@ func (h *TestHarness) executeSetTTLPolicy(t *testing.T, op *Operation, model *St
 	overrides := model.LabelOverrides(model.StackIndexByLabel(stackLabel))
 	if model.Pool != nil {
 		forma = FormaFromPoolResources(model.Pool, stackLabel, model.ProviderStackLabel, existingIDs,
-			resourceProperties(stackLabel, existingIDs), defaultDestroyChildProps, overrides, model.LabelOverrides(0))
+			defaultDestroyParentProps, defaultDestroyChildProps, overrides, model.LabelOverrides(0))
 	} else {
-		forma = FormaFromStackResources(stackLabel, existingIDs, overrides, resourceProperties(stackLabel, existingIDs))
+		forma = FormaFromStackResources(stackLabel, existingIDs, overrides)
+	}
+	// Setting a policy must not rewrite resource names, values or collections.
+	// Keep each slot's predicted properties; the builders supply the reference
+	// envelopes that the normalized model intentionally stores as plain values.
+	for i := range forma.Resources {
+		res := &forma.Resources[i]
+		si, slot, found := model.findResourceSlot(res.Stack, res.Label)
+		require.True(t, found, "policy resource must have a model slot")
+		var props map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal([]byte(model.Resource(si, slot).Properties), &props))
+		if model.Pool != nil && !model.Pool.IsParent(slot) {
+			var declared map[string]json.RawMessage
+			require.NoError(t, json.Unmarshal(res.Properties, &declared))
+			props["ParentId"] = declared["ParentId"]
+		}
+		var err error
+		res.Properties, err = json.Marshal(props)
+		require.NoError(t, err)
 	}
 	for i := range forma.Stacks {
 		if forma.Stacks[i].Label == stackLabel {
@@ -3224,22 +3251,18 @@ func (h *TestHarness) executeCheckTTL(t *testing.T, op *Operation, model *StateM
 			continue
 		}
 
-		// Snapshot only Exists slots (TTL destroys all, NotExist can't change).
-		resourceIDs := allResourceIDs(model, stackIdx)
-		var existingForSnapshot []int
-		for _, idx := range resourceIDs {
-			if res := model.Resource(stackIdx, idx); res != nil && res.State == StateExists {
-				existingForSnapshot = append(existingForSnapshot, idx)
-			}
+		// TTL cascades can delete dependents on other stacks. Snapshot the
+		// complete closure before prediction clears any properties, so failed
+		// deletes can restore their original state on every affected stack.
+		resourceIDs := filterExistingResources(allResourceIDs(model, stackIdx), stackIdx, model)
+		plan := planCascadeDeletes(&Operation{StackIndex: stackIdx}, model, resourceIDs)
+		var snapshots []ResourceSnapshot
+		for _, ref := range plan.affected {
+			snapshots = append(snapshots, model.SnapshotResources(ref.StackIndex, []int{ref.SlotIndex})...)
 		}
-		snapshots := model.SnapshotResources(stackIdx, existingForSnapshot)
-
-		// Immediate model update: TTL expiry destroys all resources on the stack (cascade).
-		for _, idx := range resourceIDs {
-			model.ApplyCascadeDestroyed(stackIdx, idx)
-		}
+		plan.apply(model)
 		model.Stacks[stackIdx].TTLExpired = false
-		model.TrackAcceptedCommand(commandID, snapshots, requestedSlotRefs(op.StackIndex, resourceIDs), h.currentOperationLogSize(t), false)
+		model.TrackAcceptedCommand(commandID, snapshots, requestedSlotRefs(stackIdx, resourceIDs), h.currentOperationLogSize(t), false)
 		t.Logf("[op %d] CheckTTL stack=%s command %s → accepted, model updated (destroyed all)", op.SequenceNum, expiredLabel, commandID)
 	}
 }
