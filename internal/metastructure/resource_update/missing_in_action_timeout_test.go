@@ -40,7 +40,7 @@ func TestMissingInActionTimeout_CoversLongestOperatorSleep(t *testing.T) {
 	strategy := resource.RetryStrategy{MaxRetries: cfg.MaxRetries, BaseDelay: cfg.RetryDelay}
 	longestSleep := max(cfg.StatusCheckInterval, cfg.RetryDelay, strategy.Backoff(cfg.MaxRetries+1))
 
-	assert.Equal(t, longestSleep+PluginCallTimeout+missingInActionMargin, missingInActionTimeout(cfg))
+	assert.Equal(t, longestSleep+PluginCallAllowance+missingInActionMargin, missingInActionTimeout(cfg))
 	assert.Equal(t, 100*time.Second, missingInActionTimeout(cfg),
 		"the shipped defaults must yield a 100s window")
 	assert.Greater(t, missingInActionTimeout(cfg), 2*cfg.StatusCheckInterval,
@@ -62,7 +62,7 @@ func TestMissingInActionTimeout_DrivenByFlatRetryDelay(t *testing.T) {
 	require.Greater(t, retryDelay, strategy.Backoff(cfg.MaxRetries+1),
 		"this case only bites when the flat delay outlasts the capped backoff")
 
-	assert.Equal(t, retryDelay+PluginCallTimeout+missingInActionMargin, missingInActionTimeout(cfg))
+	assert.Equal(t, retryDelay+PluginCallAllowance+missingInActionMargin, missingInActionTimeout(cfg))
 }
 
 // TestMissingInActionTimeout_DrivenByLastScheduledBackoff covers the throttling
@@ -80,9 +80,9 @@ func TestMissingInActionTimeout_DrivenByLastScheduledBackoff(t *testing.T) {
 	require.Greater(t, lastBackoff, strategy.Backoff(cfg.MaxRetries),
 		"the last scheduled backoff must outlast the one before it")
 
-	assert.Equal(t, lastBackoff+PluginCallTimeout+missingInActionMargin, missingInActionTimeout(cfg))
+	assert.Equal(t, lastBackoff+PluginCallAllowance+missingInActionMargin, missingInActionTimeout(cfg))
 	assert.Greater(t, missingInActionTimeout(cfg),
-		strategy.Backoff(cfg.MaxRetries)+PluginCallTimeout+missingInActionMargin,
+		strategy.Backoff(cfg.MaxRetries)+PluginCallAllowance+missingInActionMargin,
 		"a window built on Backoff(MaxRetries) would fire one backoff short")
 }
 
@@ -93,37 +93,33 @@ func TestMissingInActionTimeout_SmallAndDegenerateConfigs(t *testing.T) {
 	t.Run("MaxRetriesZero", func(t *testing.T) {
 		cfg := pkgmodel.RetryConfig{StatusCheckInterval: 2 * time.Second, MaxRetries: 0, RetryDelay: 7 * time.Second}
 		// The single scheduled backoff is Backoff(1), which is the base delay.
-		assert.Equal(t, 7*time.Second+PluginCallTimeout+missingInActionMargin, missingInActionTimeout(cfg))
+		assert.Equal(t, 7*time.Second+PluginCallAllowance+missingInActionMargin, missingInActionTimeout(cfg))
 	})
 
 	t.Run("MaxRetriesOne", func(t *testing.T) {
 		cfg := pkgmodel.RetryConfig{StatusCheckInterval: 2 * time.Second, MaxRetries: 1, RetryDelay: 7 * time.Second}
 		// Backoff(2) doubles the base delay, still under DefaultMaxBackoff.
-		assert.Equal(t, 14*time.Second+PluginCallTimeout+missingInActionMargin, missingInActionTimeout(cfg))
+		assert.Equal(t, 14*time.Second+PluginCallAllowance+missingInActionMargin, missingInActionTimeout(cfg))
 	})
 
 	t.Run("ZeroConfig", func(t *testing.T) {
-		assert.Equal(t, PluginCallTimeout+missingInActionMargin, missingInActionTimeout(pkgmodel.RetryConfig{}))
+		assert.Equal(t, PluginCallAllowance+missingInActionMargin, missingInActionTimeout(pkgmodel.RetryConfig{}))
 	})
 
 	t.Run("NegativeDurations", func(t *testing.T) {
 		cfg := pkgmodel.RetryConfig{StatusCheckInterval: -5 * time.Second, MaxRetries: 0, RetryDelay: -5 * time.Second}
-		assert.Equal(t, PluginCallTimeout+missingInActionMargin, missingInActionTimeout(cfg),
+		assert.Equal(t, PluginCallAllowance+missingInActionMargin, missingInActionTimeout(cfg),
 			"a negative duration in config must not shrink the window")
 	})
 }
 
-// TestPluginCallTimeouts_OperatorDeadlineExpiresFirst pins both deadlines: the
-// one the agent hands the operator for a single plugin call, and the one the
-// agent puts on its own call to the operator. The operator's must expire first
-// so its attributable failure progress wins the race, and it must equal the
-// operator's compiled defaultPluginCallTimeout fallback (pkg/plugin), which it
-// stands in for whenever the deadline is not supplied.
-func TestPluginCallTimeouts_OperatorDeadlineExpiresFirst(t *testing.T) {
-	assert.Equal(t, 60*time.Second, PluginCallTimeout,
-		"must track the plugin operator's compiled defaultPluginCallTimeout")
-	assert.Equal(t, 70, PluginOperationCallTimeout,
-		"the agent's call timeout is the operator's deadline plus a margin, in seconds")
+// TestPluginCallAllowance_MatchesTheUpdatersOwnCallTimeout pins the call
+// allowance in the watchdog window to the longest the updater itself waits for
+// a reply from an operator. Nothing enforces a bound inside the plugin, so the
+// window has to assume the most the agent is willing to wait.
+func TestPluginCallAllowance_MatchesTheUpdatersOwnCallTimeout(t *testing.T) {
+	assert.Equal(t, time.Duration(PluginOperationCallTimeout)*time.Second, PluginCallAllowance,
+		"the window's call allowance must match the updater's own call timeout")
 }
 
 // armingProcess is a gen.Process double for the two watchdog-arming handlers.

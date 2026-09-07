@@ -9,7 +9,6 @@ package plugin
 import (
 	"context"
 	"testing"
-	"time"
 
 	"ergo.services/ergo/gen"
 	"github.com/stretchr/testify/assert"
@@ -43,21 +42,21 @@ func TestOperatorInit_PairedBrokerReachesEveryCallPath(t *testing.T) {
 
 	client, ok := oidcBrokerClientFrom(operator.Data().context)
 	require.True(t, ok, "a paired operator must carry a broker client on its context")
-	assert.Equal(t, deadlineTestNamespace, client.namespace)
+	assert.Equal(t, operatorTestNamespace, client.namespace)
 
-	// Every per-call context parents from the operator's, so the client reaches
-	// watched operations and discovery's long-lived list context alike.
+	// Every operation receives the operator context, so the client reaches
+	// watched operations and discovery alike.
 	plugin := newRecordingPlugin()
-	data := deadlineTestData(plugin, 90*time.Second)
+	data := operatorTestData(plugin)
 	data.context = operator.Data().context
 
 	callProc := newOperatorProcess(nil, nil)
-	read(gen.PID{}, StateNotStarted, data, ReadResource{Namespace: deadlineTestNamespace, NativeID: "resource-1"}, callProc)
-	create(gen.PID{}, StateNotStarted, data, CreateResource{Namespace: deadlineTestNamespace, ResourceType: "Test::Resource"}, callProc)
-	update(gen.PID{}, StateNotStarted, data, UpdateResource{Namespace: deadlineTestNamespace, NativeID: "resource-1"}, callProc)
-	delete(gen.PID{}, StateNotStarted, data, DeleteResource{Namespace: deadlineTestNamespace, NativeID: "resource-1"}, callProc)
-	status(gen.PID{}, StateWaitingForResource, data, PluginOperatorCheckStatus{Namespace: deadlineTestNamespace, RequestID: "request-1"}, callProc)
-	_, _, _, err := list(gen.PID{}, StateNotStarted, data, ListResources{Namespace: deadlineTestNamespace, ResourceType: "Test::Resource"}, callProc)
+	read(gen.PID{}, StateNotStarted, data, ReadResource{Namespace: operatorTestNamespace, NativeID: "resource-1"}, callProc)
+	create(gen.PID{}, StateNotStarted, data, CreateResource{Namespace: operatorTestNamespace, ResourceType: "Test::Resource"}, callProc)
+	update(gen.PID{}, StateNotStarted, data, UpdateResource{Namespace: operatorTestNamespace, NativeID: "resource-1"}, callProc)
+	delete(gen.PID{}, StateNotStarted, data, DeleteResource{Namespace: operatorTestNamespace, NativeID: "resource-1"}, callProc)
+	status(gen.PID{}, StateWaitingForResource, data, PluginOperatorCheckStatus{Namespace: operatorTestNamespace, RequestID: "request-1"}, callProc)
+	_, _, _, err := list(gen.PID{}, StateNotStarted, data, ListResources{Namespace: operatorTestNamespace, ResourceType: "Test::Resource"}, callProc)
 	require.NoError(t, err)
 
 	for _, operation := range []resource.Operation{

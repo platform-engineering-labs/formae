@@ -634,11 +634,11 @@ func TestPluginOperatorCrashConvergesViaTimeout(t *testing.T) {
 		}
 
 		// Shorten every term the PluginOperatorMissingInAction window is derived
-		// from — the operator's retry cadence and the plugin call deadline — so
-		// the watchdog fires quickly in the test.
-		origCallTimeout := resource_update.PluginCallTimeout
-		resource_update.PluginCallTimeout = 100 * time.Millisecond
-		t.Cleanup(func() { resource_update.PluginCallTimeout = origCallTimeout })
+		// from, the operator's retry cadence and the per-call allowance, so the
+		// watchdog fires quickly in the test.
+		origCallAllowance := resource_update.PluginCallAllowance
+		resource_update.PluginCallAllowance = 100 * time.Millisecond
+		t.Cleanup(func() { resource_update.PluginCallAllowance = origCallAllowance })
 
 		cfg := test_helpers.NewTestMetastructureConfig()
 		cfg.Agent.Retry.StatusCheckInterval = 1 * time.Second

@@ -18,7 +18,6 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/canonicalize"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/changeset"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
-	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/pkg/credential"
 	"github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
@@ -417,17 +416,14 @@ func (c *PluginCoordinator) spawnPluginOperator(req messages.SpawnPluginOperator
 }
 
 // pluginOperatorEnv is the environment every PluginOperator is spawned with,
-// local or remote: the retry config resolved for its namespace, the deadline it
-// bounds each watched plugin call by — the same value the requesting
-// ResourceUpdater sizes its watchdog window from — and the requesting process.
-// When an oidc-credential broker is registered for namespace, both
+// local or remote: the retry config resolved for its namespace and the requesting
+// process. When an oidc-credential broker is registered for namespace, both
 // OidcCredentialBrokerNode and OidcCredentialBrokerName are added; when none
 // is, neither is - the operator either gets a complete pairing or none.
 func (c *PluginCoordinator) pluginOperatorEnv(retryConfig model.RetryConfig, requestedBy gen.PID, namespace string) map[gen.Env]any {
 	env := map[gen.Env]any{
-		gen.Env("RetryConfig"):       retryConfig,
-		gen.Env("PluginCallTimeout"): resource_update.PluginCallTimeout,
-		gen.Env("RequestedBy"):       requestedBy,
+		gen.Env("RetryConfig"): retryConfig,
+		gen.Env("RequestedBy"): requestedBy,
 	}
 
 	if broker, ok := c.oidcBrokerFor(namespace); ok {
