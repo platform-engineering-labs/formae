@@ -64,7 +64,7 @@ type ConfigSchema struct {
 // IsZero reports whether the schema carries nothing, used by omitzero to
 // suppress the field in JSON output for targets without schema annotations.
 func (cs ConfigSchema) IsZero() bool {
-	return len(cs.Hints) == 0 && len(cs.DefaultReap) == 0
+	return len(cs.Hints) == 0 && (len(cs.DefaultReap) == 0 || string(cs.DefaultReap) == "null")
 }
 
 // TargetHealth holds persisted health-observation fields for a target.
