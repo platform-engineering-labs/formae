@@ -902,6 +902,14 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 		return handleProgressUpdate(proc.PID(), state, data, syntheticResult, proc)
 	}
 
+	// Metadata operations above never call the provider. Every real Update
+	// must satisfy this boundary, including an empty-patch stack move.
+	if err := validateFrozenSetOnceWrite(data.resourceUpdate.frozenSetOnceRefs(), data.resourceUpdate.DesiredState.Schema.RequiredOnUpdate()); err != nil {
+		data.resourceUpdate.FailureReason = fmt.Sprintf("Cannot update resource %s: %v; supply a usable secret value for this operation", data.resourceUpdate.DesiredState.Label, err)
+		data.resourceUpdate.MarkAsFailed()
+		return StateFinishedWithError, data, nil, nil
+	}
+
 	// setOnce keeps a value by substituting the STORED one into the desired
 	// properties, which for an opaque field is a digest. Swap such a leaf for a
 	// present-but-unusable sentinel before the guarded conversion below, so the
@@ -955,6 +963,14 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 	)
 	if err != nil {
 		proc.Log().Error("failed to prepare desired resource properties for plugin: %v", err)
+		data.resourceUpdate.FailureReason = updateRequestFailureReason(err)
+		data.resourceUpdate.MarkAsFailed()
+		return StateFinishedWithError, data, nil, nil
+	}
+	desiredForPlugin.Properties = frozenProperties
+
+	frozenProperties, err = freezeSetOnceRefsForPlugin(desiredForPlugin.Properties, data.resourceUpdate.frozenSetOnceRefs())
+	if err != nil {
 		data.resourceUpdate.FailureReason = updateRequestFailureReason(err)
 		data.resourceUpdate.MarkAsFailed()
 		return StateFinishedWithError, data, nil, nil
