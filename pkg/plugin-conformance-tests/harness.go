@@ -1541,6 +1541,12 @@ func (h *TestHarness) CreateAllUnmanagedResources(evaluatedJSON string) ([]Creat
 	for _, res := range sortedResources {
 		h.t.Logf("Creating resource: type=%s, label=%s", res.Type, res.Label)
 
+		// Reject stored hashes before reference resolution or normalization can
+		// remove the marker. A hash cannot be written as a live secret value.
+		if containsStoredHash(gjson.ParseBytes(res.Properties)) {
+			return createdResources, fmt.Errorf("cannot create %s with a stored secret hash; re-supply the secret value", res.Label)
+		}
+
 		// Strip Formae metadata tags from the resource properties
 		h.stripFormaeTags(res)
 
@@ -1839,7 +1845,9 @@ func (h *TestHarness) flattenFormaeValuesInProperties(properties json.RawMessage
 		return properties, nil
 	}
 	var root any
-	if err := json.Unmarshal(properties, &root); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(properties))
+	decoder.UseNumber()
+	if err := decoder.Decode(&root); err != nil {
 		return properties, fmt.Errorf("failed to unmarshal properties for value flattening: %w", err)
 	}
 	flattened := flattenFormaeValueWalk(root)
@@ -1848,6 +1856,22 @@ func (h *TestHarness) flattenFormaeValuesInProperties(properties json.RawMessage
 		return properties, fmt.Errorf("failed to marshal flattened properties: %w", err)
 	}
 	return out, nil
+}
+
+// containsStoredHash mirrors the write boundary's rejection of hashed values
+// without exposing their contents. Inspect all children, including envelopes.
+func containsStoredHash(value gjson.Result) bool {
+	if value.IsObject() && value.Get("$hashed").Type == gjson.True {
+		return true
+	}
+	found := false
+	if value.IsObject() || value.IsArray() {
+		value.ForEach(func(_, child gjson.Result) bool {
+			found = containsStoredHash(child)
+			return !found
+		})
+	}
+	return found
 }
 
 // flattenFormaeValueWalk is the recursive worker for flattenFormaeValuesInProperties.
