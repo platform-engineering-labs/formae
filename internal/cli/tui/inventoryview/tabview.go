@@ -511,7 +511,7 @@ func highlightCursorRow(lines []string, width int, th *theme.Theme) []string {
 
 // loadedView renders the table and optional truncation marker.
 func (t tabModel) loadedView(th *theme.Theme, maxRows int) []string {
-	_, total := t.visible(maxRows)
+	total := t.filteredCount()
 	shown := total
 	if maxRows > 0 && shown > maxRows {
 		shown = maxRows
@@ -590,7 +590,7 @@ func (t tabModel) loadedView(th *theme.Theme, maxRows int) []string {
 // statusLine returns "Showing <shown> of <total> <entity>", with appropriate
 // suffix for filtered/truncated cases.
 func (t tabModel) statusLine(maxRows int) string {
-	_, total := t.visible(maxRows)
+	total := t.filteredCount()
 	shown := total
 	if maxRows > 0 && shown > maxRows {
 		shown = maxRows
@@ -611,7 +611,7 @@ func (t tabModel) statusLine(maxRows int) string {
 // (width < narrowFooterThreshold). It drops the entity noun and appends compact
 // key glyphs: "Showing N of M · ↑↓ enter / s q".
 func (t tabModel) statusLineNarrow(maxRows int) string {
-	_, total := t.visible(maxRows)
+	total := t.filteredCount()
 	shown := total
 	if maxRows > 0 && shown > maxRows {
 		shown = maxRows

@@ -47,7 +47,13 @@ var (
 			Now:      time.Now,
 			Version:  formae.Version,
 		})
-		finalModel, err := tui.Run(model, tui.DefaultRunOptions())
+		runOpts := tui.DefaultRunOptions()
+		// Mouse tracking is what makes wheel scrolling behave (see RunOptions.Mouse),
+		// but it also means the terminal no longer owns click-drag selection, so
+		// copying an ARN out of the list needs shift held. FORMAE_TUI_NO_MOUSE is the
+		// escape hatch for terminals where that is worse than the wheel is better.
+		runOpts.Mouse = os.Getenv("FORMAE_TUI_NO_MOUSE") == ""
+		finalModel, err := tui.Run(model, runOpts)
 		if err != nil {
 			return err
 		}
@@ -185,6 +191,11 @@ func InventoryCmd() *cobra.Command {
 	command := &cobra.Command{
 		Use:   "inventory",
 		Short: "Inventory management",
+		Long: `Query inventory in an interactive table or as structured output.
+
+Interactive tables support mouse-wheel scrolling. Hold Shift while dragging
+in terminals that support it to select text. Set FORMAE_TUI_NO_MOUSE=1 to
+disable mouse tracking and use the terminal's normal text selection.`,
 		Annotations: map[string]string{
 			"type": "Inventory",
 		},
