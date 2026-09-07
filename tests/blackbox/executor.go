@@ -380,20 +380,21 @@ func (h *TestHarness) reconcileCompletedAcceptedCommands(t *testing.T, model *St
 	var completed []completedCmd
 	remaining := make([]AcceptedCommand, 0, len(model.AcceptedCommands))
 	for _, ac := range model.AcceptedCommands {
-		statusResp, err := h.client.GetFormaCommandsStatus("id:"+ac.CommandID, clientID, 1, apimodel.CommandScopeAgent)
-		if err != nil || statusResp == nil || len(statusResp.Commands) == 0 {
+		// Scheduler commands are absent from the user-command API. Use the
+		// same persisted outcomes as the final drain for every accepted command.
+		cmd, err := h.commandFromDB(ac.CommandID)
+		if err != nil || cmd == nil {
 			remaining = append(remaining, ac)
 			continue
 		}
 
-		cmd := statusResp.Commands[0]
 		h.ObserveCommandState(t, cmd.CommandID, cmd.State)
 		if cmd.State != "Success" && cmd.State != "Failed" && cmd.State != "Canceled" {
 			remaining = append(remaining, ac)
 			continue
 		}
 
-		completed = append(completed, completedCmd{ac: ac, cmd: cmd})
+		completed = append(completed, completedCmd{ac: ac, cmd: *cmd})
 	}
 
 	// Process completed commands in REVERSE order (most recent first) so
@@ -1122,6 +1123,18 @@ func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *
 						t.Logf("correctModelFromCommandOutcome: reverting failed delete stack=%s slot=%d to Exists",
 							model.Stack(stackIdx).Label, slotIdx)
 						res.State = StateExists
+					}
+					// An implicit delete can target a resource missing from the
+					// optimistic model. Its persisted delete declaration contains
+					// the pre-delete properties even when we have no snapshot.
+					if res.Properties == "" && len(ru.Properties) > 0 {
+						res.Properties = model.NormalizePropertiesForResource(stackIdx, slotIdx, string(ru.Properties))
+					}
+					if model.GetNativeID(stackIdx, slotIdx) == "" {
+						model.SetNativeID(stackIdx, slotIdx, ru.NativeID)
+					}
+					if model.GetKsuid(stackIdx, slotIdx) == "" {
+						model.SetKsuid(stackIdx, slotIdx, ru.ResourceID)
 					}
 				}
 			}
@@ -3238,22 +3251,18 @@ func (h *TestHarness) executeCheckTTL(t *testing.T, op *Operation, model *StateM
 			continue
 		}
 
-		// Snapshot only Exists slots (TTL destroys all, NotExist can't change).
-		resourceIDs := allResourceIDs(model, stackIdx)
-		var existingForSnapshot []int
-		for _, idx := range resourceIDs {
-			if res := model.Resource(stackIdx, idx); res != nil && res.State == StateExists {
-				existingForSnapshot = append(existingForSnapshot, idx)
-			}
+		// TTL cascades can delete dependents on other stacks. Snapshot the
+		// complete closure before prediction clears any properties, so failed
+		// deletes can restore their original state on every affected stack.
+		resourceIDs := filterExistingResources(allResourceIDs(model, stackIdx), stackIdx, model)
+		plan := planCascadeDeletes(&Operation{StackIndex: stackIdx}, model, resourceIDs)
+		var snapshots []ResourceSnapshot
+		for _, ref := range plan.affected {
+			snapshots = append(snapshots, model.SnapshotResources(ref.StackIndex, []int{ref.SlotIndex})...)
 		}
-		snapshots := model.SnapshotResources(stackIdx, existingForSnapshot)
-
-		// Immediate model update: TTL expiry destroys all resources on the stack (cascade).
-		for _, idx := range resourceIDs {
-			model.ApplyCascadeDestroyed(stackIdx, idx)
-		}
+		plan.apply(model)
 		model.Stacks[stackIdx].TTLExpired = false
-		model.TrackAcceptedCommand(commandID, snapshots, requestedSlotRefs(op.StackIndex, resourceIDs), h.currentOperationLogSize(t), false)
+		model.TrackAcceptedCommand(commandID, snapshots, requestedSlotRefs(stackIdx, resourceIDs), h.currentOperationLogSize(t), false)
 		t.Logf("[op %d] CheckTTL stack=%s command %s → accepted, model updated (destroyed all)", op.SequenceNum, expiredLabel, commandID)
 	}
 }

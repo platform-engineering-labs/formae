@@ -7,6 +7,7 @@
 package blackbox
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -970,4 +971,22 @@ func TestMergePatchProperties_ArrayFieldNeverRemovesElements(t *testing.T) {
 			assert.JSONEq(t, c.want, got)
 		})
 	}
+}
+
+// A delete can include a resource that wasn't in the optimistic model when the
+// command was accepted. Its persisted declaration is the rollback evidence when
+// no model snapshot exists; restoring only Exists loses its properties.
+func TestCorrectModelFromCommandOutcome_FailedDeleteWithoutSnapshotRestoresProperties(t *testing.T) {
+	model := NewStateModel(1, 1)
+	props := `{"Name":"res-stack-0-0","Value":"keep"}`
+	cmd := &apimodel.Command{CommandID: "delete-without-snapshot", State: "Failed", ResourceUpdates: []apimodel.ResourceUpdate{{
+		ResourceID: "resource-id", NativeID: "native-id", ResourceLabel: model.LabelForResource(0, 0), StackName: "stack-0",
+		Operation: "delete", State: "Failed", Properties: json.RawMessage(props),
+	}}}
+	corrected := make(map[struct{ stackIdx, slotIdx int }]bool)
+	correctModelFromCommandOutcome(t, cmd, model, model.Pool, nil, corrected, false, nil, nil)
+	require.Equal(t, StateExists, model.Resource(0, 0).State)
+	require.JSONEq(t, props, model.Resource(0, 0).Properties)
+	require.Equal(t, "native-id", model.GetNativeID(0, 0))
+	require.Equal(t, "resource-id", model.GetKsuid(0, 0))
 }

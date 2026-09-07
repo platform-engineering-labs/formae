@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/testutil"
+	"github.com/platform-engineering-labs/formae/tests/testcontrol"
 	"github.com/stretchr/testify/require"
 )
 
@@ -88,4 +89,57 @@ func TestSetTTLPolicyPreservesResources(t *testing.T) {
 			})
 		})
 	}
+}
+
+// A failed TTL cascade must retain cross-stack properties so a subsequent
+// policy-only operation can preserve them rather than parsing an empty model.
+func TestFailedTTLCascadePreservesDependentProperties(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		h := NewTestHarness(t, 10*time.Second)
+		defer h.Cleanup()
+		model := NewStateModel(2, 10)
+		for si, ids := range [][]int{{0}, {10, 11}} {
+			op := Operation{Kind: OpApply, StackIndex: si, ApplyMode: "reconcile", ResourceIDs: ids,
+				Properties: defaultDestroyParentProps, ChildProperties: `{"Name":"NAME","ParentId":"PARENT_ID","Value":"preserve-me"}`}
+			h.ExecuteOperation(t, &op, model)
+			require.Len(t, model.AcceptedCommands, 1)
+			cmd := h.WaitForCommandDone(model.AcceptedCommands[0].CommandID, 30*time.Second)
+			require.Equal(t, "Success", cmd.State)
+			h.DrainPendingCommands(t, model, 30*time.Second)
+		}
+		before := model.Resource(1, 10).Properties
+		policy := Operation{Kind: OpSetTTLPolicy, StackIndex: 0, TTLExpired: true}
+		h.executeSetTTLPolicy(t, &policy, model)
+		require.Len(t, model.AcceptedCommands, 1)
+		cmd := h.WaitForCommandDone(model.AcceptedCommands[0].CommandID, 30*time.Second)
+		require.Equal(t, "Success", cmd.State)
+		h.reconcileCompletedAcceptedCommands(t, model)
+		require.Empty(t, model.AcceptedCommands)
+		h.ProgramResponses(t, []testcontrol.PluginOpSequence{{MatchKey: model.GetNativeID(1, 10), Operation: "Delete", Steps: []testcontrol.ResponseStep{{ErrorCode: "AccessDenied"}}}})
+		// Expiry is one second; the harness disables the periodic expirer.
+		time.Sleep(2 * time.Second)
+		h.executeCheckTTL(t, &Operation{Kind: OpCheckTTL}, model)
+		require.Len(t, model.AcceptedCommands, 1, "must exercise an accepted TTL cascade")
+		var dependentSnapshot *ResourceSnapshot
+		for i := range model.AcceptedCommands[0].Snapshots {
+			snapshot := &model.AcceptedCommands[0].Snapshots[i]
+			if snapshot.StackIndex == 1 && snapshot.SlotIndex == 10 {
+				dependentSnapshot = snapshot
+			}
+		}
+		require.NotNil(t, dependentSnapshot, "TTL must snapshot cross-stack dependents before predicting deletes")
+		require.Equal(t, before, dependentSnapshot.Properties)
+		cmd, done := h.waitForCommandInDB(model.AcceptedCommands[0].CommandID, 30*time.Second)
+		require.True(t, done)
+		require.Equal(t, "Failed", cmd.State)
+		h.reconcileCompletedAcceptedCommands(t, model)
+		require.Empty(t, model.AcceptedCommands)
+		require.Equal(t, StateExists, model.Resource(1, 10).State)
+		require.Equal(t, before, model.Resource(1, 10).Properties, "failed cascade must restore the dependent's properties")
+		require.Equal(t, StateNotExist, model.Resource(1, 11).State, "independent dependent can be deleted")
+		h.executeSetTTLPolicy(t, &Operation{Kind: OpSetTTLPolicy, StackIndex: 1}, model)
+		require.Len(t, model.AcceptedCommands, 1, "consumer policy must execute")
+		cmd = h.WaitForCommandDone(model.AcceptedCommands[0].CommandID, 30*time.Second)
+		require.Equal(t, "Success", cmd.State)
+	})
 }
