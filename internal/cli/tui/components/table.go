@@ -41,7 +41,7 @@ type Table struct {
 	cols    []Column
 	rows    [][]string // master data (full column set), in current sort order
 	width   int
-	height  int
+	height  int // last height passed to SetSize (bubbles reports a header-adjusted one)
 	sortCol int
 	sortDir SortDirection
 }
@@ -133,6 +133,7 @@ func (t Table) SetSize(width, height int) Table {
 	if width == t.width && height == t.height && t.height != 0 {
 		return t
 	}
+	widthChanged := width != t.width
 	t.width = width
 	t.height = height
 	t.inner.SetWidth(width)
@@ -141,8 +142,18 @@ func (t Table) SetSize(width, height int) Table {
 	// the other way round measures a stale (or empty) header and leaves the
 	// table one row taller than its budget — the caller then trims that row,
 	// which is exactly the row the cursor sits on when scrolled to the bottom.
-	t = t.reproject()
+	//
+	// Only a width change can alter which columns fit, so a height-only resize
+	// skips the reprojection — which would otherwise reset the scroll offset and
+	// jump the list back to the top. The columns still have to be projected once
+	// before the header can be measured against them.
+	if widthChanged || len(t.inner.Columns()) == 0 {
+		t = t.reproject()
+	}
 	t.inner.SetHeight(height)
+	// SetHeight rebuilds the viewport without following the cursor. Restore
+	// visibility after the row budget or column projection changes.
+	t.inner.MoveDown(0)
 	return t
 }
 
@@ -176,6 +187,22 @@ func (t Table) Update(msg tea.Msg) (Table, tea.Cmd) {
 	var cmd tea.Cmd
 	t.inner, cmd = t.inner.Update(msg)
 	return t, cmd
+}
+
+// MoveCursor moves the selection n rows (negative = up) using at most two
+// viewport renders, independent of travel distance. Stepping with n Update
+// calls instead costs n viewport renders and creates an input backlog.
+func (t Table) MoveCursor(n int) Table {
+	switch {
+	case n > 0:
+		t.inner.MoveDown(n)
+	case n < 0:
+		t.inner.MoveUp(-n)
+		// bubbles chooses scroll-follow using the old rendered window. A large
+		// jump can cross its start; realign once against the new window.
+		t.inner.MoveUp(0)
+	}
+	return t
 }
 
 // View renders the table.
