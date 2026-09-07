@@ -14,7 +14,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 FIXTURES_DIR="$SCRIPT_DIR/fixtures"
-PLUGINS_DIR="$HOME/.pel/formae/plugins"
+PLUGINS_DIR="${FORMAE_PLUGIN_DIR:-$HOME/.pel/formae/plugins}"
 PKLPROJECT_PATH="$FIXTURES_DIR/PklProject"
 
 # Ensure version.semver exists (needed by formae PklProject).
@@ -37,11 +37,17 @@ fi
 FORMAE_VERSION=$(cat "$VERSION_FILE")
 FORMAE_URI="package://hub.platform.engineering/plugins/pkl/schema/pkl/formae/formae@${FORMAE_VERSION}"
 
-# hub_uri reads the baseUri and version from an installed plugin's schema
-# PklProject and emits a PklProject dependency line using the hub URI.
+# plugin_dep emits a PklProject dependency line for an installed plugin.
+#
+# Released versions (no pre-release suffix) resolve via the hub URI — the
+# corresponding schema package has been published by schema-prerelease.
+# Pre-release builds (e.g. `make install` of a plugin repo's HEAD produces
+# `v0.1.8-dev.0`) only exist on the runner's filesystem, so we point the
+# dependency at the plugin's on-disk PklProject. Same shape as
+# `formae extract --schema-location local` emits.
 #
 # Args: <namespace_dir> <pkl_alias> <required: true|false>
-hub_uri() {
+plugin_dep() {
     local ns_dir="$1"
     local alias="$2"
     local required="${3:-true}"
@@ -51,43 +57,62 @@ hub_uri() {
 
     if [[ -z "$plugin_dir" ]] || [[ ! -f "$plugin_dir/schema/pkl/PklProject" ]]; then
         if [[ "$required" == "true" ]]; then
-            echo "ERROR: $alias plugin not found at $PLUGINS_DIR/$ns_dir/"
-            echo "Run 'make install-external-plugins' first."
+            echo "ERROR: $alias plugin not found at $PLUGINS_DIR/$ns_dir/" >&2
+            echo "Install plugins via 'formae plugin install $alias' against an agent whose orbital tree shares this directory, or set FORMAE_PLUGIN_DIR to a tree that has it." >&2
             exit 1
         else
-            echo "WARN: $alias plugin not found at $PLUGINS_DIR/$ns_dir/ — related E2E tests will be skipped" >&2
+            echo "WARN: $alias plugin not found at $PLUGINS_DIR/$ns_dir/ — fixtures importing this plugin will fail to evaluate" >&2
             return
         fi
     fi
 
-    local base_uri version
-    base_uri=$(pkl eval -x 'package.baseUri' "$plugin_dir/schema/pkl/PklProject")
+    local version
     version=$(pkl eval -x 'version' "$plugin_dir/formae-plugin.pkl")
-    echo "Using $alias plugin v$version from hub ($base_uri)" >&2
-    echo "  [\"$alias\"] { uri = \"$base_uri@$version\" }"
+
+    if [[ "$version" == *-* ]]; then
+        echo "Using $alias plugin v$version from local install ($plugin_dir/schema/pkl)" >&2
+        echo "  [\"$alias\"] = import(\"$plugin_dir/schema/pkl/PklProject\")"
+    else
+        local base_uri
+        base_uri=$(pkl eval -x 'package.baseUri' "$plugin_dir/schema/pkl/PklProject")
+        echo "Using $alias plugin v$version from hub ($base_uri)" >&2
+        echo "  [\"$alias\"] { uri = \"$base_uri@$version\" }"
+    fi
 }
 
-# Resolve plugin schemas from the hub. AWS and Azure are required;
-# compose and grafana are optional (needed for target resolvable tests).
-AWS_DEP=$(hub_uri "aws" "aws" true)
-AZURE_DEP=$(hub_uri "azure" "azure" true)
-COMPOSE_DEP=$(hub_uri "docker" "compose" false)
-GRAFANA_DEP=$(hub_uri "grafana" "grafana" false)
+# Resolve plugin deps. All plugins are optional at this level — the e2e
+# workflow installs only the plugins each test needs (matrix .plugins), so a
+# single setup_pkl.sh run is shared across tests with different plugin sets.
+# Fixtures that import a plugin not installed will fail to evaluate with a
+# clear PKL error, which is the right failure mode.
+AWS_DEP=$(plugin_dep "aws" "aws" false)
+AZURE_DEP=$(plugin_dep "azure" "azure" false)
+GCP_DEP=$(plugin_dep "gcp" "gcp" false)
+COMPOSE_DEP=$(plugin_dep "compose" "compose" false)
+GRAFANA_DEP=$(plugin_dep "grafana" "grafana" false)
 
-# Generate PklProject. Both formae core and plugins are pinned via hub URIs
-# — matches a real user's setup, and avoids the PKL type-identity split that
-# would happen if the fixture's formae and a plugin's formae were declared
-# at different URIs.
+# The echo plugin lives in this repo and is never published, so it is always
+# imported from its source schema directory rather than resolved through
+# $PLUGINS_DIR. Its formae pin must unify with $FORMAE_URI above.
+OIDC_ECHO_DEP="  [\"oidcecho\"] = import(\"$FIXTURES_DIR/oidc-echo-plugin/schema/pkl/PklProject\")"
+
+# Generate PklProject. formae core is always pinned via hub URI (matches a
+# real user's setup); each plugin is resolved by plugin_dep, which picks hub
+# vs. local based on whether the installed version is a released semver. A
+# plugin dep is included only if its plugin_dep call returned non-empty
+# (i.e. the plugin is installed in $PLUGINS_DIR).
 cat > "$PKLPROJECT_PATH" << EOF
 amends "pkl:Project"
 
 dependencies {
   ["formae"] { uri = "$FORMAE_URI" }
-$AWS_DEP
-$AZURE_DEP
-${COMPOSE_DEP:+$COMPOSE_DEP
+${AWS_DEP:+$AWS_DEP
+}${AZURE_DEP:+$AZURE_DEP
+}${GCP_DEP:+$GCP_DEP
+}${COMPOSE_DEP:+$COMPOSE_DEP
 }${GRAFANA_DEP:+$GRAFANA_DEP
-}}
+}$OIDC_ECHO_DEP
+}
 EOF
 
 echo "Generated $PKLPROJECT_PATH"

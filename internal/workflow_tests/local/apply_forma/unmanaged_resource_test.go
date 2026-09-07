@@ -134,7 +134,7 @@ func TestApplyForma_ReconcileFormaContainingUnmanagedResource(t *testing.T) {
 			Targets:   []pkgmodel.Target{{Label: "test-target", Namespace: "FakeAWS"}},
 		}
 
-		_, err = m.ApplyForma(forma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: false}, "test-client-id")
+		_, err = m.ApplyForma(forma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: false}, "test-client-id", "", "")
 		assert.NoError(t, err)
 
 		assert.Eventually(t, func() bool {

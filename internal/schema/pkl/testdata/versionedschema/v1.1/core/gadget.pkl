@@ -1,0 +1,28 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+/*
+ * FakeVer::Core::Gadget — nested one level inside the version subtree, the way
+ * a real versioned plugin groups resources. Reached only by the version dir's
+ * "**" glob, which is why the fixture carries both this and the flat
+ * v1.1/widget.pkl.
+ */
+module fakever.v1_1.core.gadget
+
+import "@formae/formae.pkl"
+import "../../fakever.pkl"
+
+const type = "FakeVer::Core::Gadget"
+
+@fakever.ResourceHint {
+    type = module.type
+    identifier = "Name"
+    portable = true
+}
+open class Gadget extends formae.Resource {
+    @fakever.FieldHint
+    name: String?
+}

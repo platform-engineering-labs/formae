@@ -5,17 +5,33 @@
 package agent
 
 import (
+	"fmt"
 	"log/slog"
+	"os"
 
 	"github.com/spf13/cobra"
 
 	"github.com/platform-engineering-labs/formae/internal/agent"
+	"github.com/platform-engineering-labs/formae/internal/cli/banner"
 	"github.com/platform-engineering-labs/formae/internal/cli/cmd"
 	"github.com/platform-engineering-labs/formae/internal/cli/config"
-	"github.com/platform-engineering-labs/formae/internal/cli/display"
+	"github.com/platform-engineering-labs/formae/internal/cli/nag"
+	"github.com/platform-engineering-labs/formae/internal/cli/printer"
+	"github.com/platform-engineering-labs/formae/internal/cli/status"
 	"github.com/platform-engineering-labs/formae/internal/util"
+	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
+
+// themeBanner resolves the configured CLI theme from the command's
+// --config/--profile flags and applies it to the banner, so the printed logo
+// wordmark follows the user's theme. The agent subcommands print their banner
+// from PersistentPreRun (before the app/config is loaded in Run), so they can't
+// use (*app.App).PrintBanner; they resolve the theme straight from config the
+// same way the root help screen does. Package var so tests can observe the call.
+var themeBanner = func(c *cobra.Command) {
+	banner.SetTheme(cmd.ResolveConfiguredTheme(c))
+}
 
 func startCmd() *cobra.Command {
 	command := &cobra.Command{
@@ -58,13 +74,14 @@ func startCmd() *cobra.Command {
 
 			a.Wait()
 		},
-		PersistentPreRun: func(cmd *cobra.Command, args []string) {
-			display.PrintBanner()
+		PersistentPreRun: func(command *cobra.Command, args []string) {
+			themeBanner(command)
+			banner.PrintBanner()
 		},
 		SilenceErrors: true,
 	}
 
-	command.Flags().String("config", "", "Path to config file")
+	cmd.AddConfigFlags(command)
 
 	return command
 }
@@ -80,11 +97,83 @@ func stopCmd() *cobra.Command {
 				return
 			}
 		},
-		PersistentPreRun: func(cmd *cobra.Command, args []string) {
-			display.PrintBanner()
+		PersistentPreRun: func(command *cobra.Command, args []string) {
+			themeBanner(command)
+			banner.PrintBanner()
 		},
 		SilenceErrors: true,
 	}
+}
+
+// statusCmd is `agent status`, the successor of the deprecated `formae
+// status agent`. It reuses the stats panel rendering and watch loop exported
+// from internal/cli/status rather than re-implementing them.
+func statusCmd() *cobra.Command {
+	command := &cobra.Command{
+		Use:   "status",
+		Short: "Receive the agent status",
+		RunE: func(command *cobra.Command, args []string) error {
+			_consumer, _ := command.Flags().GetString("output-consumer")
+			consumer := printer.Consumer(_consumer)
+			schema, _ := command.Flags().GetString("output-schema")
+			watch, _ := command.Flags().GetBool("watch")
+			switch consumer {
+			case printer.ConsumerMachine:
+				if schema != "json" && schema != "yaml" {
+					return fmt.Errorf("unsupported schema: %s", schema)
+				}
+			}
+
+			configFile, _ := command.Flags().GetString("config")
+			app, err := cmd.AppFromContext(command.Context(), configFile, "", command)
+			if err != nil {
+				return err
+			}
+
+			if consumer == printer.ConsumerHuman {
+				app.PrintBanner()
+			}
+
+			stats, nags, err := app.Stats()
+			if err != nil {
+				return err
+			}
+
+			// if machine consumer, create machine printer, print and return nil
+			if consumer == printer.ConsumerMachine {
+				p := printer.NewMachineReadablePrinter[apimodel.Stats](os.Stdout, schema)
+				err = p.Print(stats)
+				if err != nil {
+					return err
+				}
+				return nil
+			}
+
+			fmt.Println(status.RenderAgentStats(status.ThemeFor(app), *stats, status.TermWidth(os.Stdout)))
+
+			if consumer != printer.ConsumerMachine && !watch {
+				nag.MaybePrintNags(status.ThemeFor(app), nags)
+			}
+
+			if watch && consumer == printer.ConsumerHuman { // machine consumer can't watch
+				nag.MaybePrintNags(status.ThemeFor(app), nags)
+				return status.WatchStats(app)
+			}
+
+			return nil
+		},
+		Annotations:   map[string]string{},
+		SilenceErrors: true,
+	}
+
+	command.SetUsageTemplate(cmd.SimpleCmdUsageTemplate)
+
+	command.Flags().String("output-consumer", string(printer.ConsumerHuman), "Consumer of the command result (human | machine)")
+	command.Flags().String("output-schema", "json", "The schema to use for the machine output (json | yaml)")
+	command.Flags().Bool("watch", false, "Continuously refresh and print the status until completion")
+	cmd.AddConfigFlags(command)
+
+	return command
 }
 
 func AgentCmd() *cobra.Command {
@@ -93,7 +182,7 @@ func AgentCmd() *cobra.Command {
 		Short: "Agent management commands",
 		Annotations: map[string]string{
 			"type":     "Execution",
-			"examples": "{{.Name}} {{.Command}} start  |  {{.Name}} {{.Command}} stop",
+			"examples": "{{.Name}} {{.Command}} start  |  {{.Name}} {{.Command}} stop  |  {{.Name}} {{.Command}} status",
 		},
 		SilenceErrors: true,
 	}
@@ -102,7 +191,8 @@ func AgentCmd() *cobra.Command {
 
 	start := startCmd()
 	stop := stopCmd()
+	agentStatus := statusCmd()
 
-	command.AddCommand(start, stop)
+	command.AddCommand(start, stop, agentStatus)
 	return command
 }

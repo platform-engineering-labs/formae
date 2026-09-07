@@ -6,6 +6,7 @@ package fakeaws
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 
 	"github.com/masterminds/semver"
@@ -14,11 +15,26 @@ import (
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
 
+// secretsManagerSecretType is the FakeAWS SecretsManager::Secret resource
+// type, mirroring the real AWS resource for opaque-value test coverage.
+const secretsManagerSecretType = "FakeAWS::SecretsManager::Secret"
+
+// defaultSecretString enriches a Read for a secret whose plaintext wasn't
+// captured locally (e.g. a Read with no prior Create in this plugin
+// instance, such as a discovered secret).
+const defaultSecretString = "fake-secret-value"
+
 type FakeAWS struct {
 	// pendingCreates tracks in-progress creates by RequestID so Status can
 	// return the original properties when the resource "completes".
 	mu             sync.Mutex
 	pendingCreates map[string][]byte
+
+	// secrets tracks created SecretsManager::Secret properties by NativeID
+	// so Read can enrich later reads with the bare secret value, mimicking
+	// AWS's GetSecretValue which returns SecretString envelope-less rather
+	// than wrapped in the opaque {"$value": ...} structure used at rest.
+	secrets map[string]json.RawMessage
 }
 
 // Compile time checks to satisfy protocol
@@ -31,6 +47,7 @@ var RateLimitMaxRPS int = 5
 func NewFakeAWS() *FakeAWS {
 	return &FakeAWS{
 		pendingCreates: make(map[string][]byte),
+		secrets:        make(map[string]json.RawMessage),
 	}
 }
 
@@ -80,6 +97,33 @@ func (s *FakeAWS) SupportedResources() []plugin.ResourceDescriptor {
 			Type:         "FakeAWS::EC2::Instance",
 			Discoverable: true,
 		},
+		// Versioned::Parent + Versioned::Consumer model the cascade-update
+		// case: a parent whose CreateOnly field forces Replace, and a
+		// consumer referencing it via a non-CreateOnly field. Used to
+		// verify that the planner does NOT cascade-replace the consumer
+		// in that situation.
+		{
+			Type:         "FakeAWS::Versioned::Parent",
+			Discoverable: false,
+		},
+		{
+			Type:         "FakeAWS::Versioned::Consumer",
+			Discoverable: false,
+		},
+		// SecretsManager::Secret models a resource with an opaque field
+		// (SecretString), used to test schema-keyed secret hashing end to
+		// end.
+		{
+			Type:         secretsManagerSecretType,
+			Discoverable: false,
+		},
+		// Custom::Resource models an opaque-bodied resource whose Spec is a
+		// user-owned document: hinted Atomic (whole-value diff) and
+		// preserveEmptyValues (empty collections inside it are values).
+		{
+			Type:         "FakeAWS::Custom::Resource",
+			Discoverable: false,
+		},
 	}
 }
 
@@ -108,6 +152,39 @@ func (s *FakeAWS) SchemaForResourceType(resourceType string) (model.Schema, erro
 				"VpcId"},
 			Hints: map[string]model.FieldHint{
 				"VpcId": {AttachesTo: true},
+			},
+		}, nil
+	case "FakeAWS::Versioned::Parent":
+		return model.Schema{
+			Identifier: "Name",
+			Fields:     []string{"Name", "Value"},
+			Hints: map[string]model.FieldHint{
+				"Name": {CreateOnly: true},
+			},
+		}, nil
+	case "FakeAWS::Versioned::Consumer":
+		return model.Schema{
+			Identifier: "Name",
+			Fields:     []string{"Name", "ParentRef"},
+			Hints: map[string]model.FieldHint{
+				"Name":      {CreateOnly: true},
+				"ParentRef": {CreateOnly: false},
+			},
+		}, nil
+	case secretsManagerSecretType:
+		return model.Schema{
+			Identifier: "Id",
+			Fields:     []string{"Name", "Description", "SecretString", "Tags"},
+			Hints: map[string]model.FieldHint{
+				"SecretString": {Opaque: true},
+			},
+		}, nil
+	case "FakeAWS::Custom::Resource":
+		return model.Schema{
+			Identifier: "FormaeId",
+			Fields:     []string{"ApiVersion", "Kind", "FormaeId", "Spec"},
+			Hints: map[string]model.FieldHint{
+				"Spec": {UpdateMethod: model.FieldUpdateMethodAtomic, PreserveEmptyValues: true},
 			},
 		}, nil
 	default:
@@ -186,6 +263,23 @@ func (s *FakeAWS) Update(context context.Context, request *resource.UpdateReques
 		}
 	}
 
+	if request.ResourceType == secretsManagerSecretType {
+		// Store the updated secret so a later Read enriches with the NEW bare
+		// value, the way AWS's GetSecretValue reflects a PutSecretValue.
+		s.mu.Lock()
+		s.secrets[request.NativeID] = request.DesiredProperties
+		s.mu.Unlock()
+		return &resource.UpdateResult{
+			ProgressResult: &resource.ProgressResult{
+				Operation:          resource.OperationUpdate,
+				OperationStatus:    resource.OperationStatusSuccess,
+				RequestID:          "secret-update-1",
+				NativeID:           request.NativeID,
+				ResourceProperties: request.DesiredProperties,
+			},
+		}, nil
+	}
+
 	return nil, nil
 }
 
@@ -232,13 +326,20 @@ func (s *FakeAWS) Status(ctx context.Context, request *resource.StatusRequest) (
 	s.mu.Lock()
 	props := s.pendingCreates[request.RequestID]
 	delete(s.pendingCreates, request.RequestID)
+	nativeID := "5678"
+	if request.ResourceType == secretsManagerSecretType {
+		// Remember what was created so a later Read can enrich with the
+		// bare secret value (mimicking AWS's GetSecretValue), the same
+		// way a real secret store would.
+		s.secrets[nativeID] = props
+	}
 	s.mu.Unlock()
 	return &resource.StatusResult{
 		ProgressResult: &resource.ProgressResult{
 			Operation:          resource.OperationCreate,
 			OperationStatus:    resource.OperationStatusSuccess,
 			RequestID:          request.RequestID,
-			NativeID:           "5678",
+			NativeID:           nativeID,
 			ResourceProperties: props,
 		},
 	}, nil
@@ -258,6 +359,13 @@ func (s *FakeAWS) Read(context context.Context, request *resource.ReadRequest) (
 	}
 
 	if request.NativeID != "" {
+		if request.ResourceType == secretsManagerSecretType {
+			return &resource.ReadResult{
+				ResourceType: request.ResourceType,
+				Properties:   s.readSecretProperties(request.NativeID),
+			}, nil
+		}
+
 		return &resource.ReadResult{
 			ResourceType: request.ResourceType,
 			Properties:   "{}",
@@ -265,6 +373,27 @@ func (s *FakeAWS) Read(context context.Context, request *resource.ReadRequest) (
 	}
 
 	return nil, nil
+}
+
+// readSecretProperties builds the enriched Read payload for a
+// SecretsManager::Secret. Real AWS's GetSecretValue returns the secret as a
+// bare, envelope-less string rather than the opaque {"$value": ...} wrapper
+// used at rest — this reproduces that shape so callers can exercise the
+// bare-string leak vector the plugin boundary must guard against.
+func (s *FakeAWS) readSecretProperties(nativeID string) string {
+	s.mu.Lock()
+	stored := s.secrets[nativeID]
+	s.mu.Unlock()
+
+	if len(stored) > 0 {
+		return string(stored)
+	}
+
+	props, err := json.Marshal(map[string]string{"SecretString": defaultSecretString})
+	if err != nil {
+		return "{}"
+	}
+	return string(props)
 }
 
 func (s *FakeAWS) List(context context.Context, request *resource.ListRequest) (*resource.ListResult, error) {

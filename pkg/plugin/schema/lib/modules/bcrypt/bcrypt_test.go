@@ -13,9 +13,9 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestRandomId(t *testing.T) {
+func TestHashPassword(t *testing.T) {
 	uri, _ := url.Parse("libext:///bcrypt/hashPassword?password=mySecret")
 	assert.NotNil(t, BCrypt.Invoke(uri))
 	assert.Empty(t, BCrypt.Invoke(uri).Error)
-	assert.NotNil(t, BCrypt.Invoke(uri))
+	assert.NotNil(t, BCrypt.Invoke(uri).Body)
 }

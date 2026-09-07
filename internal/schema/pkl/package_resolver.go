@@ -14,6 +14,20 @@ import (
 	"github.com/masterminds/semver"
 )
 
+// SchemaManifest describes the per-version subtrees a plugin ships under
+// schema/pkl/. Derived from filesystem layout — the `v*/` subdirectories
+// at the install root. Used by formae to pick a default schema version
+// when no per-target ApiVersion is set.
+type SchemaManifest struct {
+	Versions []string
+	Default  string
+	// NonVersionDirs are the remaining top-level subdirectories — resource
+	// subtrees that are deliberately version-independent (e.g. k8s' helm/).
+	// Pinning a version narrows the extract import glob to `<ver>/**`, which
+	// would skip these, so callers must glob them explicitly. Sorted.
+	NonVersionDirs []string
+}
+
 // Package represents a PKL schema package dependency
 type Package struct {
 	Name      string // Package name (e.g., "formae", "aws", "gcp")
@@ -105,11 +119,10 @@ func (r *PackageResolver) findLocalSchema(namespace string) (string, string) {
 	targetNamespace := strings.ToUpper(namespace)
 
 	for _, pluginEntry := range pluginDirs {
-		if !pluginEntry.IsDir() {
+		pluginDir := filepath.Join(r.localSchemaBasePath, pluginEntry.Name())
+		if !isDirFollowingSymlinks(pluginDir) {
 			continue
 		}
-
-		pluginDir := filepath.Join(r.localSchemaBasePath, pluginEntry.Name())
 
 		// Find the highest version for this plugin
 		versionPath, _ := r.findHighestVersion(pluginDir)
@@ -148,7 +161,7 @@ func (r *PackageResolver) findHighestVersion(pluginDir string) (string, string) 
 
 	var versions []string
 	for _, entry := range entries {
-		if !entry.IsDir() {
+		if !isDirFollowingSymlinks(filepath.Join(pluginDir, entry.Name())) {
 			continue
 		}
 		name := entry.Name()
@@ -238,11 +251,11 @@ func (r *PackageResolver) InstalledVersion(namespace string) string {
 	targetNamespace := strings.ToUpper(namespace)
 
 	for _, pluginEntry := range pluginDirs {
-		if !pluginEntry.IsDir() {
+		pluginDir := filepath.Join(r.localSchemaBasePath, pluginEntry.Name())
+		if !isDirFollowingSymlinks(pluginDir) {
 			continue
 		}
 
-		pluginDir := filepath.Join(r.localSchemaBasePath, pluginEntry.Name())
 		versionPath, _ := r.findHighestVersion(pluginDir)
 		if versionPath == "" {
 			continue
@@ -256,6 +269,91 @@ func (r *PackageResolver) InstalledVersion(namespace string) string {
 	}
 
 	return ""
+}
+
+// SchemaManifestForNamespace inspects the installed plugin's schema/pkl/
+// dir for `v*/` subdirectories and returns them as a sorted version list
+// with the highest entry as the default.
+//
+// Sort order: semver-aware when every key parses as semver (e.g. v1.9 <
+// v1.10 < v1.30); falls back to lexical otherwise so opaque keys like
+// date-style v2024-01-01 still sort sensibly when zero-padded.
+//
+// Returns nil when local schemas are disabled, the plugin isn't installed
+// locally, or the install dir has no `v*/` subdirs (i.e. the plugin
+// doesn't ship a versioned schema layout — legacy unrestricted glob applies).
+//
+// Used by callers (CLI extract path) to pick a default schema version when
+// the Forma's per-target ApiVersion field is unset.
+func (r *PackageResolver) SchemaManifestForNamespace(namespace string) *SchemaManifest {
+	if !r.useLocalSchemas || r.localSchemaBasePath == "" {
+		return nil
+	}
+	pklProjectPath, _ := r.findLocalSchema(namespace)
+	if pklProjectPath == "" {
+		return nil
+	}
+	entries, err := os.ReadDir(filepath.Dir(pklProjectPath))
+	if err != nil {
+		return nil
+	}
+	var versions, nonVersionDirs []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		if isSchemaVersionDir(e.Name()) {
+			versions = append(versions, e.Name())
+		} else {
+			nonVersionDirs = append(nonVersionDirs, e.Name())
+		}
+	}
+	if len(versions) == 0 {
+		return nil
+	}
+	sortVersionKeys(versions)
+	sort.Strings(nonVersionDirs)
+	return &SchemaManifest{
+		Versions:       versions,
+		Default:        versions[len(versions)-1],
+		NonVersionDirs: nonVersionDirs,
+	}
+}
+
+// isSchemaVersionDir reports whether a schema/pkl subdirectory name denotes a
+// schema version rather than a resource/service directory. Version keys are
+// always "v" followed by a digit (v1.30, v0.1.13, v2024-01-01). Service
+// directories that merely start with "v" — e.g. GCP's "vpcaccess" — are not
+// versions; treating one as a version narrows the extract import glob to that
+// single subtree and makes every other resource type fail with
+// "Cannot find key".
+func isSchemaVersionDir(name string) bool {
+	return len(name) >= 2 && name[0] == 'v' && name[1] >= '0' && name[1] <= '9'
+}
+
+// sortVersionKeys sorts in-place. When every key parses as semver,
+// orders by semver (so v1.9 < v1.10). Falls back to lexical otherwise so
+// date-style or other opaque keys keep their existing behavior.
+func sortVersionKeys(keys []string) {
+	type pair struct {
+		raw    string
+		parsed *semver.Version
+	}
+	pairs := make([]pair, len(keys))
+	for i, k := range keys {
+		v, err := semver.NewVersion(strings.TrimPrefix(k, "v"))
+		if err != nil {
+			sort.Strings(keys)
+			return
+		}
+		pairs[i] = pair{raw: k, parsed: v}
+	}
+	sort.Slice(pairs, func(i, j int) bool {
+		return pairs[i].parsed.LessThan(pairs[j].parsed)
+	})
+	for i, p := range pairs {
+		keys[i] = p.raw
+	}
 }
 
 // readPackageNameFromPklProject reads the package name from a PklProject file.
@@ -322,14 +420,4 @@ func (r *PackageResolver) GetPackages() []Package {
 // IsUsingLocalSchemas returns true if local schema resolution is enabled
 func (r *PackageResolver) IsUsingLocalSchemas() bool {
 	return r.useLocalSchemas
-}
-
-// HasRemotePackages returns true if any packages are remote (need pkl project resolve)
-func (r *PackageResolver) HasRemotePackages() bool {
-	for _, pkg := range r.packages {
-		if !pkg.IsLocal {
-			return true
-		}
-	}
-	return false
 }

@@ -269,3 +269,42 @@ func TestShouldTriggerDiscovery_Update_NilExistingTarget(t *testing.T) {
 
 	assert.True(t, ShouldTriggerDiscovery(&update))
 }
+
+func TestNewResolveTargetUpdate_OperationAndResolvables(t *testing.T) {
+	// NewResolveTargetUpdate must produce a TargetUpdate that carries
+	// TargetOperationResolve, preserves the supplied resolvables, has no
+	// ExistingTarget, and does not report a change or trigger discovery.
+	target := pkgmodel.Target{
+		Label:        "my-target",
+		Namespace:    "default",
+		Discoverable: true,
+		Version:      3,
+	}
+	resolvables := []pkgmodel.FormaeURI{
+		"formae://abc123#/Endpoint",
+		"formae://def456#/CertArn",
+	}
+
+	tu := NewResolveTargetUpdate(target, resolvables)
+
+	assert.Equal(t, TargetOperationResolve, tu.Operation)
+	assert.Equal(t, resolvables, tu.RemainingResolvables)
+	assert.Nil(t, tu.ExistingTarget)
+	assert.Equal(t, TargetUpdateStateNotStarted, tu.State)
+	assert.Equal(t, pkgmodel.FormaeURI("target://my-target/resolve"), tu.NodeURI())
+	assert.False(t, tu.HasChange(), "resolve op has no persistent change")
+	assert.False(t, ShouldTriggerDiscovery(&tu), "resolve op must not trigger discovery")
+}
+
+func TestNewResolveTargetUpdate_PreservesTargetVersion(t *testing.T) {
+	// The constructor must capture the target's Version so the FSM can
+	// compare it against the live row when it executes.
+	target := pkgmodel.Target{
+		Label:   "versioned-target",
+		Version: 7,
+	}
+
+	tu := NewResolveTargetUpdate(target, nil)
+
+	assert.Equal(t, 7, tu.Target.Version)
+}

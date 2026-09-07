@@ -1,0 +1,996 @@
+// © 2025 Platform Engineering Labs Inc.
+//
+// SPDX-License-Identifier: FSL-1.1-ALv2
+
+package statuswatch
+
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/viewport"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+
+	tui "github.com/platform-engineering-labs/formae/internal/cli/tui"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
+	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
+)
+
+// navigableLineKind classifies a line in the flat navigation list.
+type navigableLineKind int
+
+const (
+	navRow navigableLineKind = iota // a summary or card row
+)
+
+// detailChromeLines is the detail view's non-viewport height: a plain two-line
+// header + the pinned command row + separator + the two-line footer. It is
+// deliberately independent of the multi view's chromeLines (which includes the
+// taller header banner).
+const detailChromeLines = 7
+
+// navigableLine tracks one navigable cursor position.
+type navigableLine struct {
+	kind      navigableLineKind
+	groupKind updateKind // which group this line belongs to
+	rowKey    string     // updateRow.key (for navRow only)
+}
+
+type detailModel struct {
+	th         *theme.Theme
+	cmdID      string
+	cmdState   string // command state, used for the abandoned footer reminder
+	groups     []group
+	cursor     int                // index into the flat navigable lines list
+	expanded   map[string]bool    // keyed by updateRow.key
+	detailMode bool               // 'd': every row renders as card
+	sortHi     map[updateKind]int // column highlighted by →←
+	sortCol    map[updateKind]int // active sort column per group
+	sortDir    map[updateKind]components.SortDirection
+	vp         viewport.Model
+	width      int
+	// The pinned header row + separator lines (injected during SetCommand, not rebuilt every View)
+	pinnedHeader string
+	pinnedRow    string
+	// pinnedSrc/pinnedNow cache the inputs SetCommand last used to render the
+	// pinned header/row, so ApplyTheme can re-render them under a new theme
+	// without a fresh command poll. hasCommand guards against re-rendering
+	// before any command has ever been set (pinnedHeader/pinnedRow stay empty).
+	pinnedSrc  row
+	pinnedNow  time.Time
+	hasCommand bool
+	// spinner view injected from outside
+	spinView string
+	// abandonedSet is the set of resource IDs that were force-canceled; rows in
+	// this set with Canceled state render "Abandoned" in Warning color.
+	abandonedSet   map[string]bool
+	abandonedCount int // count of rows with stateLabel "Abandoned"
+	// now is the clock used to compute live elapsed for in-progress rows; set on
+	// SetCommand and refreshed on every spinner tick so the time visibly ticks.
+	now time.Time
+	// cmdStartTs is the command's start time, used as the elapsed fallback for an
+	// in-progress resource whose own StartedAt the agent hasn't recorded yet.
+	cmdStartTs time.Time
+}
+
+func newDetailModel(th *theme.Theme, width, height int) detailModel {
+	vp := viewport.New(width, max(height-detailChromeLines, 1)) // placeholder; resized on SetCommand/View
+	return detailModel{
+		th: th,
+		// Default the sort to the Label column (not the empty status column) so the
+		// ▲/▼ arrow appears on a real, labeled header instead of a lone glyph.
+		sortHi:  map[updateKind]int{kindTarget: detailColLabel, kindStack: detailColLabel, kindPolicy: detailColLabel, kindResource: detailColLabel},
+		sortCol: map[updateKind]int{kindTarget: detailColLabel, kindStack: detailColLabel, kindPolicy: detailColLabel, kindResource: detailColLabel},
+		sortDir: map[updateKind]components.SortDirection{
+			kindTarget:   components.SortAsc,
+			kindStack:    components.SortAsc,
+			kindPolicy:   components.SortAsc,
+			kindResource: components.SortAsc,
+		},
+		expanded: make(map[string]bool),
+		vp:       vp,
+		width:    width,
+	}
+}
+
+// SetCommand rebuilds the groups from the command data, preserving expanded/pagination/sort state.
+// abandonedIDs is the set of resource IDs (bare ksuids) that were force-canceled; may be nil.
+func (d detailModel) SetCommand(c apimodel.Command, r row, spinView string, now time.Time, abandonedIDs map[string]bool) detailModel {
+	d.cmdID = c.CommandID
+	d.cmdState = c.State
+	d.spinView = spinView
+	d.now = now
+	d.cmdStartTs = c.StartTs
+	d.abandonedSet = abandonedIDs
+
+	// Rebuild groups, preserving sort state
+	newGroups := buildGroups(c, abandonedIDs)
+	for i := range newGroups {
+		k := newGroups[i].kind
+		sortGroup(newGroups[i].rows, d.sortCol[k], d.sortDir[k])
+	}
+	d.groups = newGroups
+
+	// Count rows with "Abandoned" label for the footer reminder.
+	count := 0
+	for _, g := range d.groups {
+		for _, row := range g.rows {
+			if row.stateLabel == "Abandoned" {
+				count++
+			}
+		}
+	}
+	d.abandonedCount = count
+
+	// Clamp cursor against the new nav list so a shrinking command never leaves
+	// the cursor pointing past the end of the navigable lines.
+	nav := d.navLines()
+	if len(nav) == 0 {
+		d.cursor = 0
+	} else if d.cursor < 0 {
+		d.cursor = 0
+	} else if d.cursor >= len(nav) {
+		d.cursor = len(nav) - 1
+	}
+
+	// Cache the inputs needed to re-render the pinned strings later (ApplyTheme).
+	d.pinnedSrc = r
+	d.pinnedNow = now
+	d.hasCommand = true
+
+	return d.renderPinned()
+}
+
+// renderPinned (re)builds pinnedHeader/pinnedRow from the theme currently on
+// d and the row/now last supplied to SetCommand. It reuses the multi view's
+// renderers so they share the responsive column drops and stay aligned; Age
+// is omitted per mockup VIEW 2, and sortHi -1 suppresses the sort-navigation
+// highlight. Called from both SetCommand (initial render / data refresh) and
+// ApplyTheme (live theme swap while drilled into a command), so a theme
+// change always re-renders the pinned row instead of leaving it stale in the
+// previous theme's colors. A no-op before any command has ever been set.
+func (d detailModel) renderPinned() detailModel {
+	if !d.hasCommand {
+		return d
+	}
+	// Indent the pinned header + row by 2 so the leading command status glyph
+	// lines up with the ▌ section-header bars in the body below. Build the
+	// multiView 2 columns narrower so the indented line still fits the width.
+	const pinnedIndent = "  "
+	pinnedW := max(d.width-len(pinnedIndent), 1)
+	mv := multiView{th: d.th, rows: []row{d.pinnedSrc}, cursor: -1, sortHi: -1, width: pinnedW, spinView: d.spinView, now: d.pinnedNow, hideAge: true, pinned: true}
+	d.pinnedHeader = pinnedIndent + mv.headerRow()
+	rows := mv.renderRows(1)
+	if len(rows) > 0 {
+		d.pinnedRow = pinnedIndent + rows[0]
+	}
+	return d
+}
+
+// ApplyTheme swaps the detail model onto a new theme and rebuilds the cached
+// pinnedHeader/pinnedRow strings so a live theme change (e.g. the Omarchy
+// live-follow watcher firing while the user is drilled into a command) is
+// fully reflected immediately, not just on the next poll's SetCommand call.
+func (d detailModel) ApplyTheme(t *theme.Theme) detailModel {
+	d.th = t
+	return d.renderPinned()
+}
+
+// navLines computes the flat list of navigable cursor positions given current state.
+func (d detailModel) navLines() []navigableLine {
+	var lines []navigableLine
+	for _, g := range d.groups {
+		for _, r := range g.rows {
+			lines = append(lines, navigableLine{
+				kind:      navRow,
+				groupKind: g.kind,
+				rowKey:    r.key,
+			})
+		}
+	}
+	return lines
+}
+
+// groupForKind finds the group in d.groups with the given kind.
+func (d detailModel) groupForKind(k updateKind) *group {
+	for i := range d.groups {
+		if d.groups[i].kind == k {
+			return &d.groups[i]
+		}
+	}
+	return nil
+}
+
+// cursorGroupKind returns the group kind the cursor is currently in.
+func (d detailModel) cursorGroupKind() updateKind {
+	nav := d.navLines()
+	if d.cursor >= 0 && d.cursor < len(nav) {
+		return nav[d.cursor].groupKind
+	}
+	return kindResource
+}
+
+// Update handles key events and returns the updated model and a back flag.
+func (d detailModel) Update(msg tea.KeyMsg, keys tui.KeyMap) (detailModel, bool) {
+	nav := d.navLines()
+	total := len(nav)
+
+	switch {
+	case msg.Type == tea.KeyEsc || msg.Type == tea.KeyBackspace:
+		return d, true
+
+	case key.Matches(msg, keys.Up):
+		if d.cursor > 0 {
+			d.cursor--
+		}
+
+	case key.Matches(msg, keys.Down):
+		if d.cursor < total-1 {
+			d.cursor++
+		}
+
+	case key.Matches(msg, keys.PageUp):
+		d.cursor -= d.vp.Height
+		if d.cursor < 0 {
+			d.cursor = 0
+		}
+
+	case key.Matches(msg, keys.PageDown):
+		d.cursor += d.vp.Height
+		if d.cursor >= total {
+			d.cursor = total - 1
+		}
+		if d.cursor < 0 {
+			d.cursor = 0
+		}
+
+	case msg.Type == tea.KeyLeft || key.Matches(msg, keys.Left):
+		grpKind := d.cursorGroupKind()
+		cols := validSortCols(grpKind)
+		hi := d.sortHi[grpKind]
+		idx := sortColIndex(cols, hi)
+		idx = (idx - 1 + len(cols)) % len(cols)
+		d.sortHi[grpKind] = cols[idx]
+
+	case msg.Type == tea.KeyRight || key.Matches(msg, keys.Right):
+		grpKind := d.cursorGroupKind()
+		cols := validSortCols(grpKind)
+		hi := d.sortHi[grpKind]
+		idx := sortColIndex(cols, hi)
+		idx = (idx + 1) % len(cols)
+		d.sortHi[grpKind] = cols[idx]
+
+	case key.Matches(msg, keys.Sort):
+		grpKind := d.cursorGroupKind()
+		// Capture the focused row so we can keep focus on it after the re-sort
+		// instead of jumping back to the top.
+		anchorKey, anchored := "", false
+		if d.cursor >= 0 && d.cursor < len(nav) && nav[d.cursor].kind == navRow {
+			anchorKey, anchored = nav[d.cursor].rowKey, true
+		}
+		hi := d.sortHi[grpKind]
+		act := d.sortCol[grpKind]
+		dir := d.sortDir[grpKind]
+		if act == hi {
+			if dir == components.SortAsc {
+				d.sortDir[grpKind] = components.SortDesc
+			} else {
+				d.sortDir[grpKind] = components.SortAsc
+			}
+		} else {
+			d.sortCol[grpKind] = hi
+			d.sortDir[grpKind] = components.SortDesc
+		}
+		// Re-sort the group
+		g := d.groupForKind(grpKind)
+		if g != nil {
+			sortGroup(g.rows, d.sortCol[grpKind], d.sortDir[grpKind])
+		}
+		// Keep focus on the same row after the re-sort; fall back to clamping if
+		// it is no longer present.
+		if anchored {
+			newNav := d.navLines()
+			found := -1
+			for i, n := range newNav {
+				if n.kind == navRow && n.groupKind == grpKind && n.rowKey == anchorKey {
+					found = i
+					break
+				}
+			}
+			switch {
+			case found >= 0:
+				d.cursor = found
+			case d.cursor >= len(newNav):
+				d.cursor = len(newNav) - 1
+			}
+		}
+
+	case key.Matches(msg, keys.Enter) || msg.Type == tea.KeySpace:
+		if d.cursor >= 0 && d.cursor < total {
+			line := nav[d.cursor]
+			// Toggle expansion for this row key
+			if d.expanded[line.rowKey] {
+				delete(d.expanded, line.rowKey)
+			} else {
+				d.expanded[line.rowKey] = true
+			}
+		}
+
+	case key.Matches(msg, keys.ToggleDetail):
+		d.detailMode = !d.detailMode
+	}
+
+	return d, false
+}
+
+// groupLayout returns label/type/stack column widths for a group at total width w.
+// Fixed budget: indent 2 + status 6 + operation 12 + time 5 = 25; we subtract
+// 26 to keep one spare and ensure rows never overflow the viewport by 1.
+func groupLayout(kind updateKind, w int) (labelW, typeW, stackW int) {
+	rem := w - 26
+	switch kind {
+	case kindPolicy:
+		labelW = max(rem*2/5, 12)
+		typeW = max(rem/5, 10)
+		stackW = max(rem-labelW-typeW, 10)
+	case kindResource:
+		typeW = max(rem*2/5, 16)
+		labelW = max(rem-typeW, 12)
+	default: // targets, stacks
+		labelW = max(rem, 20)
+	}
+	return
+}
+
+// View renders the full detail view for the given terminal height.
+func (d detailModel) View(height int, showQueryBar bool) string {
+	p := d.th.Palette
+	w := d.width
+
+	sep := lipgloss.NewStyle().Foreground(p.Border).Render(strings.Repeat("─", w))
+
+	// Build scrollable body
+	var body strings.Builder
+	cursorLine := 0 // line index within body where cursor is
+
+	lineCount := 0 // running count of lines emitted to body
+	// navIdx is a running index into the flat nav list. Rendering visits groups
+	// and rows in the same order navLines builds them (one nav entry per row), so
+	// a per-row counter matches the nav index without an O(n) lookup per row.
+	navIdx := 0
+
+	for _, g := range d.groups {
+		shown := g.rows
+
+		labelW, typeW, stackW := groupLayout(g.kind, w)
+
+		// Section header
+		headerStr := "\n  " + components.SectionHeader(d.th, g.title) + "\n"
+		body.WriteString(headerStr)
+		lineCount += 2 // blank + header line
+
+		// Column header for this group
+		colHeader := d.renderGroupColHeader(g.kind, labelW, typeW, stackW)
+		body.WriteString(colHeader + "\n")
+		lineCount++
+
+		// Rows
+		for _, r := range shown {
+			isCursor := navIdx == d.cursor
+			if isCursor {
+				cursorLine = lineCount
+			}
+
+			isExpanded := d.expanded[r.key] || d.detailMode
+
+			if isExpanded {
+				card := d.renderCard(r, w, isCursor)
+				cardLines := strings.Split(card, "\n")
+				for _, cl := range cardLines {
+					body.WriteString(cl + "\n")
+					lineCount++
+				}
+			} else {
+				rowStr := d.renderSummaryRow(r, g.kind, labelW, typeW, stackW, isCursor)
+				body.WriteString(rowStr)
+				// Count lines including error/cascade second lines
+				rowLines := strings.Count(rowStr, "\n")
+				lineCount += rowLines
+			}
+			navIdx++
+		}
+	}
+
+	// Footer reminder: show when command is terminal and there are abandoned rows.
+	if d.abandonedCount > 0 && isTerminalCommand(d.cmdState) {
+		reminderText := fmt.Sprintf("\n  ⚠ %d in-progress updates were abandoned. Check the synchronizer or the cloud console for orphaned resources.", d.abandonedCount)
+		body.WriteString(lipgloss.NewStyle().Foreground(p.Warning).Render(reminderText) + "\n")
+	}
+
+	// Viewport height from the detail view's own chrome (a plain two-line header,
+	// the pinned command row + separator, and the footer) — independent of the
+	// multi view's chromeLines, which now includes a taller header banner.
+	vpHeight := height - detailChromeLines
+	if showQueryBar {
+		vpHeight -= 2
+	}
+	if vpHeight < 1 {
+		vpHeight = 1
+	}
+	d.vp.Width = w
+	d.vp.Height = vpHeight
+	d.vp.SetContent(body.String())
+
+	// Scroll to keep cursor visible
+	if cursorLine < d.vp.YOffset {
+		d.vp.YOffset = cursorLine
+	}
+	if cursorLine >= d.vp.YOffset+vpHeight {
+		d.vp.YOffset = cursorLine - vpHeight + 1
+	}
+
+	return d.pinnedHeader + "\n" +
+		d.pinnedRow + "\n" +
+		sep + "\n" +
+		d.vp.View()
+}
+
+func detailFooterHints(singleCommand bool) []components.KeyHint {
+	hints := []components.KeyHint{
+		{Key: "→←", Desc: "column"},
+		{Key: "s", Desc: "sort"},
+		// enter is the universal "open the selected item" key; space also expands
+		// here but the footer advertises enter for cross-view consistency.
+		{Key: "enter", Desc: "expand"},
+		{Key: "d", Desc: "details"},
+	}
+	// In single-command mode (apply/destroy --watch) there is no command list to
+	// go back to, so omit the "esc back" hint; esc quits.
+	if !singleCommand {
+		hints = append(hints, components.KeyHint{Key: "esc", Desc: "back"})
+	}
+	return append(hints, components.KeyHint{Key: "q", Desc: "quit"})
+}
+
+// renderGroupColHeader renders the column header row for a group.
+// It uses the same sp2 indent and identical cell widths as renderSummaryRow so
+// headers and data rows are always in sync. Padding is applied to the PLAIN
+// label text before the lipgloss style is wrapped around it — never the other
+// way around — to prevent escape-sequence fragments from being sliced off.
+func (d detailModel) renderGroupColHeader(kind updateKind, labelW, typeW, stackW int) string {
+	p := d.th.Palette
+	dimStyle := lipgloss.NewStyle().Foreground(p.TextSecondary)
+	// The active sort column uses PrimaryAccent (background mode) or bold bright
+	// white (brighten mode); the pending ←/→ highlight uses SecondaryAccent in
+	// every mode so it reads as a distinct cursor wherever it sits — including on
+	// the active column — and never reuses the Selection background of the row
+	// cursor. Mirrors simview and the multi view.
+	background := d.th.Header.Highlight == "background"
+	accentStyle := lipgloss.NewStyle().Foreground(p.PrimaryAccent).Bold(true)
+	brightStyle := lipgloss.NewStyle().Foreground(p.TextPrimary).Bold(true)
+	hlStyle := lipgloss.NewStyle().Foreground(p.SecondaryAccent).Bold(true)
+	styleFor := func(isHL, isAct bool) lipgloss.Style {
+		switch {
+		case isHL:
+			return hlStyle
+		case isAct:
+			if background {
+				return accentStyle
+			}
+			return brightStyle
+		default:
+			return dimStyle
+		}
+	}
+
+	grpHi := d.sortHi[kind]
+	grpAct := d.sortCol[kind]
+	grpDir := d.sortDir[kind]
+
+	// renderColHdrPadded pads the PLAIN text to w columns first, then wraps
+	// the padded plain string in the appropriate lipgloss style. This ensures
+	// that pad() (which uses utf8.RuneCountInString) never slices through an
+	// escape sequence — a bug that produced "[1;38Label" fragments.
+	renderColHdrPadded := func(name string, col int, w int) string {
+		isHL := col == grpHi
+		isAct := col == grpAct
+		arrow := ""
+		// Never draw the sort arrow on the empty status column — a lone ▲/▼ there
+		// reads as a collapse/expand toggle rather than a column sort indicator.
+		if isAct && col != detailColStatus {
+			if grpDir == components.SortDesc {
+				arrow = " ▼"
+			} else {
+				arrow = " ▲"
+			}
+		}
+		text := name + arrow
+		// Pad the plain text to the desired width, then apply the style.
+		paddedText := pad(text, w)
+		return styleFor(isHL, isAct).Render(paddedText)
+	}
+	// renderColHdrLast renders the last (un-padded) column header cell.
+	renderColHdrLast := func(name string, col int) string {
+		isHL := col == grpHi
+		isAct := col == grpAct
+		arrow := ""
+		if isAct {
+			if grpDir == components.SortDesc {
+				arrow = " ▼"
+			} else {
+				arrow = " ▲"
+			}
+		}
+		text := name + arrow
+		return styleFor(isHL, isAct).Render(text)
+	}
+
+	var sb strings.Builder
+	// 2-space indent mirrors the sp2 in renderSummaryRow so header columns
+	// are pixel-aligned with data cell content.
+	sb.WriteString("  ")
+	// Status glyph cell: 6 wide, no label.
+	sb.WriteString(renderColHdrPadded("", detailColStatus, 6))
+	// Operation leads the descriptive columns (right after the state glyph),
+	// mirroring the simulation view so the two screens read the same.
+	sb.WriteString(renderColHdrPadded("Operation", detailColOperation, 12))
+
+	switch kind {
+	case kindPolicy:
+		sb.WriteString(renderColHdrPadded("Label", detailColLabel, labelW))
+		sb.WriteString(renderColHdrPadded("Type", detailColType, typeW))
+		sb.WriteString(renderColHdrPadded("Stack", detailColStack, stackW))
+		sb.WriteString(renderColHdrLast("Time", detailColTime))
+	case kindResource:
+		sb.WriteString(renderColHdrPadded("Label", detailColLabel, labelW))
+		sb.WriteString(renderColHdrPadded("Type", detailColType, typeW))
+		sb.WriteString(renderColHdrLast("Time", detailColTime))
+	default: // targets, stacks
+		sb.WriteString(renderColHdrPadded("Label", detailColLabel, labelW))
+		sb.WriteString(renderColHdrLast("Time", detailColTime))
+	}
+	return sb.String()
+}
+
+// renderSummaryRow renders a single summary row (non-expanded).
+func (d detailModel) renderSummaryRow(r updateRow, kind updateKind, labelW, typeW, stackW int, isCursor bool) string {
+	p := d.th.Palette
+	bg := lipgloss.Color("")
+	if isCursor {
+		bg = lipgloss.Color(p.Selection.Dark)
+	}
+	withBg := func(s lipgloss.Style) lipgloss.Style {
+		if isCursor {
+			return s.Background(bg)
+		}
+		return s
+	}
+	padStr := func(s string, w int) string {
+		n := lipgloss.Width(s)
+		if n >= w {
+			return s
+		}
+		spaces := strings.Repeat(" ", w-n)
+		if isCursor {
+			return s + lipgloss.NewStyle().Background(bg).Render(spaces)
+		}
+		return s + spaces
+	}
+
+	isFailed := r.state == components.StateFailed || r.state == components.StateSkipped
+	isDone := r.state == components.StateDone
+
+	// Glyph
+	glyphStr := d.renderStateGlyph(r, bg, isCursor)
+	glyphStr = padStr(glyphStr, 2)
+
+	// Styles. The label is the accent color only when the theme makes it
+	// special (rich); quiet renders it the same as the other columns.
+	labelColor := p.TextSecondary
+	if d.th.Rows.LabelAccent {
+		labelColor = p.PrimaryAccent
+	}
+	labelSt := withBg(lipgloss.NewStyle().Foreground(labelColor))
+	textSt := withBg(lipgloss.NewStyle().Foreground(p.TextSecondary))
+	dimSt := withBg(lipgloss.NewStyle().Foreground(p.TextSubtle))
+
+	if isDone && !isCursor {
+		dim := withBg(lipgloss.NewStyle().Foreground(p.TextSubtle))
+		labelSt, textSt, dimSt = dim, dim, dim
+	}
+	if isFailed && !isCursor {
+		red := withBg(lipgloss.NewStyle().Foreground(p.Error))
+		labelSt, textSt, dimSt = red, red, red
+	}
+	if isCursor {
+		// The cursor band is always the dark Selection color (see bg above), so
+		// cursor-row text uses the .Dark side of each adaptive color explicitly.
+		// In dark mode this matches normal adaptive resolution; in light mode it
+		// keeps the text light and readable on the dark band instead of resolving
+		// to a near-black foreground.
+		if isFailed {
+			bright := withBg(lipgloss.NewStyle().Foreground(lipgloss.Color(p.ErrorBright.Dark)))
+			labelSt, textSt, dimSt = bright, bright, bright
+		} else if isDone {
+			med := withBg(lipgloss.NewStyle().Foreground(lipgloss.Color(p.TextSecondary.Dark)))
+			labelSt, textSt, dimSt = med, med, med
+		} else {
+			cursorLabel := lipgloss.Color(p.TextPrimary.Dark)
+			if d.th.Rows.LabelAccent {
+				cursorLabel = lipgloss.Color(p.PrimaryAccent.Dark)
+			}
+			labelSt = withBg(lipgloss.NewStyle().Foreground(cursorLabel))
+			textSt = withBg(lipgloss.NewStyle().Foreground(lipgloss.Color(p.TextPrimary.Dark)))
+			dimSt = withBg(lipgloss.NewStyle().Foreground(lipgloss.Color(p.TextPrimary.Dark)))
+		}
+	}
+
+	trunc := func(s string, maxW int) string {
+		if maxW < 4 {
+			maxW = 4
+		}
+		// Delegate to components.Truncate. The local convention is "give maxW-1
+		// visible runes when cut"; Truncate(s, w) gives exactly w, so we pass maxW-1.
+		return components.Truncate(s, maxW-1)
+	}
+
+	timeStr := d.formatDetailDuration(r)
+
+	// State label ("finishing"/"Abandoned") placed just after the glyph. These are
+	// rare, additive annotations — canceled/done/etc rows carry NO label (the
+	// glyph conveys the state), so they keep the fixed 6-wide glyph column and
+	// stay aligned with the header; only the rare labeled rows widen this prefix.
+	// A trailing space guarantees a gap before the label (no "Abandonedlabel").
+	// The spaces flanking the glyph are background-filled on a cursor row so the
+	// selection band has no holes left/right of the glyph.
+	sp := " "
+	if isCursor {
+		sp = lipgloss.NewStyle().Background(bg).Render(" ")
+	}
+	glyphCell := sp + glyphStr + sp
+	if r.stateLabel == "Abandoned" {
+		warnSt := withBg(lipgloss.NewStyle().Foreground(p.Warning))
+		glyphCell = sp + glyphStr + sp + warnSt.Render(r.stateLabel) + sp
+	} else if r.stateLabel != "" {
+		glyphCell = sp + glyphStr + sp + dimSt.Render(r.stateLabel) + sp
+	}
+
+	sp2 := "  "
+	if isCursor {
+		sp2 = lipgloss.NewStyle().Background(bg).Render("  ")
+	}
+
+	// Operation cell: colored glyph + word (e.g. "+ create"), leading the
+	// descriptive columns right after the state glyph — mirroring the simulation
+	// view. The per-op color is kept regardless of state; the state glyph conveys
+	// done/failed/in-progress.
+	opPlain := r.operation
+	if g := components.OperationGlyph(d.th.Glyphs, r.operation); g != "" {
+		opPlain = g + " " + r.operation
+	}
+	// On the cursor row (dark band) use the .Dark side so the op color stays
+	// readable in light mode instead of resolving to a near-black foreground.
+	opColor := components.OperationColor(p, r.operation)
+	var opFg lipgloss.TerminalColor = opColor
+	if isCursor {
+		opFg = lipgloss.Color(opColor.Dark)
+	}
+	opSt := withBg(lipgloss.NewStyle().Foreground(opFg))
+	opCell := padStr(opSt.Render(opPlain), 12)
+
+	var rowStr string
+	switch kind {
+	case kindPolicy:
+		rowStr = sp2 + padStr(glyphCell, 6) + opCell +
+			padStr(labelSt.Render(trunc(r.label, labelW-1)), labelW) +
+			padStr(textSt.Render(trunc(r.typeName, typeW-1)), typeW) +
+			padStr(textSt.Render(trunc(r.stack, stackW-1)), stackW) +
+			dimSt.Render(timeStr)
+	case kindResource:
+		rowStr = sp2 + padStr(glyphCell, 6) + opCell +
+			padStr(labelSt.Render(trunc(r.label, labelW-1)), labelW) +
+			padStr(textSt.Render(trunc(r.typeName, typeW-1)), typeW) +
+			dimSt.Render(timeStr)
+	default: // targets, stacks
+		rowStr = sp2 + padStr(glyphCell, 6) + opCell +
+			padStr(labelSt.Render(trunc(r.label, labelW-1)), labelW) +
+			dimSt.Render(timeStr)
+	}
+
+	// Pad to full width for cursor
+	if isCursor {
+		rowWidth := lipgloss.Width(rowStr)
+		if rowWidth < d.width {
+			rowStr += lipgloss.NewStyle().Background(bg).Render(strings.Repeat(" ", d.width-rowWidth))
+		}
+	}
+
+	result := rowStr + "\n"
+
+	// The failed row's error message is intentionally NOT shown here — it lives
+	// only in the expanded card (press space) so the summary stays scannable and
+	// the long provider error isn't duplicated.
+
+	// Second line for cascade: depends on
+	if r.state == components.StateSkipped && r.cascadeSrc != "" {
+		depLine := "      " + lipgloss.NewStyle().Foreground(p.TextSubtle).Render("depends on "+r.cascadeSrc)
+		result += depLine + "\n"
+	}
+
+	return result
+}
+
+// renderStateGlyph renders the status symbol for a row.
+func (d detailModel) renderStateGlyph(r updateRow, bg lipgloss.Color, isCursor bool) string {
+	p := d.th.Palette
+	withBg := func(s lipgloss.Style) lipgloss.Style {
+		if isCursor {
+			return s.Background(bg)
+		}
+		return s
+	}
+	// On a cursor row the band is always dark, so resolve glyph colors to their
+	// .Dark side so the symbol stays visible in light mode (e.g. quiet's Done is
+	// near-black on light, which would vanish on the dark cursor band).
+	fg := func(c lipgloss.AdaptiveColor) lipgloss.TerminalColor {
+		if isCursor {
+			return lipgloss.Color(c.Dark)
+		}
+		return c
+	}
+	switch r.state {
+	case components.StateDone:
+		return withBg(lipgloss.NewStyle().Foreground(fg(p.Done))).Render(d.th.Glyphs.StatusDone)
+	case components.StateInProgress:
+		spinFrame := d.spinView
+		if spinFrame == "" {
+			spinFrame = d.th.Spinner.StaticFrame
+		}
+		return withBg(lipgloss.NewStyle().Foreground(fg(p.PrimaryAccent))).Render(spinFrame)
+	case components.StatePending:
+		return withBg(lipgloss.NewStyle().Foreground(fg(p.Pending))).Render(d.th.Glyphs.StatusPending)
+	case components.StateFailed:
+		return withBg(lipgloss.NewStyle().Foreground(fg(p.Error)).Bold(true)).Render(d.th.Glyphs.StatusFailed)
+	case components.StateSkipped:
+		return withBg(lipgloss.NewStyle().Foreground(fg(p.TextSecondary))).Render(d.th.Glyphs.StatusSkipped)
+	}
+	return " "
+}
+
+// elapsed returns the duration to display for a row: a live now−start while the
+// update is in progress (so the time ticks), otherwise the final recorded
+// duration. It prefers the per-resource StartedAt; if the agent hasn't recorded
+// one yet (it lands reliably only on completion), it falls back to the command's
+// start so the timer still ticks rather than freezing at 00:00.
+func (d detailModel) elapsed(r updateRow) time.Duration {
+	if r.state == components.StateInProgress && !d.now.IsZero() {
+		start := r.startedAt
+		if start.IsZero() {
+			start = d.cmdStartTs
+		}
+		if !start.IsZero() {
+			if e := d.now.Sub(start); e > 0 {
+				return e
+			}
+		}
+	}
+	return r.duration
+}
+
+// formatDetailDuration returns the time string for a summary row.
+func (d detailModel) formatDetailDuration(r updateRow) string {
+	switch r.state {
+	case components.StateDone, components.StateInProgress, components.StateFailed:
+		return components.FormatDuration(d.elapsed(r))
+	default:
+		return "—"
+	}
+}
+
+// resourceDetailLines returns the property/change detail for a resource card:
+// a create lists the properties it set (like the inventory detail screen); an
+// update/replace/delete shows the change lines from its patch document. Returns
+// nil when there's nothing to show (e.g. a delete with no patch).
+func (d detailModel) resourceDetailLines(r updateRow, valueSt lipgloss.Style) []string {
+	if r.operation == apimodel.OperationCreate && len(r.properties) > 0 {
+		var out []string
+		for _, l := range components.PropertyLines(r.properties, 1) {
+			out = append(out, valueSt.Render(l))
+		}
+		return out
+	}
+	if len(r.patchDoc) > 0 {
+		lines, err := components.RenderChangeLinesFromPatch(d.th, r.patchDoc, r.properties, r.oldProperties, r.refLabels)
+		if err == nil {
+			return lines
+		}
+	}
+	return nil
+}
+
+// renderCard renders a bordered detail card for a row.
+func (d detailModel) renderCard(r updateRow, w int, isCursor bool) string {
+	p := d.th.Palette
+
+	// Card body: key/value pairs
+	fieldSt := lipgloss.NewStyle().Foreground(p.TextSubtle)
+	valueSt := lipgloss.NewStyle().Foreground(p.TextSecondary)
+	errSt := lipgloss.NewStyle().Foreground(p.Error)
+	inPrgSt := lipgloss.NewStyle().Foreground(p.InProgress)
+
+	kv := func(k, v string) string {
+		return fieldSt.Render(k) + " " + valueSt.Render(v)
+	}
+
+	var lines []string
+
+	switch r.kind {
+	case kindResource:
+		switch r.state {
+		case components.StateDone:
+			lines = append(lines, kv("Duration:", components.FormatDuration(r.duration)))
+		case components.StateInProgress:
+			lines = append(lines, kv("Started: ", components.FormatDuration(d.elapsed(r))+" ago"))
+			if r.maxAttempt > 0 {
+				lines = append(lines, kv("Attempt: ", fmt.Sprintf("%d/%d", r.attempt, r.maxAttempt)))
+			}
+			if r.statusMsg != "" {
+				lines = append(lines, fieldSt.Render("Status:  ")+" "+inPrgSt.Render(r.statusMsg))
+			}
+		case components.StateFailed:
+			lines = append(lines, kv("Duration:", components.FormatDuration(r.duration)))
+			if r.maxAttempt > 0 {
+				lines = append(lines, kv("Attempt: ", fmt.Sprintf("%d/%d", r.attempt, r.maxAttempt)))
+			}
+			if r.errMsg != "" {
+				lines = append(lines, fieldSt.Render("Error:   ")+" "+errSt.Render(r.errMsg))
+			} else {
+				// A failed resource with no error of its own wasn't attempted — a
+				// resource it depends on failed first, so this one was skipped. The
+				// executor records no per-resource reason, so we can't name the
+				// culprit. Not styled as an error: this resource didn't itself fail.
+				skipSt := lipgloss.NewStyle().Foreground(p.Warning)
+				lines = append(lines, skipSt.Render("Skipped: a resource it depends on failed"))
+			}
+		case components.StateSkipped:
+			cascade := "yes"
+			if r.cascadeSrc != "" {
+				cascade = "yes (depends on " + r.cascadeSrc + ")"
+			}
+			lines = append(lines, kv("Cascade: ", cascade))
+		}
+
+		// What the operation creates or changes — the property listing (create)
+		// or the change tree (update/replace), matching the simulation card.
+		if detail := d.resourceDetailLines(r, valueSt); len(detail) > 0 {
+			lines = append(lines, "")
+			header := "Properties:"
+			if r.operation != apimodel.OperationCreate {
+				header = "Changes:"
+			}
+			lines = append(lines, fieldSt.Render(header))
+			lines = append(lines, detail...)
+		}
+
+	case kindTarget:
+		discStr := "no"
+		if r.discoverable {
+			discStr = "yes"
+		}
+		lines = append(lines, kv("Discoverable:", discStr))
+		lines = append(lines, kv("Duration:    ", components.FormatDuration(r.duration)))
+		if r.errMsg != "" {
+			lines = append(lines, fieldSt.Render("Error:       ")+" "+errSt.Render(r.errMsg))
+		}
+
+	case kindStack:
+		if r.description != "" {
+			lines = append(lines, kv("Description:", r.description))
+		}
+		lines = append(lines, kv("Duration:   ", components.FormatDuration(r.duration)))
+		if r.errMsg != "" {
+			lines = append(lines, fieldSt.Render("Error:      ")+" "+errSt.Render(r.errMsg))
+		}
+
+	case kindPolicy:
+		lines = append(lines, kv("Type:    ", r.typeName))
+		lines = append(lines, kv("Stack:   ", r.stack))
+		lines = append(lines, kv("Duration:", components.FormatDuration(r.duration)))
+		if len(r.referencingStacks) > 0 {
+			lines = append(lines, kv("Referencing stacks:", strings.Join(r.referencingStacks, ", ")))
+		}
+		if r.errMsg != "" {
+			lines = append(lines, fieldSt.Render("Error:   ")+" "+errSt.Render(r.errMsg))
+		}
+	}
+
+	content := strings.Join(lines, "\n")
+
+	// Border color
+	borderColor := p.Border
+	if r.state == components.StateFailed {
+		borderColor = p.Error
+	}
+	if isCursor {
+		borderColor = p.PrimaryAccent
+	}
+
+	cardW := w - 8
+	if cardW < 30 {
+		cardW = 30
+	}
+
+	// Render card body with rounded border
+	card := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(borderColor).
+		Width(cardW).
+		Padding(0, 1).
+		Render(content)
+
+	// Build custom top border with title
+	cardLines := strings.Split(card, "\n")
+	actualWidth := 0
+	if len(cardLines) > 0 {
+		actualWidth = lipgloss.Width(cardLines[len(cardLines)-1])
+	}
+	if actualWidth == 0 {
+		actualWidth = cardW + 2
+	}
+
+	borderSt := lipgloss.NewStyle().Foreground(borderColor)
+	glyphStr := d.renderStateGlyph(r, lipgloss.Color(""), false)
+	timeStr := d.formatDetailDuration(r)
+
+	// Title: "operation label (type if resource/policy)"
+	titleLabel := r.label
+	if (r.kind == kindResource || r.kind == kindPolicy) && r.typeName != "" {
+		titleLabel = r.label + " (" + r.typeName + ")"
+	}
+	if r.kind == kindPolicy && r.stack != "" {
+		titleLabel = r.label + " (" + r.typeName + ", " + r.stack + ")"
+	}
+	titleStr := r.operation + " " + titleLabel
+
+	var statusInTitle string
+	if r.state == components.StateSkipped && r.kind == kindPolicy {
+		statusInTitle = " Skipped "
+	} else {
+		statusInTitle = " " + glyphStr + " " + timeStr + " "
+	}
+
+	titleContent := " " + titleStr + " "
+	titleW := lipgloss.Width(titleContent)
+	statusW := lipgloss.Width(statusInTitle)
+	// Total = ╭ + ─ + titleContent + dashes + statusInTitle + ╮ = actualWidth
+	dashW := actualWidth - titleW - statusW - 3 // 3 border glyphs: ╭ + ─ + ╮
+	if dashW < 1 {
+		dashW = 1
+	}
+
+	headerLine := borderSt.Render("╭─") +
+		titleContent +
+		borderSt.Render(strings.Repeat("─", dashW)) +
+		statusInTitle +
+		borderSt.Render("╮")
+
+	if len(cardLines) > 0 {
+		cardLines[0] = headerLine
+	}
+
+	return "    " + strings.Join(cardLines, "\n    ")
+}
+
+// sortColIndex returns the position of col in cols slice.
+func sortColIndex(cols []int, col int) int {
+	for i, c := range cols {
+		if c == col {
+			return i
+		}
+	}
+	return 0
+}

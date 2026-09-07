@@ -69,7 +69,7 @@ func TestMetastructure_ApplyFormaHashesOpaqueValues(t *testing.T) {
 
 		_, err = m.ApplyForma(forma, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test-client-id")
+		}, "test-client-id", "", "")
 		require.NoError(t, err)
 
 		assert.Eventually(t, func() bool {
@@ -93,6 +93,7 @@ func TestMetastructure_ApplyFormaHashesOpaqueValues(t *testing.T) {
 		assert.Len(t, hashedValue, 64, "Should be 64-char hash")
 		assert.NotEqual(t, "super-secret-password", hashedValue)
 		assert.Regexp(t, "^[a-f0-9]{64}$", hashedValue)
+		assert.Equal(t, true, secretString["$hashed"], "stored opaque value must carry the $hashed:true discriminator")
 
 		// Plugin should receive raw value as simple string (ConvertToPluginFormat extracts $value)
 		var pluginProps map[string]any

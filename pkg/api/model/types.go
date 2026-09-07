@@ -32,16 +32,40 @@ type ListCommandStatusResponse struct {
 	Commands []Command `json:"Commands"`
 }
 
+// CommandScope selects which commands an *empty* command-status query
+// covers. It has no effect on a non-empty query: there the query itself
+// decides (`client:me` narrows to the caller), and the scope is redundant.
+//
+//   - CommandScopeClient — the calling client's single most recent command.
+//     This is the default when the parameter is absent, so callers written
+//     against the older API keep their behavior.
+//   - CommandScopeAgent — every client's commands, newest first, up to the
+//     requested page size. This is what `formae command list` asks for.
+//
+// Either way only user-initiated commands are visible; scheduler bookkeeping
+// (sync, discovery, auto-reconcile, stack expiry) is never returned.
+type CommandScope string
+
+const (
+	CommandScopeClient CommandScope = "client"
+	CommandScopeAgent  CommandScope = "agent"
+)
+
 type Command struct {
-	CommandID       string           `json:"CommandId"`
-	Command         string           `json:"Command"`
-	State           string           `json:"State"`
-	StartTs         time.Time        `json:"StartTs,omitempty"`
-	EndTs           time.Time        `json:"EndTs,omitempty"`
-	ResourceUpdates []ResourceUpdate `json:"ResourceUpdates,omitempty"`
-	TargetUpdates   []TargetUpdate   `json:"TargetUpdates,omitempty"`
-	StackUpdates    []StackUpdate    `json:"StackUpdates,omitempty"`
-	PolicyUpdates   []PolicyUpdate   `json:"PolicyUpdates,omitempty"`
+	CommandID        string            `json:"CommandId"`
+	Command          string            `json:"Command"`
+	Mode             string            `json:"Mode,omitempty"` // "reconcile" | "patch"
+	Source           string            `json:"Source,omitempty"`
+	Subject          string            `json:",omitempty"`
+	SubjectName      string            `json:",omitempty"`
+	State            string            `json:"State"`
+	StartTs          time.Time         `json:"StartTs,omitempty"`
+	EndTs            time.Time         `json:"EndTs,omitempty"`
+	ResourceUpdates  []ResourceUpdate  `json:"ResourceUpdates,omitempty"`
+	TargetUpdates    []TargetUpdate    `json:"TargetUpdates,omitempty"`
+	StackUpdates     []StackUpdate     `json:"StackUpdates,omitempty"`
+	PolicyUpdates    []PolicyUpdate    `json:"PolicyUpdates,omitempty"`
+	GeneratorUpdates []GeneratorUpdate `json:"GeneratorUpdates,omitempty"`
 }
 
 // wrapper for machine-readable output
@@ -52,21 +76,37 @@ type CommandID struct {
 type CancelCommandResponse struct {
 	CommandIDs           []string                       `json:"CommandIds"`
 	ResourceUpdateStates map[string]CancelResourceState `json:"ResourceUpdateStates,omitempty"`
+	// Forced is true when the cancellation was requested with --force. The CLI
+	// uses this to surface the force-cancel warning and the list of resources
+	// that were abandoned mid-operation.
+	Forced bool `json:"Forced,omitempty"`
 }
 
 // CancelResourceState represents the state of a resource update at cancel time.
 type CancelResourceState struct {
 	State string `json:"State"` // "Canceled", "InProgress", "Success", "Failed"
+	// ForceCanceled is true when this resource update was force-canceled while an
+	// operation was actually in progress (it carries an OperationStatusCanceled
+	// progress entry). These are the resources whose cloud-side state may be
+	// orphaned and need manual verification.
+	ForceCanceled bool `json:"ForceCanceled,omitempty"`
+	// CommandID attributes this update to the canceled command it belongs to;
+	// the ResourceUpdateStates map is flat across all canceled commands.
+	CommandID string `json:"CommandId,omitempty"`
 }
 
 type ResourceUpdate struct {
-	ResourceID      string            `json:"ResourceId"`
-	ResourceType    string            `json:"ResourceType"`
-	ResourceLabel   string            `json:"ResourceLabel,omitempty"`
-	StackName       string            `json:"StackName,omitempty"`
-	OldStackName    string            `json:"OldStackName,omitempty"`
-	Operation       string            `json:"Operation"`
-	PatchDocument   json.RawMessage   `json:"PatchDocument,omitempty"`
+	ResourceID    string `json:"ResourceId"`
+	ResourceType  string `json:"ResourceType"`
+	ResourceLabel string `json:"ResourceLabel,omitempty"`
+	// OldLabel is the resource's previous label. Populated only when a
+	// label rename is part of this update (via the alias path); empty
+	// otherwise. The renderer uses it to surface the rename to the user.
+	OldLabel      string          `json:"OldLabel,omitempty"`
+	StackName     string          `json:"StackName,omitempty"`
+	OldStackName  string          `json:"OldStackName,omitempty"`
+	Operation     string          `json:"Operation"`
+	PatchDocument json.RawMessage `json:"PatchDocument,omitempty"`
 	// CreateOnlyPatch is a JSON-patch document (same format as PatchDocument)
 	// listing only the ops against createOnly fields that triggered a
 	// resource replacement. Populated on the delete half of a replace pair
@@ -75,7 +115,8 @@ type ResourceUpdate struct {
 	// destroy + create.
 	CreateOnlyPatch json.RawMessage   `json:"CreateOnlyPatch,omitempty"`
 	State           string            `json:"State"`
-	Duration        int64             `json:"Duration,omitempty"` // milliseconds
+	StartedAt       time.Time         `json:"StartedAt,omitempty"` // when the update began (for live elapsed)
+	Duration        int64             `json:"Duration,omitempty"`  // milliseconds (final, set on completion)
 	CurrentAttempt  int               `json:"CurrentAttempt,omitempty"`
 	MaxAttempts     int               `json:"MaxAttempts,omitempty"`
 	ErrorMessage    string            `json:"ErrorMessage,omitempty"`
@@ -95,6 +136,10 @@ const (
 	OperationDelete  = "delete"
 	OperationRead    = "read"
 	OperationReplace = "replace" // delete + create
+	// OperationDraw appears on a GeneratorUpdate only: it is a generator
+	// drawing a value, which rotates the secret every resource bound to that
+	// generator holds. No ResourceUpdate ever carries it.
+	OperationDraw = "draw"
 )
 
 const (
@@ -109,18 +154,18 @@ const (
 )
 
 type TargetUpdate struct {
-	TargetLabel    string              `json:"TargetLabel"`
-	Operation      string              `json:"Operation"`
-	State          string              `json:"State"`
-	Duration       int64               `json:"Duration,omitempty"` // milliseconds
-	ErrorMessage   string              `json:"ErrorMessage,omitempty"`
-	Discoverable   bool                `json:"Discoverable"`
-	ExistingConfig json.RawMessage     `json:"ExistingConfig,omitempty"`
-	DesiredConfig  json.RawMessage     `json:"DesiredConfig,omitempty"`
-	StartTs        time.Time           `json:"StartTs,omitempty"`
-	ModifiedTs     time.Time           `json:"ModifiedTs,omitempty"`
-	IsCascade      bool                `json:"IsCascade,omitempty"`
-	CascadeSource  string              `json:"CascadeSource,omitempty"`
+	TargetLabel    string          `json:"TargetLabel"`
+	Operation      string          `json:"Operation"`
+	State          string          `json:"State"`
+	Duration       int64           `json:"Duration,omitempty"` // milliseconds
+	ErrorMessage   string          `json:"ErrorMessage,omitempty"`
+	Discoverable   bool            `json:"Discoverable"`
+	ExistingConfig json.RawMessage `json:"ExistingConfig,omitempty"`
+	DesiredConfig  json.RawMessage `json:"DesiredConfig,omitempty"`
+	StartTs        time.Time       `json:"StartTs,omitempty"`
+	ModifiedTs     time.Time       `json:"ModifiedTs,omitempty"`
+	IsCascade      bool            `json:"IsCascade,omitempty"`
+	CascadeSource  string          `json:"CascadeSource,omitempty"`
 }
 
 type StackUpdate struct {
@@ -142,11 +187,85 @@ type PolicyUpdate struct {
 	State             string          `json:"State"`
 	Duration          int64           `json:"Duration,omitempty"` // milliseconds
 	ErrorMessage      string          `json:"ErrorMessage,omitempty"`
-	PolicyConfig      json.RawMessage `json:"PolicyConfig,omitempty"`    // Current policy configuration
-	OldPolicyConfig   json.RawMessage `json:"OldPolicyConfig,omitempty"` // Previous policy configuration (for updates)
+	PolicyConfig      json.RawMessage `json:"PolicyConfig,omitempty"`      // Current policy configuration
+	OldPolicyConfig   json.RawMessage `json:"OldPolicyConfig,omitempty"`   // Previous policy configuration (for updates)
 	ReferencingStacks []string        `json:"ReferencingStacks,omitempty"` // For skip operations - stacks still referencing this policy
 	StartTs           time.Time       `json:"StartTs,omitempty"`
 	ModifiedTs        time.Time       `json:"ModifiedTs,omitempty"`
+}
+
+// GeneratorUpdate is the API projection of one piece of generator work: a
+// create, an update (spec change and/or rename), a delete, or a draw.
+//
+// The first three change the generator's own row. A draw changes no row: it
+// produces a new value and every destination bound to the generator takes it,
+// which is a credential rotation and is why it is a plan entry of its own. A
+// generator whose spec is changing and that also draws is two entries, one per
+// operation, because the two are separate work with separate outcomes.
+//
+// GeneratorConfig and OldGeneratorConfig carry the generator's declared spec
+// only — the fields a forma author writes — and only on the operations that
+// change it; a draw carries neither. A generator's own identity (its KSUID)
+// and drawn generation are controller state that never reaches this
+// projection: no concrete Generator marshals its ID, and the value a
+// generation drew does not exist at plan/simulate time to project in the
+// first place.
+//
+// State, Duration and ErrorMessage report the operation's outcome on the three
+// that change the generator's row. On a draw they carry the plan's values and
+// do not follow the draw as it runs: a draw writes no generator row, so no
+// store holds its outcome for a status read to project. A draw that fails
+// explains itself on the ResourceUpdates it fails, which carry its reason as
+// their ErrorMessage.
+type GeneratorUpdate struct {
+	GeneratorLabel     string          `json:"GeneratorLabel"`
+	GeneratorType      string          `json:"GeneratorType"` // "password", etc.
+	StackLabel         string          `json:"StackLabel,omitempty"`
+	Operation          string          `json:"Operation"`
+	State              string          `json:"State"`
+	Duration           int64           `json:"Duration,omitempty"` // milliseconds
+	ErrorMessage       string          `json:"ErrorMessage,omitempty"`
+	GeneratorConfig    json.RawMessage `json:"GeneratorConfig,omitempty"`    // Current generator configuration
+	OldGeneratorConfig json.RawMessage `json:"OldGeneratorConfig,omitempty"` // Previous generator configuration (for updates)
+	StartTs            time.Time       `json:"StartTs,omitempty"`
+	ModifiedTs         time.Time       `json:"ModifiedTs,omitempty"`
+}
+
+// GeneratorInventoryItem represents one live generator in the inventory.
+//
+// Config carries the generator's declared spec only, exactly as
+// PolicyInventoryItem.Config does. A drawn value is never part of it: no
+// concrete Generator marshals one, and a drawn value is not stored in a
+// readable form anywhere. GenerationID is the generation's own identity — a
+// KSUID minted per draw — which says which generation the generator currently
+// holds and nothing about its value. It is empty until a value has been drawn.
+//
+// EverySeconds is 0 when the generator declares no rotation cadence.
+// LastRotatedAt is DERIVED from command history and stored nowhere; it is the
+// start of the most recent command that both advanced this generator's
+// generation and succeeded (see datastore.GeneratorRotationInfo). It is zero
+// when no such command exists, which reads as "never rotated". Only a
+// generator that declares a cadence carries either field: the derivation is
+// the one the rotation scheduler runs, and a generator nothing rotates on its
+// own has no cadence history to report.
+type GeneratorInventoryItem struct {
+	Label         string                 `json:"Label"`
+	Type          string                 `json:"Type"`
+	Stack         string                 `json:"Stack"`
+	Config        json.RawMessage        `json:"Config"`
+	EverySeconds  int                    `json:"EverySeconds,omitempty"`
+	LastRotatedAt time.Time              `json:"LastRotatedAt,omitempty"`
+	GenerationID  string                 `json:"GenerationID,omitempty"`
+	Destinations  []GeneratorDestination `json:"Destinations,omitempty"`
+}
+
+// GeneratorDestination names one resource that binds a property to a
+// generator. Its label and stack, and nothing else: a destination's properties
+// hold the generator's value under an opaque envelope, so no part of them
+// belongs in a projection built to be rendered.
+type GeneratorDestination struct {
+	ResourceLabel string `json:"ResourceLabel"`
+	StackLabel    string `json:"StackLabel"`
 }
 
 // PolicyInventoryItem represents a standalone policy in the inventory
@@ -168,22 +287,29 @@ type Stats struct {
 	UnmanagedResources map[string]int `json:"UnmanagedResources"` // key: namespace
 	Targets            map[string]int `json:"Targets"`            // key: namespace
 	ResourceTypes      map[string]int `json:"ResourceTypes"`      // key: resource type (e.g., "AWS::S3::Bucket")
-	ResourceErrors     map[string]int `json:"ResourceErrors"`     // key: resource type
 	Plugins            []PluginInfo   `json:"Plugins"`
+	// ReapPendingTargets counts targets that are still 'unreachable' but have
+	// already accrued at least their configured reap-after duration — they
+	// are due to be reaped (on an upcoming reaper tick, or held back by the
+	// rate cap or an in-flight command). Surfaced so an over-threshold target
+	// is visible before any tombstone.
+	ReapPendingTargets int `json:"ReapPendingTargets"`
+	// ReapedTargets counts targets whose current health state is 'reaped'.
+	ReapedTargets int `json:"ReapedTargets"`
 }
 
 // PluginInfo represents information about a registered plugin
 // including the merged config (plugin defaults + user overrides).
 type PluginInfo struct {
-	Namespace               string           `json:"Namespace"`
-	Version                 string           `json:"Version"`
-	NodeName                string           `json:"NodeName"`
-	MaxRequestsPerSecond    int              `json:"MaxRequestsPerSecond"`
-	ResourceCount           int              `json:"ResourceCount"`
-	ResourceTypesToDiscover []string         `json:"ResourceTypesToDiscover,omitempty"`
-	RetryConfig             *pkgmodel.RetryConfig    `json:"RetryConfig,omitempty"`
-	LabelConfig             *pkgmodel.LabelConfig    `json:"LabelConfig,omitempty"`
-	DiscoveryFilters        []pkgmodel.MatchFilter   `json:"DiscoveryFilters,omitempty"`
+	Namespace               string                 `json:"Namespace"`
+	Version                 string                 `json:"Version"`
+	NodeName                string                 `json:"NodeName"`
+	MaxRequestsPerSecond    int                    `json:"MaxRequestsPerSecond"`
+	ResourceCount           int                    `json:"ResourceCount"`
+	ResourceTypesToDiscover []string               `json:"ResourceTypesToDiscover,omitempty"`
+	RetryConfig             *pkgmodel.RetryConfig  `json:"RetryConfig,omitempty"`
+	LabelConfig             *pkgmodel.LabelConfig  `json:"LabelConfig,omitempty"`
+	DiscoveryFilters        []pkgmodel.MatchFilter `json:"DiscoveryFilters,omitempty"`
 }
 
 type ForceReconcileResponse struct {
@@ -194,4 +320,87 @@ type ForceReconcileResponse struct {
 type ForceCheckTTLResponse struct {
 	ExpiredStacks []string `json:"expired_stacks"`
 	CommandIDs    []string `json:"command_ids,omitempty"`
+}
+
+// Plugin describes a single plugin, used by the list and info endpoints.
+type Plugin struct {
+	Name              string   `json:"name"`
+	Kind              string   `json:"kind,omitempty"`
+	Type              string   `json:"type"`
+	Namespace         string   `json:"namespace,omitempty"`
+	Category          string   `json:"category,omitempty"`
+	Summary           string   `json:"summary,omitempty"`
+	Description       string   `json:"description,omitempty"`
+	Publisher         string   `json:"publisher,omitempty"`
+	License           string   `json:"license,omitempty"`
+	InstalledVersion  string   `json:"installedVersion,omitempty"`
+	AvailableVersions []string `json:"availableVersions,omitempty"`
+	// LocalPath is the absolute path on the agent's filesystem to the
+	// plugin's PklProject file (containing the plugin's PKL schema).
+	// Populated by the discovery scan when the plugin is installed
+	// locally; empty when no on-disk install is found. Used by the CLI's
+	// --schema-location local flow to import schemas via PklProject.deps
+	// rather than fetching from the hub. Same-box only — the path is
+	// only meaningful when the CLI shares a filesystem with the agent.
+	LocalPath string `json:"localPath,omitempty"`
+
+	Channel    string                       `json:"channel,omitempty"`
+	Frozen     bool                         `json:"frozen,omitempty"`
+	ManagedBy  string                       `json:"managedBy,omitempty"`
+	LoadStatus string                       `json:"loadStatus,omitempty"`
+	Metadata   map[string]map[string]string `json:"metadata,omitempty"`
+}
+
+// PluginOperation describes a single operation performed on a plugin.
+type PluginOperation struct {
+	Name    string `json:"name"`
+	Type    string `json:"type,omitempty"`
+	Version string `json:"version,omitempty"`
+	Action  string `json:"action"` // "install" | "remove" | "update" | "noop"
+}
+
+// PackageRef identifies a plugin package, optionally at a specific version.
+type PackageRef struct {
+	Name    string `json:"name"`
+	Version string `json:"version,omitempty"`
+}
+
+type ListPluginsResponse struct {
+	Plugins []Plugin `json:"plugins"`
+}
+
+type GetPluginResponse struct {
+	Plugin Plugin `json:"plugin"`
+}
+
+type InstallPluginsRequest struct {
+	Packages []PackageRef `json:"packages"`
+	Channel  string       `json:"channel,omitempty"`
+}
+
+type InstallPluginsResponse struct {
+	Operations      []PluginOperation `json:"operations"`
+	RequiresRestart bool              `json:"requiresRestart"`
+	Warnings        []string          `json:"warnings,omitempty"`
+}
+
+type UninstallPluginsRequest struct {
+	Packages []PackageRef `json:"packages"`
+}
+
+type UninstallPluginsResponse struct {
+	Operations      []PluginOperation `json:"operations"`
+	RequiresRestart bool              `json:"requiresRestart"`
+	Warnings        []string          `json:"warnings,omitempty"`
+}
+
+type UpdatePluginsRequest struct {
+	Packages []PackageRef `json:"packages,omitempty"`
+	Channel  string       `json:"channel,omitempty"`
+}
+
+type UpdatePluginsResponse struct {
+	Operations      []PluginOperation `json:"operations"`
+	RequiresRestart bool              `json:"requiresRestart"`
+	Warnings        []string          `json:"warnings,omitempty"`
 }

@@ -118,7 +118,7 @@ func TestApplyForma_HardReconcile(t *testing.T) {
 		_, err = m.ApplyForma(
 			initial,
 			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: false},
-			"test-client-id")
+			"test-client-id", "", "")
 		assert.NoError(t, err)
 
 		var commands []*forma_command.FormaCommand
@@ -160,7 +160,7 @@ func TestApplyForma_HardReconcile(t *testing.T) {
 		_, err = m.ApplyForma(
 			patch,
 			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModePatch, Simulate: false},
-			"test-client-id")
+			"test-client-id", "", "")
 		assert.NoError(t, err)
 
 		require.Eventually(t, func() bool {
@@ -211,7 +211,7 @@ func TestApplyForma_HardReconcile(t *testing.T) {
 		_, err = m.ApplyForma(
 			reconcile,
 			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: false, Force: true},
-			"test-client-id")
+			"test-client-id", "", "")
 		assert.NoError(t, err)
 
 		assert.Eventually(t, func() bool {

@@ -294,8 +294,7 @@ func TestGenerateResourceUpdatesForReconcile(t *testing.T) {
 				existingTargets,
 				ds,
 				nil,
-				nil,
-			)
+				nil, false)
 
 			if tt.expectedError != "" {
 				assert.Error(t, err)
@@ -349,6 +348,7 @@ func TestGenerateResourceUpdatesForReconcile_NewResourceUpdateForCreate(t *testi
 		targetMap,
 		ds,
 		nil,
+		false,
 	)
 
 	assert.NoError(t, err)
@@ -493,6 +493,7 @@ func TestGenerateResourceUpdatesForReconcile_VPCSubnetReplaceScenario(t *testing
 		targetMap,
 		ds,
 		nil,
+		false,
 	)
 
 	assert.NoError(t, err)
@@ -704,6 +705,7 @@ func TestGenerateResourceUpdatesForReconcile_VPCSubnetReplace_Adding_New_Subnet(
 		targetMap,
 		ds,
 		nil,
+		false,
 	)
 
 	assert.NoError(t, err)
@@ -811,7 +813,7 @@ func TestGenerateResourceUpdatesForReconcile_MissingResolvable(t *testing.T) {
 		},
 	}
 
-	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, targetMap, ds, nil)
+	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, targetMap, ds, nil, false)
 	assert.NoError(t, err)
 	assert.Len(t, updates, 1)
 }
@@ -907,7 +909,7 @@ func TestResourceUpdatesForReconcile_GeneratesUpdateOperationsForUnmanagedResour
 		},
 	}
 
-	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, targetMap, ds, nil)
+	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, targetMap, ds, nil, false)
 	assert.NoError(t, err)
 	assert.Len(t, updates, 1)
 	assert.Equal(t, OperationUpdate, updates[0].Operation)
@@ -961,7 +963,7 @@ func TestGenerateResourceUpdatesForReconcile_Create(t *testing.T) {
 		},
 	}
 
-	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, targetMap, ds, nil)
+	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, targetMap, ds, nil, false)
 	assert.NoError(t, err)
 	assert.Len(t, updates, 1)
 	assert.Equal(t, OperationCreate, updates[0].Operation)
@@ -1018,7 +1020,7 @@ func TestGenerateResourceUpdatesForReconcile_StackExists_NoChanges(t *testing.T)
 		},
 	}
 
-	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, targetMap, ds, nil)
+	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, targetMap, ds, nil, false)
 	assert.NoError(t, err)
 	assert.Len(t, updates, 0) // No changes needed
 }
@@ -1107,11 +1109,79 @@ func TestGenerateResourceUpdatesForReconcile_ImplicitDelete(t *testing.T) {
 		},
 	}
 
-	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, targetMap, ds, nil)
+	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, targetMap, ds, nil, false)
 	assert.NoError(t, err)
 	assert.Len(t, updates, 1)
 	assert.Equal(t, OperationDelete, updates[0].Operation)
 	assert.Equal(t, "my-s3-bucket-delete", updates[0].DesiredState.Label)
+}
+
+// TestGenerateResourceUpdatesForReconcile_GeneratorOnlyStackKeepsExistingResources
+// verifies that reconciling a forma which declares only a generator on a
+// stack that already holds a managed resource does not delete that
+// resource. A generator carries no resources of its own, so the split
+// Forma for its stack must never stand in for an empty desired resource
+// set.
+func TestGenerateResourceUpdatesForReconcile_GeneratorOnlyStackKeepsExistingResources(t *testing.T) {
+	ds, _ := GetDeps(t)
+
+	resource := pkgmodel.Resource{
+		Label:  "my-s3-bucket",
+		Type:   "AWS::S3::Bucket",
+		Stack:  "infrastructure",
+		Target: "test-target",
+		Schema: pkgmodel.Schema{
+			Identifier: "BucketName",
+			Hints: map[string]pkgmodel.FieldHint{
+				"BucketName": {
+					CreateOnly: true,
+				},
+			},
+			Fields: []string{"BucketName"},
+		},
+		Properties: json.RawMessage(`{"BucketName": "my-unique-bucket-name"}`),
+		Managed:    true,
+	}
+
+	// First persist the stack with its resource.
+	existingStack := &pkgmodel.Forma{
+		Stacks:    []pkgmodel.Stack{{Label: "infrastructure"}},
+		Resources: []pkgmodel.Resource{resource},
+	}
+	_, err := ds.StoreStack(existingStack, "test-command-1")
+	assert.NoError(t, err)
+
+	generator := json.RawMessage(`{
+		"Type": "password",
+		"Label": "db-password",
+		"Stack": "infrastructure",
+		"Length": 24,
+		"Uppercase": true,
+		"Lowercase": true,
+		"Digits": true,
+		"Symbols": false,
+		"RequireEachIncludedType": true
+	}`)
+
+	// Apply a forma that declares only the generator on the same stack -
+	// the resource is not repeated in the desired state.
+	mode := pkgmodel.FormaApplyModeReconcile
+	forma := &pkgmodel.Forma{
+		Stacks:     []pkgmodel.Stack{{Label: "infrastructure"}},
+		Generators: []json.RawMessage{generator},
+	}
+
+	targetMap := map[string]*pkgmodel.Target{
+		"test-target": {
+			Label:     "test-target",
+			Config:    json.RawMessage(`{"Region": "us-west-2"}`),
+			Namespace: "aws",
+		},
+	}
+
+	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, targetMap, ds, nil, false)
+	assert.NoError(t, err)
+	assert.Empty(t, updates)
 }
 
 func TestGenerateResourceUpdatesForReconcile_Update(t *testing.T) {
@@ -1195,7 +1265,7 @@ func TestGenerateResourceUpdatesForReconcile_Update(t *testing.T) {
 		},
 	}
 
-	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, targetMap, ds, nil)
+	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, targetMap, ds, nil, false)
 	assert.NoError(t, err)
 	assert.Len(t, updates, 1)
 	assert.Equal(t, OperationUpdate, updates[0].Operation)
@@ -1282,7 +1352,7 @@ func TestGenerateResourceUpdatesForReconcile_ReplaceCreateOnlyProperty(t *testin
 		},
 	}
 
-	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, targetMap, ds, nil)
+	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, targetMap, ds, nil, false)
 	assert.NoError(t, err)
 	assert.Len(t, updates, 2)
 
@@ -1386,7 +1456,7 @@ func TestGenerateResourceUpdatesForReconcile_ForwardReferenceToNewResource(t *te
 		{Label: "aws-target", Config: json.RawMessage(`{"Region": "us-east-1"}`), Namespace: "aws"},
 	}
 
-	updates, err := GenerateResourceUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile, FormaCommandSourceUser, existingTargets, ds, nil, nil)
+	updates, err := GenerateResourceUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile, FormaCommandSourceUser, existingTargets, ds, nil, nil, false)
 
 	assert.NoError(t, err, "forward reference to new resource should not cause an error")
 	assert.NotEmpty(t, updates, "should produce resource updates")
@@ -1482,7 +1552,7 @@ func TestGenerateResourceUpdatesForReconcile_AddNewResourceWithForwardReference(
 		{Label: "aws-target", Config: json.RawMessage(`{"Region": "us-east-1"}`), Namespace: "aws"},
 	}
 
-	updates, err := GenerateResourceUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile, FormaCommandSourceUser, existingTargets, ds, nil, nil)
+	updates, err := GenerateResourceUpdates(forma, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile, FormaCommandSourceUser, existingTargets, ds, nil, nil, false)
 
 	assert.NoError(t, err, "adding new resource with forward reference should not cause an error")
 	assert.NotEmpty(t, updates, "should produce resource updates")
@@ -1560,6 +1630,7 @@ func TestTargetReplace_Reconcile_AllPortable(t *testing.T) {
 		desiredTargetMap,
 		ds,
 		replacedTargets,
+		false,
 	)
 
 	assert.NoError(t, err)
@@ -1641,6 +1712,7 @@ func TestTargetReplace_Reconcile_NonPortableInForma_Rejected(t *testing.T) {
 		desiredTargetMap,
 		ds,
 		replacedTargets,
+		false,
 	)
 
 	require.Error(t, err)
@@ -1730,6 +1802,7 @@ func TestTargetReplace_Reconcile_NonPortableNotInForma_Succeeds(t *testing.T) {
 		desiredTargetMap,
 		ds,
 		replacedTargets,
+		false,
 	)
 
 	assert.NoError(t, err)
@@ -1790,6 +1863,7 @@ func TestTargetReplace_Reconcile_TargetOnlyForma_RecreatesAll(t *testing.T) {
 		desiredTargetMap,
 		ds,
 		replacedTargets,
+		false,
 	)
 
 	assert.NoError(t, err)
@@ -1806,4 +1880,203 @@ func TestTargetReplace_Reconcile_TargetOnlyForma_RecreatesAll(t *testing.T) {
 	}
 	assert.Equal(t, 1, deleteCount, "should have 1 delete for vpc")
 	assert.Equal(t, 1, createCount, "should have 1 create for vpc")
+}
+
+// A resource that declares `alias` matches an existing managed row
+// by the alias label under reconcile mode. The renamed resource must surface
+// as a single OperationUpdate (label change in PriorState/DesiredState), NOT
+// as Delete(old) + Create(new). The destroy-and-recreate outcome would
+// destroy the underlying cloud object — exactly what this RFC avoids.
+func TestGenerateResourceUpdatesForReconcile_RenameViaAlias(t *testing.T) {
+	ds, _ := GetDeps(t)
+
+	ksuid := util.NewID()
+	existingStack := &pkgmodel.Forma{
+		Stacks: []pkgmodel.Stack{{Label: "prod"}},
+		Resources: []pkgmodel.Resource{
+			{
+				Ksuid:      ksuid,
+				Label:      "web-server",
+				Type:       "AWS::EC2::Instance",
+				Stack:      "prod",
+				Target:     "test-target",
+				NativeID:   "i-0abc1234",
+				Properties: json.RawMessage(`{"InstanceType": "t2.micro"}`),
+				Managed:    true,
+			},
+		},
+	}
+	if _, err := ds.StoreStack(existingStack, "setup"); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	forma := &pkgmodel.Forma{
+		Stacks: []pkgmodel.Stack{{Label: "prod"}},
+		Resources: []pkgmodel.Resource{
+			{
+				Label:      "app-server",
+				Alias:      "web-server",
+				Type:       "AWS::EC2::Instance",
+				Stack:      "prod",
+				Target:     "test-target",
+				Properties: json.RawMessage(`{"InstanceType": "t2.micro"}`),
+				Managed:    true,
+			},
+		},
+	}
+	targetMap := map[string]*pkgmodel.Target{
+		"test-target": {Label: "test-target", Namespace: "aws", Config: json.RawMessage(`{}`)},
+	}
+
+	updates, err := generateResourceUpdatesForReconcile(
+		forma,
+		pkgmodel.FormaApplyModeReconcile,
+		FormaCommandSourceUser,
+		targetMap,
+		targetMap,
+		ds,
+		nil,
+		false,
+	)
+	require.NoError(t, err)
+	require.Len(t, updates, 1, "rename under reconcile must emit one update, not delete+create")
+
+	u := updates[0]
+	assert.Equal(t, OperationUpdate, u.Operation, "must be OperationUpdate, not Delete or Create")
+	assert.Equal(t, "web-server", u.PriorState.Label, "PriorState carries old label")
+	assert.Equal(t, "app-server", u.DesiredState.Label, "DesiredState carries new label")
+	assert.Equal(t, ksuid, u.DesiredState.Ksuid, "KSUID preserved across rename")
+}
+
+// Rename + property change in reconcile mode: still ONE OperationUpdate,
+// PatchDocument present for the property delta.
+func TestGenerateResourceUpdatesForReconcile_RenameWithPropertyChange(t *testing.T) {
+	ds, _ := GetDeps(t)
+
+	ksuid := util.NewID()
+	existingStack := &pkgmodel.Forma{
+		Stacks: []pkgmodel.Stack{{Label: "prod"}},
+		Resources: []pkgmodel.Resource{
+			{
+				Ksuid:      ksuid,
+				Label:      "web-server",
+				Type:       "AWS::EC2::Instance",
+				Stack:      "prod",
+				Target:     "test-target",
+				Schema:     pkgmodel.Schema{Fields: []string{"InstanceType"}},
+				Properties: json.RawMessage(`{"InstanceType": "t2.micro"}`),
+				Managed:    true,
+			},
+		},
+	}
+	if _, err := ds.StoreStack(existingStack, "setup"); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	forma := &pkgmodel.Forma{
+		Stacks: []pkgmodel.Stack{{Label: "prod"}},
+		Resources: []pkgmodel.Resource{
+			{
+				Label:      "app-server",
+				Alias:      "web-server",
+				Type:       "AWS::EC2::Instance",
+				Stack:      "prod",
+				Target:     "test-target",
+				Schema:     pkgmodel.Schema{Fields: []string{"InstanceType"}},
+				Properties: json.RawMessage(`{"InstanceType": "t3.medium"}`),
+				Managed:    true,
+			},
+		},
+	}
+	targetMap := map[string]*pkgmodel.Target{
+		"test-target": {Label: "test-target", Namespace: "aws", Config: json.RawMessage(`{}`)},
+	}
+
+	updates, err := generateResourceUpdatesForReconcile(
+		forma,
+		pkgmodel.FormaApplyModeReconcile,
+		FormaCommandSourceUser,
+		targetMap,
+		targetMap,
+		ds,
+		nil,
+		false,
+	)
+	require.NoError(t, err)
+	require.Len(t, updates, 1)
+
+	u := updates[0]
+	assert.Equal(t, OperationUpdate, u.Operation)
+	assert.Equal(t, "web-server", u.PriorState.Label)
+	assert.Equal(t, "app-server", u.DesiredState.Label)
+	assert.NotNil(t, u.DesiredState.PatchDocument, "patch document expected for property change")
+}
+
+// Bring-under-management + rename in a single reconcile.
+// The forma's resource declares the NEW human label and an alias to the
+// discovery default. The unmanaged row sits at the discovery default in the
+// $unmanaged stack. Reconcile must emit ONE OperationUpdate pairing the
+// unmanaged row with the new declaration (KSUID + NativeID preserved),
+// NOT a Create for the new label.
+func TestGenerateResourceUpdatesForReconcile_BringingUnderManagementAndRename(t *testing.T) {
+	ds, _ := GetDeps(t)
+
+	ksuid := util.NewID()
+	// Seed an unmanaged row at the discovery default label.
+	if _, err := ds.StoreStack(&pkgmodel.Forma{
+		Resources: []pkgmodel.Resource{
+			{
+				Ksuid:      ksuid,
+				Label:      "i-0abc1234",
+				Type:       "AWS::EC2::Instance",
+				Stack:      "$unmanaged",
+				Target:     "test-target",
+				NativeID:   "i-0abc1234",
+				Properties: json.RawMessage(`{"InstanceType": "t2.micro"}`),
+				Managed:    false,
+			},
+		},
+	}, "discovery"); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	forma := &pkgmodel.Forma{
+		Stacks: []pkgmodel.Stack{{Label: "prod"}},
+		Resources: []pkgmodel.Resource{
+			{
+				Label:      "web-server",
+				Alias:      "i-0abc1234",
+				Type:       "AWS::EC2::Instance",
+				Stack:      "prod",
+				Target:     "test-target",
+				Properties: json.RawMessage(`{"InstanceType": "t2.micro"}`),
+				Managed:    true,
+			},
+		},
+	}
+	targetMap := map[string]*pkgmodel.Target{
+		"test-target": {Label: "test-target", Namespace: "aws", Config: json.RawMessage(`{}`)},
+	}
+
+	updates, err := generateResourceUpdatesForReconcile(
+		forma,
+		pkgmodel.FormaApplyModeReconcile,
+		FormaCommandSourceUser,
+		targetMap,
+		targetMap,
+		ds,
+		nil,
+		false,
+	)
+	require.NoError(t, err)
+	require.Len(t, updates, 1, "bring-under-management + rename must emit one update, not Create+leave-orphan")
+
+	u := updates[0]
+	assert.Equal(t, OperationUpdate, u.Operation, "must be OperationUpdate, not Create")
+	assert.Equal(t, "i-0abc1234", u.PriorState.Label, "PriorState carries discovery default label")
+	assert.Equal(t, "$unmanaged", u.PriorState.Stack, "PriorState in $unmanaged")
+	assert.Equal(t, "web-server", u.DesiredState.Label, "DesiredState carries new human label")
+	assert.Equal(t, "prod", u.DesiredState.Stack, "DesiredState in target stack")
+	assert.Equal(t, ksuid, u.DesiredState.Ksuid, "KSUID preserved across import+rename")
+	assert.Equal(t, "i-0abc1234", u.DesiredState.NativeID, "NativeID preserved")
 }

@@ -60,6 +60,19 @@ local testTarget = new formae.Target {
     }
 }
 
+local testNeverReap = new formae.NeverReap {}
+
+local testReapAfter = new formae.ReapAfter {
+    maxUnreachable = 30.min
+}
+
+local testTargetWithReap = new formae.Target {
+    label = "reapable-target"
+    namespace = "AWS"
+    discoverable = true
+    reap = testReapAfter
+}
+
 // Test base resource class
 @formae.ResourceHint {
     type = "AWS::S3::Bucket"
@@ -257,6 +270,135 @@ local testDeepNested = new TestDeepNested {
     }
 }
 
+// Test that a SecretValue-typed field is marked Opaque in extracted hints,
+// covering direct/nullable/union field-type positions.
+@formae.ResourceHint {
+    type = "Test::Secret"
+    identifier = "Ref"
+}
+local class TestSecretResource extends formae.Resource {
+    @formae.FieldHint
+    secretString: (String|formae.SecretValue)?
+
+    @formae.FieldHint
+    plainString: String
+}
+
+local testSecretResource = new TestSecretResource {
+    label = "test-secret"
+    secretString = "shh"
+    plainString = "value"
+}
+
+// Test that a SecretValue-typed field nested inside a SubResource is also
+// marked Opaque, covering the subresource-scalar position.
+@formae.SubResourceHint
+local class TestSecretSub extends formae.SubResource {
+    @formae.FieldHint
+    secretNested: (String|formae.SecretValue)?
+}
+
+@formae.ResourceHint {
+    type = "Test::SecretParent"
+    identifier = "Ref"
+}
+local class TestSecretParentResource extends formae.Resource {
+    @formae.FieldHint
+    nested: TestSecretSub
+}
+
+local testSecretParentResource = new TestSecretParentResource {
+    label = "test-secret-parent"
+    nested = new TestSecretSub {
+        secretNested = "shh-nested"
+    }
+}
+
+// Test that a secret field typed through a typealias (rather than referencing
+// formae.SecretValue directly) is still marked Opaque, covering the
+// reflect.TypeAlias referent position in isSecretValueType.
+local typealias TestSecretAlias = String|formae.SecretValue
+
+@formae.ResourceHint {
+    type = "Test::SecretAlias"
+    identifier = "Ref"
+}
+local class TestSecretAliasResource extends formae.Resource {
+    @formae.FieldHint
+    secretAliased: TestSecretAlias?
+}
+
+local testSecretAliasResource = new TestSecretAliasResource {
+    label = "test-secret-alias"
+    secretAliased = "shh-alias"
+}
+
+// Test a field that names formae.ValueSource in place of spelling the envelope
+// members out: the field is still marked Opaque, it takes each member of the
+// alias, and it rejects a value belonging to none of them. A second field pairs
+// the alias with a constrained String literal, so that the constraint is shown
+// to survive the alias beside it.
+@formae.ResourceHint {
+    type = "Test::ValueSource"
+    identifier = "Ref"
+}
+local class TestValueSourceResource extends formae.Resource {
+    @formae.FieldHint
+    supplied: (String|formae.ValueSource)?
+
+    @formae.FieldHint
+    constrained: (String(matches(Regex(#"ok-.*"#)))|formae.ValueSource)?
+
+    @formae.FieldHint
+    plain: String
+}
+
+local testValueSourceResource = new TestValueSourceResource {
+    label = "test-value-source"
+    supplied = "literal"
+    plain = "value"
+}
+
+// One instance per member of the alias, so a member the alias fails to admit is
+// an eval-time type error on that instance rather than a silent pass.
+local valueSourceLiteral = (testValueSourceResource) { supplied = "literal" }
+
+local valueSourceValue = (testValueSourceResource) {
+    supplied = new formae.Value { value = "recorded" }
+}
+
+local valueSourceSecret = (testValueSourceResource) {
+    supplied = new formae.SecretValue { value = "shh" }
+}
+
+local valueSourceResolvable = (testValueSourceResource) {
+    supplied = new formae.Resolvable {
+        label = "bucket"
+        stack = "storage"
+        type = "namespace::resource::s3bucket"
+        property = "BucketName"
+    }
+}
+
+local valueSourceGenerated = (testValueSourceResource) {
+    supplied = new formae.GeneratorOutput {
+        genLabel = "db-password-gen"
+        output = "value"
+    }
+}
+
+// A member of no envelope family the alias names, so the alias is shown to be a
+// closed set rather than anything at all.
+local valueSourceForeign = (testValueSourceResource) {
+    supplied = formae.embed("a-template")
+}
+
+local constrainedMatching = (testValueSourceResource) { constrained = "ok-literal" }
+local constrainedViolating = (testValueSourceResource) { constrained = "BAD" }
+local constrainedEnvelope = (testValueSourceResource) {
+    constrained = new formae.SecretValue { value = "shh" }
+}
+
 // Test config class with ConfigFieldHint annotations
 local class TestConfig {
     hidden fixed type: String = "TestProvider"
@@ -311,6 +453,263 @@ local testTargetNoConfig = new formae.Target {
     discoverable = false
 }
 
+local relativeTTL = new formae.TTLPolicy {
+    label = "relative-ttl"
+    ttl = 1.h
+}
+
+local absoluteTTL = new formae.TTLPolicy {
+    label = "absolute-ttl"
+    expiresAt = "2026-08-07T12:00:00Z"
+}
+
+local bothVariantsTTL = new formae.TTLPolicy {
+    label = "both-ttl"
+    ttl = 1.h
+    expiresAt = "2026-08-07T12:00:00Z"
+}
+
+local neitherVariantTTL = new formae.TTLPolicy {
+    label = "neither-ttl"
+}
+
+local rotatingGenerator = new formae.PasswordGenerator {
+    label = "rotating-password"
+    stack = stackResolvable
+    rotation = new formae.RotationSpec {
+        every = 24.h
+    }
+}
+
+local nonRotatingGenerator = new formae.PasswordGenerator {
+    label = "steady-password"
+    stack = stackResolvable
+}
+
+local keyPairGen = new formae.KeyPairGenerator {
+    label = "id-key"
+    stack = stackResolvable
+}
+
+local wideKeyPairGen = new formae.KeyPairGenerator {
+    label = "wide-id-key"
+    stack = stackResolvable
+    bits = 4096
+}
+
+local oddKeyPairGen = new formae.KeyPairGenerator {
+    label = "odd-id-key"
+    stack = stackResolvable
+    bits = 1024
+}
+
+local cadencelessRotation = new formae.PasswordGenerator {
+    label = "cadenceless-password"
+    stack = stackResolvable
+    rotation = new formae.RotationSpec {}
+}
+
+local subMinuteRotation = new formae.PasswordGenerator {
+    label = "sub-minute-password"
+    stack = stackResolvable
+    rotation = new formae.RotationSpec {
+        every = 500.ms
+    }
+}
+
+local minimumRotation = new formae.PasswordGenerator {
+    label = "minimum-password"
+    stack = stackResolvable
+    rotation = new formae.RotationSpec {
+        every = 15.min
+    }
+}
+
+// Schema classes that sit under an intermediate base rather than extending
+// formae.SubResource / formae.Resource directly. The subclasses inherit the
+// base's annotated fields, redeclare one of them (narrowing String? to String),
+// redeclare another under a different outputField, and add their own.
+@formae.SubResourceHint {
+    outputKeyTransformation = (it) -> it.capitalize()
+}
+open local class TestBaseSetting extends formae.SubResource {
+    @formae.FieldHint
+    name: String
+
+    @formae.FieldHint
+    description: String?
+
+    @formae.FieldHint {
+        outputField = "BaseKey"
+    }
+    key: String?
+}
+
+@formae.SubResourceHint {
+    outputKeyTransformation = (it) -> it.capitalize()
+}
+local class TestDerivedSetting extends TestBaseSetting {
+    @formae.FieldHint
+    description: String
+
+    @formae.FieldHint {
+        outputField = "DerivedKey"
+    }
+    key: String?
+
+    @formae.FieldHint
+    extra: String?
+}
+
+local derivedSetting = new TestDerivedSetting {
+    name = "derived"
+    description = "narrowed on the subclass"
+    key = "derived-key"
+    extra = "child-only"
+}
+
+@formae.ResourceHint {
+    type = "Test::BaseWidget"
+    identifier = "Ref"
+    outputKeyTransformation = (it) -> it.capitalize()
+}
+open local class TestBaseWidget extends formae.Resource {
+    @formae.FieldHint
+    widgetName: String
+
+    @formae.FieldHint {
+        createOnly = true
+    }
+    zone: String?
+}
+
+@formae.ResourceHint {
+    type = "Test::DerivedWidget"
+    identifier = "Ref"
+    outputKeyTransformation = (it) -> it.capitalize()
+}
+local class TestDerivedWidget extends TestBaseWidget {
+    @formae.FieldHint
+    size: Int?
+}
+
+local derivedWidget = new TestDerivedWidget {
+    label = "derived-widget"
+    widgetName = "my-widget"
+    zone = "eu-west-1"
+    size = 3
+}
+
+// A provider secret: its chain runs TestProviderSecret -> formae.Secret ->
+// formae.Resource, so formae.Secret is an intermediate base too.
+@formae.ResourceHint {
+    type = "Test::ProviderSecret"
+    identifier = "Ref"
+    outputKeyTransformation = (it) -> it.capitalize()
+}
+local class TestProviderSecret extends formae.Secret {
+    hidden valueProperty = "secretValue"
+
+    @formae.FieldHint
+    secretName: String
+
+    @formae.FieldHint
+    secretValue: (String|formae.SecretValue)?
+}
+
+// A sub-resource whose nested sub-resource field is declared on an
+// intermediate base, so the subclass reaches it only through the superclass
+// chain.
+@formae.SubResourceHint {
+    outputKeyTransformation = (it) -> it.capitalize()
+}
+open local class TestBaseContainer extends formae.SubResource {
+    @formae.FieldHint
+    containerName: String
+
+    @formae.FieldHint
+    inner: TestBaseSetting?
+}
+
+@formae.SubResourceHint {
+    outputKeyTransformation = (it) -> it.capitalize()
+}
+local class TestDerivedContainer extends TestBaseContainer {
+    @formae.FieldHint
+    weight: Int?
+}
+
+// A resource whose scalar and sub-resource-typed fields are declared on an
+// intermediate base. The subclass redeclares one of them, narrowing String? to
+// String, and adds its own.
+@formae.ResourceHint {
+    type = "Test::BaseGadget"
+    identifier = "Ref"
+    outputKeyTransformation = (it) -> it.capitalize()
+}
+open local class TestBaseGadget extends formae.Resource {
+    @formae.FieldHint
+    gadgetName: String
+
+    @formae.FieldHint
+    tone: String?
+
+    @formae.FieldHint
+    setting: TestDerivedContainer?
+}
+
+@formae.ResourceHint {
+    type = "Test::DerivedGadget"
+    identifier = "Ref"
+    outputKeyTransformation = (it) -> it.capitalize()
+}
+local class TestDerivedGadget extends TestBaseGadget {
+    @formae.FieldHint
+    tone: String
+
+    @formae.FieldHint
+    speed: Int?
+}
+
+local derivedGadget = new TestDerivedGadget {
+    label = "derived-gadget"
+    gadgetName = "my-gadget"
+    tone = "bright"
+    speed = 2
+}
+
+// A resource whose Resolvable-typed field is declared on an intermediate base,
+// so resolvable validation reaches the field only through the superclass chain.
+@formae.ResourceHint {
+    type = "Test::BaseLink"
+    identifier = "Ref"
+    outputKeyTransformation = (it) -> it.capitalize()
+}
+open local class TestBaseLink extends formae.Resource {
+    @formae.FieldHint
+    linkTarget: String|formae.Resolvable
+}
+
+@formae.ResourceHint {
+    type = "Test::DerivedLink"
+    identifier = "Ref"
+    outputKeyTransformation = (it) -> it.capitalize()
+}
+local class TestDerivedLink extends TestBaseLink {
+    @formae.FieldHint
+    note: String?
+}
+
+local derivedLinkWithUnlabelledResolvable = new TestDerivedLink {
+    label = "derived-link"
+    linkTarget = new formae.Resolvable {
+        type = "Test::Other::Thing"
+        stack = "default"
+    }
+}
+
+local emptyForma = new formae.FormaRender {}
+
 examples {
     ["Basic Resolvable"] {
         resolvable
@@ -346,6 +745,18 @@ examples {
 
     ["Target"] {
         testTarget
+    }
+
+    ["NeverReap render()"] {
+        testNeverReap.render()
+    }
+
+    ["ReapAfter render()"] {
+        testReapAfter.render()
+    }
+
+    ["Target with reap"] {
+        testTargetWithReap
     }
 
     ["Test Resource - fields()"] {
@@ -384,6 +795,14 @@ examples {
         formae.fq.hints(reflect.Class(TestBucket))
     }
 
+    ["Test Secret Resource - hints()"] {
+        testSecretResource.hints()
+    }
+
+    ["Test Secret Parent Resource - hints()"] {
+        testSecretParentResource.hints()
+    }
+
     ["Fq - schema"] {
         formae.fq.schema(reflect.Class(TestBucket))
     }
@@ -391,9 +810,82 @@ examples {
     ["Fq - type"] {
         formae.fq.type(reflect.Class(TestBucket))
     }
+
+    ["TTL policy with both ttl and expiresAt is rejected"] {
+        module.catch(() -> bothVariantsTTL.render())
+    }
+
+    ["TTL policy with neither ttl nor expiresAt is rejected"] {
+        module.catch(() -> neitherVariantTTL.render())
+    }
+
+    ["Generator with rotation render()"] {
+        rotatingGenerator.render()
+    }
+
+    ["Generator without rotation render()"] {
+        nonRotatingGenerator.render()
+    }
 }
 
 facts {
+    ["Rotation renders its cadence in seconds"] {
+        rotatingGenerator.render().Rotation.EverySeconds == 86400
+    }
+
+    ["A generator without rotation renders no cadence"] {
+        rotatingGenerator.render().toMap().containsKey("Rotation") &&
+        nonRotatingGenerator.render().Rotation == null
+    }
+
+    ["A rotation spec without a cadence is rejected"] {
+        module.catch(() -> cadencelessRotation.render().Rotation.EverySeconds) != null
+    }
+
+    ["A cadence below the scheduler's floor is rejected, naming the field"] {
+        module.catch(() -> subMinuteRotation.render().Rotation.EverySeconds)
+            .contains("RotationSpec.every")
+    }
+
+    ["KeyPairGenerator renders its type, default bits, and no rotation"] {
+        keyPairGen.render().Type == "keypair" &&
+        keyPairGen.render().Bits == 2048 &&
+        keyPairGen.render().Rotation == null
+    }
+
+    ["KeyPairGenerator accepts each supported size"] {
+        wideKeyPairGen.render().Bits == 4096
+    }
+
+    ["A key size outside the supported set is rejected, naming the field"] {
+        module.catch(() -> oddKeyPairGen.render().Bits)
+            .contains("KeyPairGenerator.bits")
+    }
+
+    ["KeyPairGenerator's outputs render distinct $output names"] {
+        keyPairGen.gen.privateKey.$output == "privateKey" &&
+        keyPairGen.gen.publicKey.$output == "publicKey" &&
+        keyPairGen.gen.privateKey.$visibility == "Opaque" &&
+        keyPairGen.gen.publicKey.$visibility == "Opaque" &&
+        keyPairGen.gen.privateKey.$label == "id-key"
+    }
+
+    ["The floor itself is a cadence"] {
+        minimumRotation.render().Rotation.EverySeconds == 900
+    }
+
+    ["Relative TTL policy renders TTLSeconds and no ExpiresAt"] {
+        relativeTTL.render().toMap().containsKey("TTLSeconds") &&
+        !relativeTTL.render().toMap().containsKey("ExpiresAt") &&
+        relativeTTL.render().TTLSeconds == 3600
+    }
+
+    ["Absolute TTL policy renders ExpiresAt and no TTLSeconds"] {
+        absoluteTTL.render().toMap().containsKey("ExpiresAt") &&
+        !absoluteTTL.render().toMap().containsKey("TTLSeconds") &&
+        absoluteTTL.render().ExpiresAt == "2026-08-07T12:00:00Z"
+    }
+
     ["Stack resolvable inherits from Resolvable"] {
         stackResolvable is formae.Resolvable
     }
@@ -476,12 +968,16 @@ facts {
         rendered.Label == "test-bucket"
     }
 
-    ["Nullable Listing renders as empty list when null"] {
+    ["Unset nullable Listing is omitted from Properties"] {
         let (rendered = testBucketNoTags.render())
         let (props = rendered.Properties)
-        // Tags should be an empty Listing, not null
-        props.Tags != null &&
-        props.Tags.length == 0
+        !props.toMap().containsKey("Tags")
+    }
+
+    ["Unset nullable scalar still renders as null"] {
+        let (rendered = testBucketNoTags.render())
+        let (props = rendered.Properties)
+        props.toMap().containsKey("Region") && props.Region == null
     }
 
     ["Hints propagate through Listing<SubResource>"] {
@@ -508,25 +1004,20 @@ facts {
         hints["Volumes.EfsVolumeConfiguration.RootDirectory"].HasProviderDefault == true
     }
 
-    ["Nullable Mapping renders as empty map when null"] {
-        // Test subresource rendering directly - nullable Mapping type alias should render as empty Mapping
+    ["Nullable Mapping is omitted from sub-resource when not set"] {
         let (containerProps = testTaskDef.containerDefinitions[0].props())
-        containerProps.DockerLabels != null &&
-        containerProps.DockerLabels.length == 0
+        !containerProps.toMap().containsKey("DockerLabels")
     }
 
-    ["Nullable Listing renders as empty list in sub-resource when null"] {
-        // Test subresource rendering directly - nullable Listing should render as empty Listing
+    ["Nullable Listing is omitted from sub-resource when not set"] {
         let (containerProps = testTaskDef.containerDefinitions[0].props())
-        containerProps.Ports != null &&
-        containerProps.Ports.length == 0
+        !containerProps.toMap().containsKey("Ports")
     }
 
-    ["Nullable Listing<SubResource> renders as empty list when null"] {
+    ["Nullable Listing<SubResource> is omitted from Properties when not set"] {
         let (rendered = testTaskDefNoContainers.render())
         let (props = rendered.Properties)
-        props.ContainerDefinitions != null &&
-        props.ContainerDefinitions.length == 0
+        !props.toMap().containsKey("ContainerDefinitions")
     }
 
     ["ConfigSchema generated for annotated config"] {
@@ -577,6 +1068,69 @@ facts {
         type == "AWS::S3::Bucket"
     }
 
+    ["Opaque hint set for direct/nullable/union SecretValue field"] {
+        let (hints = testSecretResource.hints())
+        hints["secretString"].Opaque == true &&
+        hints["plainString"].Opaque == false
+    }
+
+    ["Opaque hint propagates for SecretValue field inside SubResource"] {
+        let (hints = testSecretParentResource.hints())
+        hints["nested.secretNested"].Opaque == true
+    }
+
+    ["Opaque hint set for typealias-typed SecretValue field"] {
+        let (hints = testSecretAliasResource.hints())
+        hints["secretAliased"].Opaque == true
+    }
+
+    ["Opaque hint set for a field naming ValueSource"] {
+        let (hints = testValueSourceResource.hints())
+        hints["supplied"].Opaque == true &&
+        hints["constrained"].Opaque == true &&
+        hints["plain"].Opaque == false
+    }
+
+    ["A field naming ValueSource takes a literal String"] {
+        valueSourceLiteral.supplied == "literal"
+    }
+
+    ["A field naming ValueSource takes a recorded Value"] {
+        (valueSourceValue.supplied as formae.Value).$value == "recorded"
+    }
+
+    ["A field naming ValueSource takes a SecretValue"] {
+        (valueSourceSecret.supplied as formae.SecretValue).$value == "shh"
+    }
+
+    ["A field naming ValueSource takes a Resolvable"] {
+        (valueSourceResolvable.supplied as formae.Resolvable).$property == "BucketName"
+    }
+
+    ["A field naming ValueSource takes a GeneratorOutput"] {
+        (valueSourceGenerated.supplied as formae.GeneratorOutput).$output == "value"
+    }
+
+    ["A field naming ValueSource rejects an envelope of no member's family"] {
+        module.catch(() -> valueSourceForeign.supplied)
+            .contains("String|formae.ValueSource")
+    }
+
+    ["A constrained literal beside ValueSource takes a matching String"] {
+        constrainedMatching.constrained == "ok-literal"
+    }
+
+    // The constraint is what breaks were String a member of the alias: the
+    // alias's own unconstrained String arm would take this value.
+    ["A constrained literal beside ValueSource rejects a violating String"] {
+        module.catch(() -> constrainedViolating.constrained)
+            .contains("matches(Regex(#\"ok-.*\"#))")
+    }
+
+    ["A constrained literal beside ValueSource still takes an envelope"] {
+        (constrainedEnvelope.constrained as formae.SecretValue).$value == "shh"
+    }
+
     ["FieldHint exposes AttachesTo"] {
         testAttachesToSchema.Hints["F1"].AttachesTo == true
     }
@@ -584,6 +1138,266 @@ facts {
     ["FieldHint AttachesTo defaults to false"] {
         (new formae.FieldHint {}).AttachesTo == false
     }
+
+    ["FieldHint EdgeKind defaults to default"] {
+        (new formae.FieldHint {}).EdgeKind == "default"
+    }
+
+    ["FieldHint EdgeKind attachesTo is set correctly"] {
+        testEdgeKindSchema.Hints["F2"].EdgeKind == "attachesTo"
+    }
+
+    ["FieldHint EdgeKind runtimeDependency is set correctly"] {
+        testEdgeKindSchema.Hints["F3"].EdgeKind == "runtimeDependency"
+    }
+
+    ["ResourceHint accepts a single ParentRef"] {
+        let (hint = singleParentRefHint())
+        hint.parentRefs != null &&
+        hint.parentRefs is formae.ParentRef &&
+        hint.parentRefs.parentProperty == "FileSystemId" &&
+        hint.parentRefs.childProperty == "FileSystemId"
+    }
+
+    // `parentRefs` is typed `(ParentRef|List<ParentRef>)?`, so PKL rejects a
+    // `Listing<ParentRef>` literal at the type check (verified empirically:
+    // assigning `new Listing { ... }` errors with "Expected value of type
+    // `ParentRef|List<ParentRef>`, but got type `Listing`"). Extractor.pkl
+    // still branches on `is Listing` before `is List` for `listParam`, but
+    // for `parentRefs` only the `List` arm is reachable; Task 1.4 may omit
+    // the Listing branch.
+    ["ResourceHint accepts a List of ParentRef"] {
+        let (hint = listParentRefsHint())
+        hint.parentRefs != null &&
+        hint.parentRefs is List &&
+        hint.parentRefs.length == 2 &&
+        hint.parentRefs[0].parentProperty == "ServiceName" &&
+        hint.parentRefs[0].childProperty == "Service" &&
+        hint.parentRefs[1].parentProperty == "Cluster" &&
+        hint.parentRefs[1].childProperty == "Cluster"
+    }
+
+    ["ResourceHint without parentRefs but with listParam still works"] {
+        let (hint = listParamOnlyHint())
+        hint.parentRefs == null &&
+        hint.listParam != null &&
+        hint.listParam is formae.ListProperty
+    }
+
+    ["ResourceHint parentRefs defaults to null"] {
+        let (hint = noParentRefsHint())
+        hint.parentRefs == null
+    }
+
+    local embedResolvable = new formae.Resolvable {
+        label = "kvs"; type = "AWS::CloudFront::KeyValueStore"; stack = "default"; property = "id"
+    }
+    local embedded = formae.embed("cf.kvs('\(embedResolvable)')")
+
+    ["embed() sets $embed = true"] {
+        embedded.$embed == true
+    }
+    ["embed() template wraps the resolvable in RS<base64>US"] {
+        // RS then base64 chars then US, inside the literal
+        embedded.$template.matches(Regex("cf\\.kvs\\('\\u001e[A-Za-z0-9+/=]+\\u001f'\\)"))
+    }
+    ["framed base64 decodes to the $res envelope"] {
+        let (b64 = embedded.$template.split("\u{1e}")[1].split("\u{1f}")[0])
+        let (json = b64.base64Decoded)
+        json.contains(#""$res":true"#) && json.contains(#""$label":"kvs""#)
+        && json.contains(#""$property":"id""#)
+    }
+    ["whole-value rendering is unchanged (still the envelope object)"] {
+        embedResolvable.$res == true && embedResolvable.$label == "kvs"
+    }
+
+    ["Sub-resource under an intermediate base renders inherited and own properties"] {
+        let (props = derivedSetting.props().toMap())
+        props["Name"] == "derived" &&
+        props["Description"] == "narrowed on the subclass" &&
+        props["Extra"] == "child-only"
+    }
+
+    ["Sub-resource inherited properties render parent-first with overrides in place"] {
+        derivedSetting.props().toMap().keys.toList() ==
+            List("Name", "Description", "DerivedKey", "Extra")
+    }
+
+    ["Sub-resource redeclaring a property renders under the subclass output field"] {
+        let (props = derivedSetting.props().toMap())
+        // "Name" comes from the base only, so its presence is what makes the
+        // absence of "BaseKey" mean the subclass won rather than that the base
+        // was skipped altogether.
+        props.containsKey("Name") &&
+        props["DerivedKey"] == "derived-key" &&
+        !props.containsKey("BaseKey")
+    }
+
+    ["Resource under an intermediate base renders its inherited annotated fields"] {
+        let (props = derivedWidget.render().Properties.toMap())
+        props["WidgetName"] == "my-widget" &&
+        props["Zone"] == "eu-west-1" &&
+        props["Size"] == 3
+    }
+
+    ["allProperties stops at Resource for a direct subclass"] {
+        formae.fq.allProperties(reflect.Class(TestBucket)).keys.toList() ==
+            List("bucketName", "region", "tags")
+    }
+
+    ["allProperties walks the intermediate base of a Resource subclass"] {
+        formae.fq.allProperties(reflect.Class(TestDerivedWidget)).keys.toList() ==
+            List("widgetName", "zone", "size")
+    }
+
+    // The helper collects valueProperty from formae.Secret; dropping it from
+    // the rendered schema is the job of the `hidden` filter downstream.
+    ["allProperties collects a Secret's valueProperty and stops at Resource"] {
+        formae.fq.allProperties(reflect.Class(TestProviderSecret)).keys.toList() ==
+            List("valueProperty", "secretName", "secretValue")
+    }
+
+    ["allProperties stops at SubResource for a direct subclass"] {
+        formae.fq.allProperties(reflect.Class(TestBaseSetting)).keys.toList() ==
+            List("name", "description", "key")
+    }
+
+    ["allProperties walks the intermediate base of a SubResource subclass"] {
+        formae.fq.allProperties(reflect.Class(TestDerivedSetting)).keys.toList() ==
+            List("name", "description", "key", "extra")
+    }
+
+    ["allProperties yields only own properties outside the resource hierarchy"] {
+        formae.fq.allProperties(reflect.Class(TestConfig)).keys.toList() ==
+            List("type", "region", "profile", "accountId",
+                 "Type", "Region", "Profile", "AccountId")
+    }
+
+    ["Resource hints and fields cover properties inherited from an intermediate base"] {
+        let (hints = derivedGadget.hints())
+        let (fields = derivedGadget.fields())
+        hints.containsKey("GadgetName") &&
+        hints.containsKey("Tone") &&
+        hints.containsKey("Speed") &&
+        fields.contains("GadgetName") &&
+        fields.contains("Tone") &&
+        fields.contains("Speed")
+    }
+
+    ["Required on a redeclared property comes from the subclass's narrowed type"] {
+        let (hints = derivedGadget.hints())
+        // GadgetName is declared on the base only, so its presence is what
+        // makes Tone's Required a statement about which declaration won rather
+        // than about the subclass's own declaration being read on its own.
+        hints.containsKey("GadgetName") &&
+        hints["GadgetName"].Required == true &&
+        hints["Tone"].Required == true &&
+        hints["Speed"].Required == false
+    }
+
+    ["Inherited sub-resource field contributes nested hints"] {
+        let (hints = derivedGadget.hints())
+        hints.containsKey("Setting") &&
+        hints.containsKey("Setting.ContainerName") &&
+        hints.containsKey("Setting.Weight") &&
+        hints.containsKey("Setting.Inner.Name") &&
+        hints.containsKey("Setting.Inner.BaseKey")
+    }
+
+    ["Sub-resource hints cover inherited direct and nested fields"] {
+        let (hints = formae.fq.subHints(reflect.Class(TestDerivedContainer)))
+        hints.containsKey("ContainerName") &&
+        hints.containsKey("Weight") &&
+        hints.containsKey("Inner") &&
+        hints.containsKey("Inner.Name") &&
+        hints.containsKey("Inner.BaseKey")
+    }
+
+    ["Resource hints exclude the members declared on Resource itself"] {
+        let (rootMembers = List("label", "group", "target", "stack", "alias", "managed"))
+        let (derivedHints = derivedGadget.hints().toMap())
+        let (directHints = testBucket.hints().toMap())
+        derivedHints.containsKey("GadgetName") &&
+        derivedHints.keys.every((k) -> !rootMembers.contains(k.toLowerCase())) &&
+        directHints.containsKey("bucketName") &&
+        directHints.keys.every((k) -> !rootMembers.contains(k.toLowerCase()))
+    }
+
+    ["Reverse sub-resource field mapping resolves an inherited field"] {
+        let (mapping = formae.fq.reverseSubResourceFieldMapping(reflect.Class(TestDerivedSetting)))
+        // "Name" is declared on the base only and its wire key differs from the
+        // Pkl name, so it is present only if the inherited property was read.
+        mapping.containsKey("Name") &&
+        mapping["Name"] == "name" &&
+        mapping["DerivedKey"] == "key" &&
+        !mapping.containsKey("BaseKey")
+    }
+
+    ["Reverse field mapping resolves an inherited field"] {
+        let (mapping = formae.fq.reverseFieldMapping(reflect.Class(TestDerivedGadget)))
+        mapping.containsKey("GadgetName") &&
+        mapping["GadgetName"] == "gadgetName" &&
+        mapping["Tone"] == "tone" &&
+        mapping["Speed"] == "speed"
+    }
+
+    ["Reverse field mapping resolves nested keys under an inherited sub-resource field"] {
+        let (mapping = formae.fq.reverseFieldMapping(reflect.Class(TestDerivedGadget)))
+        mapping.containsKey("Setting.ContainerName") &&
+        mapping["Setting"] == "setting" &&
+        mapping["Setting.ContainerName"] == "setting.containerName" &&
+        mapping["Setting.Inner.BaseKey"] == "setting.inner.key"
+    }
+
+    ["Unlabelled resolvable in an inherited property is rejected"] {
+        let (error = module.catch(() ->
+            emptyForma.validateResourceResolvables(derivedLinkWithUnlabelledResolvable)))
+        // The inherited property is named in the diagnostic, so the rejection
+        // comes from that property rather than from anything the subclass owns.
+        error.contains("property 'linkTarget'") &&
+        error.contains("missing required label")
+    }
+}
+
+local function singleParentRefHint(): formae.ResourceHint = new formae.ResourceHint {
+    type = "AWS::EFS::MountTarget"
+    identifier = "MountTargetId"
+    parent = "AWS::EFS::FileSystem"
+    parentRefs = new formae.ParentRef {
+        parentProperty = "FileSystemId"
+        childProperty = "FileSystemId"
+    }
+}
+
+local function listParentRefsHint(): formae.ResourceHint = new formae.ResourceHint {
+    type = "AWS::ECS::TaskSet"
+    identifier = "TaskSetId"
+    parent = "AWS::ECS::Service"
+    parentRefs = List(
+        new formae.ParentRef {
+            parentProperty = "ServiceName"
+            childProperty = "Service"
+        },
+        new formae.ParentRef {
+            parentProperty = "Cluster"
+            childProperty = "Cluster"
+        }
+    )
+}
+
+local function listParamOnlyHint(): formae.ResourceHint = new formae.ResourceHint {
+    type = "AWS::EFS::MountTarget"
+    identifier = "MountTargetId"
+    parent = "AWS::EFS::FileSystem"
+    listParam = new formae.ListProperty {
+        parentProperty = "FileSystemId"
+        listParameter = "FileSystemId"
+    }
+}
+
+local function noParentRefsHint(): formae.ResourceHint = new formae.ResourceHint {
+    type = "AWS::S3::Bucket"
+    identifier = "BucketName"
 }
 
 local testAttachesToSchema = new formae.Schema {
@@ -591,5 +1405,15 @@ local testAttachesToSchema = new formae.Schema {
     Fields = new Listing { "F1" }
     Hints = new Mapping {
         ["F1"] = new formae.FieldHint { attachesTo = true }
+    }
+}
+
+local testEdgeKindSchema = new formae.Schema {
+    Identifier = "AWS::Test::EdgeThing"
+    Fields = new Listing { "F1" "F2" "F3" }
+    Hints = new Mapping {
+        ["F1"] = new formae.FieldHint { edgeKind = "default" }
+        ["F2"] = new formae.FieldHint { edgeKind = "attachesTo" }
+        ["F3"] = new formae.FieldHint { edgeKind = "runtimeDependency" }
     }
 }

@@ -25,6 +25,10 @@ type MarkResourceUpdateAsComplete struct {
 	ResourceProperties         json.RawMessage
 	ResourceReadOnlyProperties json.RawMessage
 	Version                    string
+	// FailureReason carries a human-readable explanation for a failure that
+	// was not recorded as plugin progress (e.g. a terminal resolve miss), so
+	// the persisted command's error message survives a reload.
+	FailureReason string
 }
 
 type UpdateResourceProgress struct {
@@ -38,6 +42,11 @@ type UpdateResourceProgress struct {
 	ResourceProperties         json.RawMessage
 	ResourceReadOnlyProperties json.RawMessage
 	Version                    string
+	// ResolvedRootDigests carries the update's resolution-provenance digests
+	// (source URI -> canonical digest) so they become durable exactly when
+	// progress does: recovery that resumes persisted progress skips
+	// resolution and must stamp from these, never recompute.
+	ResolvedRootDigests map[string]string
 }
 
 type MarkTargetUpdateAsComplete struct {

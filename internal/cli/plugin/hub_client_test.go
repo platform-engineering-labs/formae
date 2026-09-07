@@ -1,0 +1,504 @@
+// © 2025 Platform Engineering Labs Inc.
+//
+// SPDX-License-Identifier: FSL-1.1-ALv2
+
+//go:build unit
+
+package plugin
+
+import (
+	"context"
+	"errors"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func newTestClient(serverURL string, totalTimeout time.Duration) *httpHubClient {
+	return &httpHubClient{
+		baseURL: serverURL,
+		http:    &http.Client{Timeout: totalTimeout},
+	}
+}
+
+func TestHubClient_Available_404(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/v1/plugins/foo", r.URL.Path)
+		assert.Equal(t, http.MethodGet, r.Method)
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":{"code":"plugin_not_found"}}`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL, 1*time.Second)
+	res, err := c.CheckPluginAvailability(context.Background(), "foo")
+
+	require.NoError(t, err)
+	assert.True(t, res.Available)
+	assert.Empty(t, res.GitHubRepoURL)
+}
+
+func TestHubClient_Conflict_200(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"name":"foo","github_repo_url":"https://github.com/x/y"}`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL, 1*time.Second)
+	res, err := c.CheckPluginAvailability(context.Background(), "foo")
+
+	require.NoError(t, err)
+	assert.False(t, res.Available)
+	assert.Equal(t, "https://github.com/x/y", res.GitHubRepoURL)
+}
+
+func TestHubClient_NameMismatch_HardFail(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"name":"otherplugin","github_repo_url":"https://github.com/x/y"}`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL, 1*time.Second)
+	_, err := c.CheckPluginAvailability(context.Background(), "foo")
+
+	require.Error(t, err)
+	var unreachable *HubUnreachableError
+	assert.False(t, errors.As(err, &unreachable), "name mismatch must NOT be HubUnreachableError")
+	assert.Contains(t, err.Error(), "foo")
+	assert.Contains(t, err.Error(), "otherplugin")
+}
+
+func TestHubClient_500_Transient(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL, 1*time.Second)
+	_, err := c.CheckPluginAvailability(context.Background(), "foo")
+
+	require.Error(t, err)
+	var transient *HubTransientError
+	assert.True(t, errors.As(err, &transient), "5xx must be HubTransientError")
+	assert.Contains(t, err.Error(), "500")
+	var unreachable *HubUnreachableError
+	assert.False(t, errors.As(err, &unreachable), "5xx must NOT be HubUnreachableError")
+}
+
+func TestHubClient_429_Transient(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL, 1*time.Second)
+	_, err := c.CheckPluginAvailability(context.Background(), "foo")
+
+	require.Error(t, err)
+	var transient *HubTransientError
+	assert.True(t, errors.As(err, &transient), "429 must be HubTransientError")
+	var unreachable *HubUnreachableError
+	assert.False(t, errors.As(err, &unreachable), "429 must NOT be HubUnreachableError")
+}
+
+func TestHubClient_408_Transient(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusRequestTimeout)
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL, 1*time.Second)
+	_, err := c.CheckPluginAvailability(context.Background(), "foo")
+
+	require.Error(t, err)
+	var transient *HubTransientError
+	assert.True(t, errors.As(err, &transient), "408 must be HubTransientError")
+	var unreachable *HubUnreachableError
+	assert.False(t, errors.As(err, &unreachable), "408 must NOT be HubUnreachableError")
+}
+
+func TestHubClient_ReadTimeout_Transient(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL, 50*time.Millisecond)
+	_, err := c.CheckPluginAvailability(context.Background(), "foo")
+
+	require.Error(t, err)
+	var transient *HubTransientError
+	assert.True(t, errors.As(err, &transient), "dial/read timeout must be HubTransientError")
+	var unreachable *HubUnreachableError
+	assert.False(t, errors.As(err, &unreachable), "timeout must NOT be HubUnreachableError")
+}
+
+// TestHubClient_DNSFailure_Unreachable verifies that a DNS resolution failure
+// produces HubUnreachableError (not HubTransientError). This is a
+// "transport-but-not-temporary" failure: the host simply doesn't exist.
+func TestHubClient_DNSFailure_Unreachable(t *testing.T) {
+	// .invalid is an IANA-reserved TLD guaranteed to never resolve.
+	c := NewHubClient("http://nonexistent.invalid:1").(*httpHubClient)
+
+	_, err := c.CheckPluginAvailability(context.Background(), "foo")
+
+	require.Error(t, err)
+	var unreachable *HubUnreachableError
+	assert.True(t, errors.As(err, &unreachable), "DNS failure must be HubUnreachableError")
+	var transient *HubTransientError
+	assert.False(t, errors.As(err, &transient), "DNS failure must NOT be HubTransientError")
+}
+
+// TestHubClient_ConnectionRefused_Unreachable verifies that a refused connection
+// (nothing listening) produces HubUnreachableError (not HubTransientError).
+func TestHubClient_ConnectionRefused_Unreachable(t *testing.T) {
+	// Start a server then immediately close it so the port is freed.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr := ln.Addr().String()
+	ln.Close() // port is now closed; connecting to it will be refused
+
+	c := NewHubClient("http://" + addr).(*httpHubClient)
+
+	_, err = c.CheckPluginAvailability(context.Background(), "foo")
+
+	require.Error(t, err)
+	var unreachable *HubUnreachableError
+	assert.True(t, errors.As(err, &unreachable), "connection refused must be HubUnreachableError")
+	var transient *HubTransientError
+	assert.False(t, errors.As(err, &transient), "connection refused must NOT be HubTransientError")
+}
+
+func TestHubClient_401_HardFail(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL, 1*time.Second)
+	_, err := c.CheckPluginAvailability(context.Background(), "foo")
+
+	require.Error(t, err)
+	var unreachable *HubUnreachableError
+	assert.False(t, errors.As(err, &unreachable))
+	assert.Contains(t, err.Error(), "401")
+}
+
+func TestHubClient_403_HardFail(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL, 1*time.Second)
+	_, err := c.CheckPluginAvailability(context.Background(), "foo")
+
+	require.Error(t, err)
+	var unreachable *HubUnreachableError
+	assert.False(t, errors.As(err, &unreachable))
+	assert.Contains(t, err.Error(), "403")
+}
+
+func TestHubClient_405_HardFail(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL, 1*time.Second)
+	_, err := c.CheckPluginAvailability(context.Background(), "foo")
+
+	require.Error(t, err)
+	var unreachable *HubUnreachableError
+	assert.False(t, errors.As(err, &unreachable))
+	assert.Contains(t, err.Error(), "405")
+}
+
+func TestHubClient_400_HardFail(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL, 1*time.Second)
+	_, err := c.CheckPluginAvailability(context.Background(), "foo")
+
+	require.Error(t, err)
+	var unreachable *HubUnreachableError
+	assert.False(t, errors.As(err, &unreachable))
+}
+
+func TestHubClient_200_NonJSON_HardFail(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte("<html>not the right hub</html>"))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL, 1*time.Second)
+	_, err := c.CheckPluginAvailability(context.Background(), "foo")
+
+	require.Error(t, err)
+	var unreachable *HubUnreachableError
+	assert.False(t, errors.As(err, &unreachable))
+	assert.Contains(t, err.Error(), "not valid JSON")
+}
+
+func TestHubClient_200_MissingFields_HardFail(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"foo":"bar"}`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL, 1*time.Second)
+	_, err := c.CheckPluginAvailability(context.Background(), "foo")
+
+	require.Error(t, err)
+	var unreachable *HubUnreachableError
+	assert.False(t, errors.As(err, &unreachable))
+	assert.Contains(t, err.Error(), "missing required fields")
+}
+
+func TestHubClient_TLSHostnameMismatch_HardFail(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	// Use the real NewHubClient so the production TLS verification is
+	// exercised — the test client used elsewhere lacks a Transport and
+	// would inherit DefaultTransport, which does verify TLS by default
+	// but doesn't carry our other phase timeouts. Casting back to the
+	// concrete type just to keep the call path identical.
+	c := NewHubClient(srv.URL).(*httpHubClient)
+
+	_, err := c.CheckPluginAvailability(context.Background(), "foo")
+
+	require.Error(t, err)
+	var unreachable *HubUnreachableError
+	assert.False(t, errors.As(err, &unreachable), "TLS validation failure must NOT be HubUnreachableError")
+	assert.Contains(t, err.Error(), "TLS validation failed")
+}
+
+func TestValidateHubURL(t *testing.T) {
+	t.Run("empty rejected", func(t *testing.T) {
+		_, err := validateHubURL("")
+		assert.Error(t, err)
+	})
+
+	t.Run("whitespace-only rejected", func(t *testing.T) {
+		_, err := validateHubURL("   ")
+		assert.Error(t, err)
+	})
+
+	t.Run("parse error rejected", func(t *testing.T) {
+		_, err := validateHubURL("not a url://")
+		assert.Error(t, err)
+	})
+
+	t.Run("unsupported scheme rejected", func(t *testing.T) {
+		_, err := validateHubURL("ftp://hub.example.com")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "scheme")
+	})
+
+	t.Run("credentials rejected", func(t *testing.T) {
+		_, err := validateHubURL("https://user:pass@hub.example.com")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "credentials")
+	})
+
+	t.Run("trailing slash trimmed", func(t *testing.T) {
+		got, err := validateHubURL("https://hub.example.com/")
+		require.NoError(t, err)
+		assert.Equal(t, "https://hub.example.com", got)
+	})
+
+	t.Run("valid URL passes through", func(t *testing.T) {
+		got, err := validateHubURL("https://hub.platform.engineering")
+		require.NoError(t, err)
+		assert.Equal(t, "https://hub.platform.engineering", got)
+	})
+}
+
+func TestHubClient_404_NonJSON_HardFail(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte("404 page not found"))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL, 1*time.Second)
+	_, err := c.CheckPluginAvailability(context.Background(), "foo")
+
+	require.Error(t, err)
+	var unreachable *HubUnreachableError
+	assert.False(t, errors.As(err, &unreachable),
+		"404 with non-JSON body must NOT be HubUnreachableError")
+	assert.Contains(t, err.Error(), "not valid JSON")
+}
+
+func TestHubClient_404_WrongErrorCode_HardFail(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":{"code":"route_not_found"}}`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL, 1*time.Second)
+	_, err := c.CheckPluginAvailability(context.Background(), "foo")
+
+	require.Error(t, err)
+	var unreachable *HubUnreachableError
+	assert.False(t, errors.As(err, &unreachable))
+	assert.Contains(t, err.Error(), "route_not_found")
+}
+
+func TestHubClient_404_MissingErrorObject_HardFail(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"message":"nope"}`))
+	}))
+	defer srv.Close()
+
+	c := newTestClient(srv.URL, 1*time.Second)
+	_, err := c.CheckPluginAvailability(context.Background(), "foo")
+
+	require.Error(t, err)
+	var unreachable *HubUnreachableError
+	assert.False(t, errors.As(err, &unreachable))
+	// Empty code → message should reference the empty value
+	assert.Contains(t, err.Error(), "expected plugin_not_found")
+}
+
+func TestNewHubClient_HonorsProxyEnv(t *testing.T) {
+	c := NewHubClient("https://example.com").(*httpHubClient)
+	transport, ok := c.http.Transport.(*http.Transport)
+	require.True(t, ok, "expected *http.Transport")
+	require.NotNil(t, transport.Proxy, "transport must have a Proxy resolver set")
+
+	// Compare the function pointer to http.ProxyFromEnvironment so a
+	// future refactor that swaps in a no-op resolver fails this test.
+	got := reflect.ValueOf(transport.Proxy).Pointer()
+	want := reflect.ValueOf(http.ProxyFromEnvironment).Pointer()
+	assert.Equal(t, want, got, "transport.Proxy must be http.ProxyFromEnvironment")
+}
+
+func TestHubClient_ContextCanceled_PropagatesAsIs(t *testing.T) {
+	// Use a server that sleeps so the request is in-flight when we cancel.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(500 * time.Millisecond)
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+
+	c := newTestClient(srv.URL, 5*time.Second)
+	_, err := c.CheckPluginAvailability(ctx, "foo")
+
+	require.Error(t, err)
+	var unreachable *HubUnreachableError
+	assert.False(t, errors.As(err, &unreachable),
+		"context.Canceled must NOT be wrapped in HubUnreachableError")
+	assert.True(t, errors.Is(err, context.Canceled),
+		"underlying error must remain context.Canceled")
+}
+
+func TestHubClient_DeadlineExceeded_PropagatesAsIs(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(500 * time.Millisecond)
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	c := newTestClient(srv.URL, 5*time.Second)
+	_, err := c.CheckPluginAvailability(ctx, "foo")
+
+	require.Error(t, err)
+	var unreachable *HubUnreachableError
+	assert.False(t, errors.As(err, &unreachable))
+	assert.True(t, errors.Is(err, context.DeadlineExceeded),
+		"underlying error must remain context.DeadlineExceeded")
+}
+
+func TestHubClient_ProtocolMismatch_HTTPAtHTTPSServer_HardFail(t *testing.T) {
+	// Simulate an HTTPS server by opening a raw TCP listener that writes back
+	// TLS ServerHello bytes when an HTTP client connects. Go's httptest.NewTLSServer
+	// cannot be used here because it detects the plain HTTP request before the
+	// TLS handshake and replies with HTTP 400 — the transport never sees malformed
+	// bytes. A raw TCP server that immediately echoes a TLS record header causes
+	// net/http to emit "malformed HTTP response" exactly as a real HTTPS server
+	// (nginx, etc.) would when it receives an unencrypted request.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer ln.Close()
+
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				buf := make([]byte, 1024)
+				_, _ = c.Read(buf)
+				// TLS record header bytes — what a real HTTPS server returns to an
+				// HTTP client. The net/http transport tries to parse this as
+				// "HTTP/1.x ..." and emits: malformed HTTP response "\x16\x03..."
+				_, _ = c.Write([]byte{0x16, 0x03, 0x03, 0x00, 0x59})
+			}(conn)
+		}
+	}()
+
+	httpURL := "http://" + ln.Addr().String()
+
+	// Use the real NewHubClient so the production transport (with
+	// timeouts and the Proxy resolver) is exercised.
+	c := NewHubClient(httpURL).(*httpHubClient)
+
+	_, err = c.CheckPluginAvailability(context.Background(), "foo")
+
+	require.Error(t, err)
+	var unreachable *HubUnreachableError
+	assert.False(t, errors.As(err, &unreachable),
+		"HTTP request against HTTPS server must NOT be HubUnreachableError")
+	assert.Contains(t, err.Error(), "protocol mismatch")
+}
+
+func TestHubClient_ProtocolMismatch_HTTPSAtPlainHTTPServer_HardFail(t *testing.T) {
+	// Start a plain-HTTP server, then point an HTTPS client at it.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	httpsURL := strings.Replace(srv.URL, "http://", "https://", 1)
+
+	// Use the real NewHubClient so we exercise the production transport
+	// (including the timeouts and Proxy resolver).
+	c := NewHubClient(httpsURL).(*httpHubClient)
+
+	_, err := c.CheckPluginAvailability(context.Background(), "foo")
+
+	require.Error(t, err)
+	var unreachable *HubUnreachableError
+	assert.False(t, errors.As(err, &unreachable),
+		"protocol mismatch must NOT be wrapped in HubUnreachableError")
+	assert.Contains(t, err.Error(), "protocol mismatch")
+}

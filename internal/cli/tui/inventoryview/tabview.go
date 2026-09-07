@@ -1,0 +1,650 @@
+// © 2025 Platform Engineering Labs Inc.
+//
+// SPDX-License-Identifier: FSL-1.1-ALv2
+
+package inventoryview
+
+import (
+	"fmt"
+	"strings"
+	"unicode/utf8"
+
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
+
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
+	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
+)
+
+// setSize stores the terminal dimensions on the model, budgets the table
+// region, and calls t.table.SetSize. The table region height is exactly
+// t.height (the caller passes the body budget, not the total terminal height).
+//
+// Column-width overflow guard (design R8): when even the priority-0 columns'
+// declared widths don't fit width, their widths are shrunk proportionally
+// (min 4 per column) so the table never overflows.
+func (t tabModel) setSize(width, height int) tabModel {
+	t.width = width
+	t.height = height
+
+	// Recompute column widths. Check whether priority-0 columns fit, and if
+	// not shrink them proportionally.
+	cols := make([]components.Column, len(t.spec.columns))
+	copy(cols, t.spec.columns)
+
+	// Sum of priority-0 columns (including bubbles' 2-cell padding per col).
+	p0Sum := 0
+	for _, c := range cols {
+		if c.Priority == 0 {
+			p0Sum += c.Width + 2
+		}
+	}
+
+	if p0Sum > width {
+		// Need to shrink priority-0 cols proportionally. Available budget is
+		// width - (2 * number_of_p0_cols) to leave room for padding.
+		p0Count := 0
+		for _, c := range cols {
+			if c.Priority == 0 {
+				p0Count++
+			}
+		}
+		available := width - 2*p0Count
+		if available < 4*p0Count {
+			available = 4 * p0Count
+		}
+		totalDeclared := 0
+		for _, c := range cols {
+			if c.Priority == 0 {
+				totalDeclared += c.Width
+			}
+		}
+		for i, c := range cols {
+			if c.Priority != 0 {
+				continue
+			}
+			newW := c.Width * available / totalDeclared
+			if newW < 4 {
+				newW = 4
+			}
+			cols[i].Width = newW
+		}
+		t.spec = tabSpec{
+			title:       t.spec.title,
+			entity:      t.spec.entity,
+			columns:     cols,
+			fetch:       t.spec.fetch,
+			serverQuery: t.spec.serverQuery,
+			styleCell:   t.spec.styleCell,
+		}
+		t.table = components.NewTable(t.th, cols)
+	}
+
+	// Grow columns to fill a wide terminal. When every column fits with room to
+	// spare, distribute the surplus proportionally to the declared widths so
+	// values consume the available space instead of truncating against unused
+	// slack. Growing to exactly the width budget (width − 2·numCols of padding
+	// accounting) keeps the responsive-hiding pass from dropping a column, and
+	// mirrors the shrink path's conservative margin. The two paths are mutually
+	// exclusive: shrink triggers only when the priority-0 columns overflow.
+	allSum := 0
+	for _, c := range cols {
+		allSum += c.Width + 2
+	}
+	if allSum < width && len(cols) > 0 {
+		available := width - 2*len(cols)
+		totalDeclared := 0
+		for _, c := range cols {
+			totalDeclared += c.Width
+		}
+		if totalDeclared > 0 && available > totalDeclared {
+			surplus := available - totalDeclared
+			distributed := 0
+			for i, c := range cols {
+				add := surplus * c.Width / totalDeclared
+				cols[i].Width += add
+				distributed += add
+			}
+			// Award the rounding remainder (< numCols) to the first column so
+			// the budget is filled exactly and deterministically.
+			cols[0].Width += surplus - distributed
+			t.spec = tabSpec{
+				title:       t.spec.title,
+				entity:      t.spec.entity,
+				columns:     cols,
+				fetch:       t.spec.fetch,
+				serverQuery: t.spec.serverQuery,
+				styleCell:   t.spec.styleCell,
+			}
+			t.table = components.NewTable(t.th, cols)
+		}
+	}
+
+	// Record the final (possibly-shrunk-or-grown) column widths so sync can use
+	// them for truncation before styling.
+	t.effectiveCols = make([]components.Column, len(t.spec.columns))
+	copy(t.effectiveCols, t.spec.columns)
+
+	t.table = t.table.SetSize(width, height)
+	return t
+}
+
+// view returns the body-region lines for the tab, exactly filling t.height
+// (padding with blank lines as needed).
+//
+//   - tabLoading: centered "<spinView> Loading <entity>…"
+//   - tabFailed:  components.ErrorPanel rendering of t.err + dim hint "r: retry"
+//   - tabLoaded + 0 allRows: centered "No <entity> found."
+//   - tabLoaded otherwise: table.View() lines; when post-filter total exceeds
+//     the cap, appends a dashed marker line and a dim count line.
+func (t tabModel) view(th *theme.Theme, maxRows int, spinView string) []string {
+	h := t.height
+	if h <= 0 {
+		h = 1
+	}
+
+	var lines []string
+
+	switch {
+	case t.state == tabLoading:
+		lines = t.loadingView(th, spinView)
+
+	case t.state == tabFailed:
+		lines = t.failedView(th)
+
+	case t.state == tabLoaded && len(t.allRows) == 0:
+		lines = t.emptyView(th)
+
+	default:
+		// tabLoaded with rows (or tabNotLoaded — render table which is empty)
+		lines = t.loadedView(th, maxRows)
+	}
+
+	// Pad or trim to exactly h lines.
+	for len(lines) < h {
+		lines = append(lines, "")
+	}
+	if len(lines) > h {
+		lines = lines[:h]
+	}
+	return lines
+}
+
+// loadingView renders the loading state: centered "<spinView> Loading <entity>…".
+func (t tabModel) loadingView(th *theme.Theme, spinView string) []string {
+	h := t.height
+	if h <= 0 {
+		h = 1
+	}
+
+	msg := spinView + " Loading " + t.spec.entity + "…"
+	centered := centerText(msg, t.width)
+	if th != nil {
+		centered = th.Styles.StatusPending.Render(centered)
+	}
+
+	lines := make([]string, h)
+	midRow := h / 2
+	lines[midRow] = centered
+	return lines
+}
+
+// errorPanelFor builds the ErrorPanel for a tab-load failure. An invalid query
+// gets a friendly "Invalid query" panel that names the offending term and shows
+// a short query guide instead of dumping the raw error value.
+func errorPanelFor(err error) components.ErrorPanel {
+	if reason, ok := invalidQueryReason(err); ok {
+		return components.ErrorPanel{
+			Title:   "Invalid query",
+			Message: reason,
+			Suggestions: []string{
+				"Filter with field:value terms separated by spaces.",
+				"Fields:    stack  type  label  target  managed",
+				"Example:   type:AWS::S3::Bucket stack:prod managed:false",
+				"Wildcards: type:AWS::S3::*  (* matches a prefix or suffix)",
+			},
+		}
+	}
+	msg := "unknown error"
+	if err != nil {
+		msg = err.Error()
+	}
+	return components.ErrorPanel{Title: "Error", Message: msg}
+}
+
+// invalidQueryReason returns the reason string when err is an invalid-query
+// error, mirroring how the CLI error formatter detects it.
+func invalidQueryReason(err error) (string, bool) {
+	if errResp, ok := err.(*apimodel.ErrorResponse[apimodel.InvalidQueryError]); ok {
+		return errResp.Data.Reason, true
+	}
+	return "", false
+}
+
+// failedView renders the error state: ErrorPanel + "r: retry" hint.
+func (t tabModel) failedView(th *theme.Theme) []string {
+	panel := errorPanelFor(t.err)
+
+	var panelLines []string
+	if th != nil {
+		rendered := panel.Render(th, t.width)
+		panelLines = strings.Split(rendered, "\n")
+	} else {
+		panelLines = []string{panel.Message}
+	}
+
+	// Hint line "r: retry" in dim style.
+	hintPlain := "r: retry"
+	var hintLine string
+	if th != nil {
+		hintLine = th.Styles.KeybindingDesc.Render(hintPlain)
+	} else {
+		hintLine = hintPlain
+	}
+
+	lines := append(panelLines, hintLine)
+	return lines
+}
+
+// emptyView renders the empty state: centered "No <entity> found."
+func (t tabModel) emptyView(th *theme.Theme) []string {
+	h := t.height
+	if h <= 0 {
+		h = 1
+	}
+
+	msg := "No " + t.spec.entity + " found."
+	centered := centerText(msg, t.width)
+	if th != nil {
+		centered = th.Styles.StatusPending.Render(centered)
+	}
+
+	lines := make([]string, h)
+	midRow := h / 2
+	lines[midRow] = centered
+	return lines
+}
+
+// applyCellStyles styles each cell of a rendered table in place. bubbles/table
+// uses runewidth.Truncate (not ANSI-aware) so styled strings cannot be passed
+// directly to SetRows — the table receives plain text and this function styles
+// the rendered output afterwards.
+//
+// Styling is derived from what is ON SCREEN, not from a row index: the table
+// scrolls, so the Nth rendered line is not the Nth data row. Each visible
+// column's visual-character slice is read back out of the line, handed to
+// styledInventoryCell, and rewritten in place. Bounding the rewrite to the
+// column's slice also keeps a cell value from matching text in another column
+// (e.g. a Label "yes-prod" must not swallow the Discoverable "yes").
+//
+// Column layout (bubbles/table): each visible column occupies exactly its
+// effCols width in visual chars. We compute visual start offsets from
+// visibleCols/effCols widths, strip ANSI from the line to read the plain text
+// within the column's visual slice, then replace in the original ANSI line by
+// walking it to map visual positions back to byte positions.
+//
+// headerLines = 2 is a coupling to bubbles/table's header rendering (one header
+// row + one separator row). If bubbles changes its layout this constant needs updating.
+func applyCellStyles(lines []string, th *theme.Theme, styleCell func(*theme.Theme, int, string) string, tbl components.Table, effCols []components.Column) []string {
+	out := make([]string, len(lines))
+	copy(out, lines)
+
+	visIdx := tbl.VisibleColumnIndexes() // original col indexes that appear in the rendered line
+
+	// Compute each visible column's visual start offset and content width.
+	// bubbles renders each cell padded to exactly Width visual chars with no
+	// inter-column spacing; the "+2" in visibleColumns is for the internal
+	// fit-check accounting only (not rendered padding).
+	colVisStart := make([]int, len(visIdx)) // visual start of each column's content area
+	colVisWidth := make([]int, len(visIdx)) // visual width of each column's content area
+	vOffset := 0
+	for pos, origIdx := range visIdx {
+		w := 0
+		if origIdx < len(effCols) {
+			w = effCols[origIdx].Width
+		}
+		colVisStart[pos] = vOffset
+		colVisWidth[pos] = w
+		vOffset += w // columns are packed adjacently without inter-column spacing
+	}
+
+	const headerLines = 2 // bubbles header row + separator row
+	for lineIdx := headerLines; lineIdx < len(out); lineIdx++ {
+		line := out[lineIdx]
+		strippedRunes := []rune(ansi.Strip(line))
+
+		for pos, origIdx := range visIdx {
+			vStart := colVisStart[pos]
+			vEnd := vStart + colVisWidth[pos]
+			if vStart >= len(strippedRunes) {
+				continue
+			}
+			if vEnd > len(strippedRunes) {
+				vEnd = len(strippedRunes)
+			}
+
+			// Read the cell's text back out of the rendered line. Use rune-based
+			// slicing so multi-byte chars (e.g. "…") are not split.
+			lo, hi := trimmedBounds(strippedRunes[vStart:vEnd])
+			if lo == hi {
+				continue // blank cell (or viewport padding line)
+			}
+			plain := string(strippedRunes[vStart+lo : vStart+hi])
+			styled := styledInventoryCell(th, styleCell, origIdx, plain)
+			if styled == plain {
+				continue
+			}
+
+			line = replaceInAnsiLine(line, vStart+lo, vStart+hi, styled)
+			// Re-strip after replacement for any subsequent cells in this row.
+			strippedRunes = []rune(ansi.Strip(line))
+		}
+		out[lineIdx] = line
+	}
+	return out
+}
+
+// trimmedBounds returns the [lo, hi) rune bounds of s with surrounding spaces
+// removed. lo == hi when s is blank.
+func trimmedBounds(s []rune) (int, int) {
+	lo, hi := 0, len(s)
+	for lo < hi && s[lo] == ' ' {
+		lo++
+	}
+	for hi > lo && s[hi-1] == ' ' {
+		hi--
+	}
+	return lo, hi
+}
+
+// replaceInAnsiLine replaces the runes at visual positions [visStart, visEnd)
+// in an ANSI-encoded line with the styled string. It walks the line rune by
+// rune, skipping ANSI escape sequences (which consume no visual columns), to
+// find the byte offsets corresponding to the visual range.
+// visStart and visEnd are rune (visual character) counts, not byte offsets.
+func replaceInAnsiLine(line string, visStart, visEnd int, styled string) string {
+	byteStart := -1
+	byteEnd := -1
+	vis := 0
+	i := 0
+	for i < len(line) {
+		if vis == visStart {
+			byteStart = i
+		}
+		if vis == visEnd {
+			byteEnd = i
+			break
+		}
+		if line[i] == '\x1b' {
+			// Skip the entire CSI escape sequence (ESC [ ... m).
+			j := i + 1
+			if j < len(line) && line[j] == '[' {
+				j++
+				for j < len(line) && line[j] != 'm' {
+					j++
+				}
+				if j < len(line) {
+					j++ // consume 'm'
+				}
+			}
+			i = j
+			continue
+		}
+		// Decode one rune (handles multi-byte UTF-8 chars like "…").
+		_, runeSize := utf8.DecodeRuneInString(line[i:])
+		vis++
+		i += runeSize
+	}
+	if byteEnd == -1 {
+		byteEnd = i
+	}
+	if byteStart == -1 || byteStart > len(line) || byteEnd > len(line) || byteStart > byteEnd {
+		return line
+	}
+	return line[:byteStart] + styled + line[byteEnd:]
+}
+
+// highlightHeaderColumn re-renders the header row so both the sorted (active,
+// arrowed) and the cursor (selected) column headers render bright white; the
+// sort arrow alone marks the active one. Every other column stays the dim
+// TableHeader colour. No background and no accent colour — consistent with the
+// status-command (headerRow) and simulate (renderGroupColHeader) headers.
+//
+// bubbles/table renders the whole header with one uniform TableHeader style, so
+// we strip it back to plain text and re-render each column's slice from its
+// width. A border-less style is used deliberately: TableHeader carries a bottom
+// border rendered as the separate next line, so reusing it here would emit stray
+// border fragments. Columns are packed adjacently at exactly effCols[i].Width.
+func highlightHeaderColumn(header string, tbl components.Table, effCols []components.Column, sortHi, sortCol int, th *theme.Theme) string {
+	p := th.Palette
+	// Header emphasis is theme-driven, mirroring simview's renderGroupColHeader so
+	// the two screens read the same:
+	//   - "background" (rich): the navigated column gets a background band (like
+	//     the row cursor, using Selection.Dark explicitly so it merges uniformly),
+	//     the active-sort column gets the accent color (blue), others stay dim.
+	//   - "brighten" (quiet/colorblind, the default): navigated OR active-sort
+	//     render bright, no background.
+	base := lipgloss.NewStyle().Foreground(p.TextSecondary).Bold(true)
+	background := th.Header.Highlight == "background"
+	accentStyle := lipgloss.NewStyle().Foreground(p.PrimaryAccent).Bold(true)
+	brightStyle := lipgloss.NewStyle().Foreground(p.TextPrimary).Bold(true)
+	// The pending ←/→ highlight uses SecondaryAccent in every mode so it reads as
+	// a distinct cursor colour wherever it sits — including on the active column —
+	// and never reuses the Selection background of the row cursor. Mirrors
+	// simview and the status views.
+	hlStyle := lipgloss.NewStyle().Foreground(p.SecondaryAccent).Bold(true)
+
+	styleFor := func(isHL, isAct bool) lipgloss.Style {
+		switch {
+		case isHL:
+			return hlStyle
+		case isAct:
+			if background {
+				return accentStyle
+			}
+			return brightStyle
+		default:
+			return base
+		}
+	}
+
+	runes := []rune(ansi.Strip(header))
+	var sb strings.Builder
+	off := 0
+	for _, orig := range tbl.VisibleColumnIndexes() {
+		if off >= len(runes) {
+			break
+		}
+		w := 0
+		if orig < len(effCols) {
+			w = effCols[orig].Width
+		}
+		end := off + w
+		if end > len(runes) {
+			end = len(runes)
+		}
+		slice := string(runes[off:end])
+		sb.WriteString(styleFor(orig == sortHi, orig == sortCol).Render(slice))
+		off = end
+	}
+	if off < len(runes) {
+		sb.WriteString(base.Render(string(runes[off:])))
+	}
+	return sb.String()
+}
+
+// highlightCursorRow extends the selected row's highlight across the full width.
+// bubbles/table wraps the selected row in the Selected style, but each cell's own
+// style reset (\x1b[0m) clears the background after the first column, so the
+// highlight only covers one cell. We locate that row by the Selection background
+// SGR it carries and re-apply the background after every reset — preserving each
+// cell's foreground (e.g. the ⚠ unmanaged red) while the background spans the
+// whole row.
+func highlightCursorRow(lines []string, width int, th *theme.Theme) []string {
+	probe := lipgloss.NewStyle().Background(th.Palette.Selection).Render("x")
+	mIdx := strings.IndexByte(probe, 'm')
+	if mIdx < 0 {
+		return lines
+	}
+	bgOpen := probe[:mIdx+1]                           // e.g. "\x1b[48;2;58;58;58m"
+	bgSGR := strings.TrimPrefix(probe[:mIdx], "\x1b[") // e.g. "48;2;58;58;58"
+	if bgSGR == "" {
+		return lines
+	}
+	const headerLines = 2 // header row + separator
+	for i := headerLines; i < len(lines); i++ {
+		if !strings.Contains(lines[i], bgSGR) {
+			continue
+		}
+		// Re-apply the background after every reset so it survives each cell's
+		// reset, then pad the trailing gap (background active) and close.
+		line := strings.ReplaceAll(lines[i], "\x1b[0m", "\x1b[0m"+bgOpen)
+		if w := lipgloss.Width(line); w < width {
+			line += strings.Repeat(" ", width-w)
+		}
+		lines[i] = line + "\x1b[0m"
+		break
+	}
+	return lines
+}
+
+// loadedView renders the table and optional truncation marker.
+func (t tabModel) loadedView(th *theme.Theme, maxRows int) []string {
+	total := t.filteredCount()
+	shown := total
+	if maxRows > 0 && shown > maxRows {
+		shown = maxRows
+	}
+
+	// Determine whether we will show truncation markers (2 lines).
+	needsMarker := maxRows > 0 && total > maxRows
+	markerLines := 0
+	if needsMarker {
+		markerLines = 2
+	}
+
+	// Re-size the table to leave room for the marker lines.
+	tbl := t.table
+	tableH := t.height - markerLines
+	if tableH < 1 {
+		tableH = 1
+	}
+	tbl = tbl.SetSize(t.width, tableH)
+
+	tableOut := tbl.View()
+	tableLines := strings.Split(tableOut, "\n")
+
+	// Apply per-cell styling (post-render, since bubbles/table uses
+	// runewidth.Truncate which corrupts ANSI-escaped cell values). Pass tbl
+	// (post-resize) and effectiveCols so applyCellStyles can bound each
+	// replacement to its column's slice of the rendered line.
+	effCols := t.effectiveCols
+	if len(effCols) == 0 {
+		effCols = t.spec.columns
+	}
+	tableLines = applyCellStyles(tableLines, th, t.spec.styleCell, tbl, effCols)
+
+	// Brighten the sorted (active) and cursor (selected) column headers to bright
+	// white — matching the status-command and simulate headers. The header row is
+	// line 0; its separator (with the bottom border) is line 1, left untouched.
+	if th != nil && len(tableLines) > 0 {
+		tableLines[0] = highlightHeaderColumn(tableLines[0], tbl, effCols, t.sortHi, t.sortCol, th)
+	}
+
+	// Extend the cursor-row highlight across the full width. bubbles/table wraps
+	// the selected row in the Selected style, but each cell's own style reset
+	// clears the background after the first column — so re-render the highlighted
+	// row as a uniform full-width bar.
+	if th != nil {
+		tableLines = highlightCursorRow(tableLines, t.width, th)
+	}
+
+	// Remove trailing empty lines that bubbles/table may append.
+	for len(tableLines) > 0 && tableLines[len(tableLines)-1] == "" {
+		tableLines = tableLines[:len(tableLines)-1]
+	}
+
+	var lines []string
+	lines = append(lines, tableLines...)
+
+	// Truncation marker when cap applies.
+	if needsMarker {
+		remaining := total - shown
+		markerLine := dashedMarker(t.width)
+		countMsg := fmt.Sprintf("%d more results not shown. Use /: search to filter.", remaining)
+
+		if th != nil {
+			dimStyle := lipgloss.NewStyle().Foreground(th.Palette.TextSubtle)
+			lines = append(lines, dimStyle.Render(markerLine))
+			lines = append(lines, dimStyle.Render(countMsg))
+		} else {
+			lines = append(lines, markerLine)
+			lines = append(lines, countMsg)
+		}
+	}
+
+	return lines
+}
+
+// statusLine returns "Showing <shown> of <total> <entity>", with appropriate
+// suffix for filtered/truncated cases.
+func (t tabModel) statusLine(maxRows int) string {
+	total := t.filteredCount()
+	shown := total
+	if maxRows > 0 && shown > maxRows {
+		shown = maxRows
+	}
+
+	base := fmt.Sprintf("Showing %d of %d %s", shown, total, t.spec.entity)
+
+	if t.query != "" {
+		return base + " (filtered)"
+	}
+	if maxRows > 0 && total > maxRows {
+		return base + " — refine your query to see more"
+	}
+	return base
+}
+
+// statusLineNarrow returns an abbreviated status line for narrow terminals
+// (width < narrowFooterThreshold). It drops the entity noun and appends compact
+// key glyphs: "Showing N of M · ↑↓ enter / s q".
+func (t tabModel) statusLineNarrow(maxRows int) string {
+	total := t.filteredCount()
+	shown := total
+	if maxRows > 0 && shown > maxRows {
+		shown = maxRows
+	}
+	return fmt.Sprintf("Showing %d of %d · ↑↓ enter / s q", shown, total)
+}
+
+// centerText centers plain text within the given width by prepending spaces.
+func centerText(s string, width int) string {
+	msgWidth := lipgloss.Width(s)
+	if msgWidth >= width || width <= 0 {
+		return s
+	}
+	pad := (width - msgWidth) / 2
+	return strings.Repeat(" ", pad) + s
+}
+
+// dashedMarker returns a "─ ─ ─ …" pattern repeated to fill width.
+func dashedMarker(width int) string {
+	if width <= 0 {
+		return ""
+	}
+	unit := "─ "
+	unitLen := 2
+	count := width / unitLen
+	if count == 0 {
+		count = 1
+	}
+	s := strings.Repeat(unit, count)
+	// Trim or pad to exact width.
+	runes := []rune(s)
+	if len(runes) > width {
+		runes = runes[:width]
+	}
+	return string(runes)
+}

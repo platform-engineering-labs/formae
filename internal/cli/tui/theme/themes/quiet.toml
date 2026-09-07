@@ -1,0 +1,78 @@
+name = "quiet"
+
+[palette]
+base             = { light = "#F5F5F5", dark = "#1A1A2E" }
+surface          = { light = "#FFFFFF", dark = "#16213E" }
+text_primary     = { light = "#1A1A1A", dark = "#E8E8E8" }
+text_secondary   = { light = "#666666", dark = "#AAAAAA" }
+text_subtle      = "#999999"
+border           = { light = "#DDDDDD", dark = "#555566" }
+selection        = { light = "#DDDDDD", dark = "#3A3A3A" }
+primary_accent   = { light = "#2E97A8", dark = "#81D1DB" }
+secondary_accent = { light = "#FF6B00", dark = "#FF8533" }
+error            = { light = "#D64545", dark = "#F87171" }
+error_subtle     = { light = "#B45454", dark = "#9B4444" }
+error_bright     = { light = "#B91C1C", dark = "#FCA5A5" }
+warning          = "#B5B55B"
+unmanaged        = { light = "#D64545", dark = "#F87171" }
+done             = { light = "#1A1A1A", dark = "#E8E8E8" }
+in_progress      = { light = "#444444", dark = "#AAAAAA" }
+pending          = { light = "#999999", dark = "#555555" }
+# quiet renders every operation in the same neutral text color: the glyph and
+# the word carry the meaning, not the color. Only rich colors ops per-operation.
+op_create  = { light = "#1A1A1A", dark = "#E8E8E8" }
+op_update  = { light = "#1A1A1A", dark = "#E8E8E8" }
+op_delete  = { light = "#1A1A1A", dark = "#E8E8E8" }
+op_replace = { light = "#1A1A1A", dark = "#E8E8E8" }
+op_detach  = { light = "#1A1A1A", dark = "#E8E8E8" }
+op_keep    = { light = "#1A1A1A", dark = "#E8E8E8" }
+
+[glyphs]
+op_create = "+"
+op_update = "✎"
+op_delete = "✕"
+op_replace = "↻"
+op_detach = "⊘"
+op_keep = "="
+status_done = "✓"
+status_failed = "✗"
+status_pending = "·"
+status_inprogress = "◐"
+status_skipped = "⊘"
+status_canceled = "⊘"
+ack_done = "✓"
+ack_skip = "·"
+ack_warn = "!"
+ack_fail = "✗"
+tree_branch = "├"
+tree_last = "└"
+expand_open = "▾"
+expand_closed = "▸"
+checkbox_on = "[x]"
+checkbox_off = "[ ]"
+transition = "→"
+
+[progress]
+fill_done = "█"
+fill_inprogress = "▓"
+fill_pending = "░"
+animation = "static"
+
+[spinner]
+# The original braille spinner (bubbles spinner.Dot), running at its native
+# ~100ms so the glyph animates smoothly during long-running operations.
+frames = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"]
+interval_ms = 100
+static_frame = "⣾"
+
+[confirmation_bar]
+color = "brand"
+
+[header]
+highlight = "brighten"
+
+[rows]
+# quiet treats every column the same: the label is not special, and delete rows
+# are not tinted whole-row. The operation glyph alone distinguishes a row.
+label_accent = false
+delete_whole_row = false

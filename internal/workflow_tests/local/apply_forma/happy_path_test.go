@@ -73,7 +73,7 @@ func TestMetastructure_ApplyFormaSuccess(t *testing.T) {
 		_, err = m.ApplyForma(
 			forma,
 			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: false},
-			"test-client-id")
+			"test-client-id", "", "")
 		assert.NoError(t, err)
 
 		var commands []*forma_command.FormaCommand
@@ -130,7 +130,7 @@ func TestMetastructure_ApplyFormaCommandSuccess(t *testing.T) {
 		_, err = m.ApplyForma(
 			forma,
 			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: false},
-			"test-client-id")
+			"test-client-id", "", "")
 		assert.NoError(t, err)
 
 		assert.Eventually(t, func() bool {
@@ -207,7 +207,7 @@ func TestMetastructure_ApplyFormaImplicitReplaceMode(t *testing.T) {
 		}
 		m.ApplyForma(f0, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test")
+		}, "test", "", "")
 
 		assert.Eventually(t, func() bool {
 			fas, err := m.Datastore.LoadFormaCommands()
@@ -237,7 +237,7 @@ func TestMetastructure_ApplyFormaImplicitReplaceMode(t *testing.T) {
 		}
 		m.ApplyForma(_f1, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test")
+		}, "test", "", "")
 
 		assert.NoError(t, err)
 		assert.Eventually(t, func() bool {
@@ -343,7 +343,7 @@ func TestMetastructure_ApplyFormaCreateReplaceUpdate(t *testing.T) {
 		// Apply initial resource
 		m.ApplyForma(initialForma, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test")
+		}, "test", "", "")
 
 		// Verify initial creation
 		assert.Eventually(t, func() bool {
@@ -394,7 +394,7 @@ func TestMetastructure_ApplyFormaCreateReplaceUpdate(t *testing.T) {
 		// Apply replacement (should delete and recreate)
 		m.ApplyForma(replaceForma, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test")
+		}, "test", "", "")
 
 		// Verify replacement (delete + create)
 		// Commands are ordered by timestamp DESC, so the newest (replace) command is at index 0
@@ -471,7 +471,7 @@ func TestMetastructure_ApplyFormaCreateReplaceUpdate(t *testing.T) {
 		// Apply update (should update in place)
 		m.ApplyForma(updateForma, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test")
+		}, "test", "", "")
 
 		// Verify update
 		// Commands are ordered by timestamp DESC, so the newest (update) command is at index 0

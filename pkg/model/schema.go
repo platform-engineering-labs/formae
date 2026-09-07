@@ -4,25 +4,90 @@
 
 package model
 
+import "encoding/json"
+
 type Schema struct {
-	Identifier   string               `json:"Identifier" pkl:"Identifier"`
-	Fields       []string             `json:"Fields" pkl:"Fields"`
-	Hints        map[string]FieldHint `json:"Hints" pkl:"Hints"`
-	Discoverable bool                 `json:"Discoverable" pkl:"Discoverable"`
-	Extractable  bool                 `json:"Extractable" pkl:"Extractable"`
-	Portable     bool                 `json:"Portable" pkl:"Portable"`
+	Identifier     string               `json:"Identifier" pkl:"Identifier"`
+	Fields         []string             `json:"Fields" pkl:"Fields"`
+	Hints          map[string]FieldHint `json:"Hints" pkl:"Hints"`
+	Discoverable   bool                 `json:"Discoverable" pkl:"Discoverable"`
+	Extractable    bool                 `json:"Extractable" pkl:"Extractable"`
+	Portable       bool                 `json:"Portable" pkl:"Portable"`
+	Parent         string               `json:"Parent" pkl:"Parent"`                 // NEW: from ResourceHint.parent; "" when unset.
+	ParentMappings []ParentMapping      `json:"ParentMappings" pkl:"ParentMappings"` // NEW: from ResourceHint.parentRefs[*]; nil when unset.
 }
 
+// ParentMapping pairs the parent-side property name with the child-side
+// property name for one component of a parent-child identity relationship.
+// The two names need not match (they coincide for MountTarget→FileSystem but
+// diverge for TaskSet→Service).
+//
+// Uses JSON struct tags (camelCase) to match the field names emitted by
+// `Extractor.pkl` and the corresponding PKL `ParentRef` class — the
+// precedent for new annotations.
+type ParentMapping struct {
+	ParentProperty string `json:"parentProperty"`
+	ChildProperty  string `json:"childProperty"`
+}
+
+type EdgeKind string
+
+const (
+	EdgeKindDefault           EdgeKind = "default"
+	EdgeKindAttachesTo        EdgeKind = "attachesTo"
+	EdgeKindRuntimeDependency EdgeKind = "runtimeDependency"
+)
+
 type FieldHint struct {
-	CreateOnly         bool `json:"CreateOnly" pkl:"CreateOnly"`
-	WriteOnly          bool `json:"WriteOnly" pkl:"WriteOnly"`
-	Required           bool `json:"Required" pkl:"Required"`
-	RequiredOnCreate   bool `json:"RequiredOnCreate" pkl:"RequiredOnCreate"`
-	HasProviderDefault bool `json:"HasProviderDefault" pkl:"HasProviderDefault"`
-	AttachesTo            bool `json:"AttachesTo" pkl:"AttachesTo"`
+	CreateOnly         bool     `json:"CreateOnly" pkl:"CreateOnly"`
+	WriteOnly          bool     `json:"WriteOnly" pkl:"WriteOnly"`
+	Required           bool     `json:"Required" pkl:"Required"`
+	RequiredOnCreate   bool     `json:"RequiredOnCreate" pkl:"RequiredOnCreate"`
+	RequiredOnUpdate   bool     `json:"RequiredOnUpdate" pkl:"RequiredOnUpdate"`
+	HasProviderDefault bool     `json:"HasProviderDefault" pkl:"HasProviderDefault"`
+	Opaque             bool     `json:"Opaque" pkl:"Opaque"`         // NEW: this property is the resource's secret value
+	AttachesTo         bool     `json:"AttachesTo" pkl:"AttachesTo"` // DEPRECATED: kept for one release; engine derives EdgeKind from this when set.
+	EdgeKind           EdgeKind `json:"EdgeKind" pkl:"EdgeKind"`     // NEW
 
 	IndexField   string            `json:"IndexField" pkl:"IndexField"`
 	UpdateMethod FieldUpdateMethod `json:"UpdateMethod" pkl:"UpdateMethod"`
+	// PreserveEmptyValues opts a top-level field's subtree out of empty-value
+	// normalization: empty collections inside it are values, preserved on both
+	// diff sides, in op values, and in plugin-bound payloads. Orthogonal to
+	// UpdateMethod; typically paired with Atomic on opaque document fields.
+	PreserveEmptyValues bool   `json:"PreserveEmptyValues" pkl:"PreserveEmptyValues"`
+	Format              string `json:"Format" pkl:"Format"` // "" = opaque String; "json" = serialized JSON document
+	// CoOwned marks a collection field whose live content legitimately has
+	// writers other than this forma. nil = not co-owned.
+	CoOwned *CoOwnership `json:"CoOwned,omitempty" pkl:"CoOwned"`
+}
+
+// CoOwnership declares that a field's live collection is shared with writers
+// other than the owning forma (e.g. a security group's rule set, or a
+// mapping populated in part by the platform itself).
+type CoOwnership struct {
+	// SystemPatterns are glob patterns over member identities naming entries
+	// injected by the platform itself. Consulted only by extract on resources
+	// with no ownership record; never by plan or drift.
+	SystemPatterns []string `json:"SystemPatterns,omitempty" pkl:"SystemPatterns"`
+}
+
+// UnmarshalJSON normalizes the deprecated AttachesTo alias into EdgeKind so
+// schemas published before EdgeKind landed continue to drive correct DAG edges.
+func (fh *FieldHint) UnmarshalJSON(data []byte) error {
+	type rawHint FieldHint
+	var raw rawHint
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*fh = FieldHint(raw)
+	if fh.EdgeKind == "" {
+		fh.EdgeKind = EdgeKindDefault
+		if fh.AttachesTo {
+			fh.EdgeKind = EdgeKindAttachesTo
+		}
+	}
+	return nil
 }
 
 type FieldUpdateMethod string
@@ -61,6 +126,26 @@ func (s Schema) WriteOnly() []string {
 	return filterFields(s, func(h FieldHint) bool { return h.WriteOnly }, true)
 }
 
+func (s Schema) RequiredOnUpdate() []string {
+	return filterFields(s, func(h FieldHint) bool { return h.RequiredOnUpdate }, true)
+}
+
 func (s Schema) HasProviderDefault() []string {
 	return filterFields(s, func(h FieldHint) bool { return h.HasProviderDefault }, true)
+}
+
+func (s Schema) Opaque() []string {
+	return filterFields(s, func(h FieldHint) bool { return h.Opaque }, true)
+}
+
+// FormatHints returns field→format for every field whose FieldHint declares a
+// non-empty Format (e.g. {"configJson": "json"}). Empty result when none.
+func (s Schema) FormatHints() map[string]string {
+	out := map[string]string{}
+	for field, h := range s.Hints {
+		if h.Format != "" {
+			out[field] = h.Format
+		}
+	}
+	return out
 }

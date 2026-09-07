@@ -11,6 +11,14 @@ import (
 
 const defaultReapInterval = 60 * time.Second
 
+// Verdict is a cached auth validation result: whether the request is
+// allowed, and the subject attribution that goes with that answer.
+type Verdict struct {
+	Valid       bool
+	Subject     string
+	SubjectName string
+}
+
 // AuthCache is a TTL-based cache for auth validation results.
 // Keyed by a hash of the Authorization header to avoid repeated RPC calls
 // for the same credentials. A background reaper removes expired entries
@@ -22,7 +30,7 @@ type AuthCache struct {
 }
 
 type cacheEntry struct {
-	valid     bool
+	verdict   Verdict
 	expiresAt time.Time
 }
 
@@ -35,24 +43,24 @@ func NewAuthCache() *AuthCache {
 	return c
 }
 
-// Get returns the cached validation result for the given key.
-// Returns (valid, true) on cache hit, (false, false) on miss or expiry.
-func (c *AuthCache) Get(key string) (valid bool, found bool) {
+// Get returns the cached verdict for the given key.
+// Returns (verdict, true) on cache hit, (Verdict{}, false) on miss or expiry.
+func (c *AuthCache) Get(key string) (Verdict, bool) {
 	c.mu.RLock()
 	entry, ok := c.entries[key]
 	c.mu.RUnlock()
 
 	if !ok || time.Now().After(entry.expiresAt) {
-		return false, false
+		return Verdict{}, false
 	}
-	return entry.valid, true
+	return entry.verdict, true
 }
 
-// Set stores a validation result with the given TTL.
-func (c *AuthCache) Set(key string, valid bool, ttl time.Duration) {
+// Set stores a verdict with the given TTL.
+func (c *AuthCache) Set(key string, v Verdict, ttl time.Duration) {
 	c.mu.Lock()
 	c.entries[key] = &cacheEntry{
-		valid:     valid,
+		verdict:   v,
 		expiresAt: time.Now().Add(ttl),
 	}
 	c.mu.Unlock()

@@ -79,7 +79,7 @@ func TestMetastructure_ApplyFormaFailed(t *testing.T) {
 			},
 		}
 
-		m.ApplyForma(forma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id")
+		m.ApplyForma(forma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
 
 		assert.Eventually(t, func() bool {
 			fas, err := m.Datastore.LoadFormaCommands()
@@ -148,7 +148,7 @@ func TestMetastructure_ApplyFormaFailedAfterRetries(t *testing.T) {
 			},
 		}
 
-		m.ApplyForma(forma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id")
+		m.ApplyForma(forma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
 
 		assert.Eventually(t, func() bool {
 			fas, err := m.Datastore.LoadFormaCommands()

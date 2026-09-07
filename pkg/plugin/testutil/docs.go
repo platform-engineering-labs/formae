@@ -8,13 +8,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/apple/pkl-go/pkl"
+	"github.com/platform-engineering-labs/formae/pkg/plugin/pklrun"
 )
 
 // DocsResult contains the documentation for a schema.
@@ -100,10 +100,10 @@ func GenerateDocsWithNamespace(schemaDir, namespace string) (*DocsResult, error)
 
 // runDocs runs Docs.pkl and parses the result.
 func runDocs(ctx context.Context, workDir string) (*DocsResult, error) {
-	evaluator, cleanup, err := newSafeProjectEvaluator(
+	evaluator, cleanup, err := pklrun.NewProjectEvaluator(
 		ctx,
-		&url.URL{Scheme: "file", Path: workDir},
-		pkl.PreconfiguredOptions,
+		workDir,
+		pklrun.WithEvaluatorOptions(pkl.PreconfiguredOptions),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create evaluator: %w", err)

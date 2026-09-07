@@ -21,14 +21,16 @@ import (
 type PluginType string
 
 const (
-	Resource PluginType = "resource"
-	Auth     PluginType = "auth"
+	Resource       PluginType = "resource"
+	Auth           PluginType = "auth"
+	OidcCredential PluginType = "oidc-credential"
 )
 
 // PluginInfo holds discovery metadata for an installed plugin.
 type PluginInfo struct {
 	Name             string
-	Namespace        string // from manifest; empty for auth plugins
+	Namespace        string   // from manifest; empty for auth plugins
+	Namespaces       []string // from manifest; only set for oidc-credential plugins
 	Version          string
 	BinaryPath       string
 	Type             PluginType
@@ -54,13 +56,24 @@ func (p PluginInfo) ToAuthPluginInfo() plugin.AuthPluginInfo {
 	}
 }
 
+// ToOidcCredentialPluginInfo converts to the SDK type used by the credential broker.
+func (p PluginInfo) ToOidcCredentialPluginInfo() plugin.OidcCredentialPluginInfo {
+	return plugin.OidcCredentialPluginInfo{
+		Name:       p.Name,
+		Version:    p.Version,
+		BinaryPath: p.BinaryPath,
+		Namespaces: p.Namespaces,
+	}
+}
+
 // DiscoverPlugins scans pluginDir for external plugin binaries of the given type.
 // Each plugin is expected at <pluginDir>/<name>/v<semver>/<name> with an optional
 // manifest at <pluginDir>/<name>/v<semver>/formae-plugin.pkl.
 //
 // When multiple versions exist, the highest semver wins. For resource plugins,
-// if no manifest exists the directory name is used as namespace. For auth plugins,
-// a manifest with type="auth" is required.
+// if no manifest exists the directory name is used as namespace. For auth
+// plugins, a manifest with type="auth" is required. For oidc-credential
+// plugins, a manifest with type="oidc-credential" is required.
 func DiscoverPlugins(pluginDir string, pluginType PluginType) []PluginInfo {
 	if pluginDir == "" {
 		return nil
@@ -96,13 +109,16 @@ func DiscoverPlugins(pluginDir string, pluginType PluginType) []PluginInfo {
 		}
 
 		var minFormaeVersion string
+		var namespaces []string
 		if manifest != nil {
 			minFormaeVersion = manifest.MinFormaeVersion
+			namespaces = manifest.NormalizedNamespaces()
 		}
 
 		results = append(results, PluginInfo{
 			Name:             pluginName,
 			Namespace:        namespace,
+			Namespaces:       namespaces,
 			Version:          best.versionStr,
 			BinaryPath:       best.binaryPath,
 			Type:             pluginType,
@@ -110,6 +126,31 @@ func DiscoverPlugins(pluginDir string, pluginType PluginType) []PluginInfo {
 		})
 	}
 
+	return results
+}
+
+// DiscoverPluginsMulti scans multiple plugin directories and merges results.
+// Directories are checked in order; the first directory containing a given
+// plugin name wins. This allows dev plugins (listed first) to override
+// system-installed plugins.
+func DiscoverPluginsMulti(pluginDirs []string, pluginType PluginType) []PluginInfo {
+	seen := make(map[string]bool)
+	var results []PluginInfo
+
+	for _, dir := range pluginDirs {
+		plugins := DiscoverPlugins(dir, pluginType)
+		for _, p := range plugins {
+			if seen[p.Name] {
+				continue
+			}
+			seen[p.Name] = true
+			results = append(results, p)
+		}
+	}
+
+	if len(results) == 0 {
+		return nil
+	}
 	return results
 }
 
@@ -125,8 +166,10 @@ type versionCandidate struct {
 // requested plugin type.
 //
 // For resource plugins, versions without a manifest are accepted (namespace
-// falls back to directory name). Versions with an auth manifest are skipped.
-// For auth plugins, only versions with a manifest declaring type="auth" qualify.
+// falls back to directory name); versions with an auth or oidc-credential
+// manifest are skipped. For auth plugins, only versions with a manifest
+// declaring type="auth" qualify. For oidc-credential plugins, only versions
+// with a manifest declaring type="oidc-credential" qualify.
 func discoverHighestVersion(pluginPath, pluginName string, pluginType PluginType) (versionCandidate, *plugin.Manifest, bool) {
 	versionEntries, err := os.ReadDir(pluginPath)
 	if err != nil {
@@ -166,9 +209,14 @@ func discoverHighestVersion(pluginPath, pluginName string, pluginType PluginType
 			if manifest == nil || !manifest.IsAuthPlugin() {
 				continue
 			}
+		case OidcCredential:
+			// oidc-credential plugins require a manifest declaring type="oidc-credential"
+			if manifest == nil || !manifest.IsOidcCredentialPlugin() {
+				continue
+			}
 		case Resource:
-			// Skip auth plugins from the resource list
-			if manifest != nil && manifest.IsAuthPlugin() {
+			// Skip auth and oidc-credential plugins from the resource list
+			if manifest != nil && (manifest.IsAuthPlugin() || manifest.IsOidcCredentialPlugin()) {
 				continue
 			}
 		}
@@ -213,6 +261,16 @@ func FilterCompatiblePlugins(plugins []PluginInfo, agentVersion, sdkMinFormaeVer
 
 	// Development builds have version "0.0.0" (ldflags not set).
 	// Skip compatibility checks entirely — all plugins are loaded.
+	//
+	// This bypass is intentional and accepted: it allows local development and
+	// the e2e test suite (which run untagged source builds) to load any plugin
+	// without version friction. The real leak surface is nil for released agents
+	// because (a) all released agents carry a real semver and are fully gated,
+	// and (b) a current-source dev build hashes secret values at rest regardless
+	// of any plugin-level flag, so no secrets are exposed in plain text even if
+	// an older plugin is spawned. Fail-closing on 0.0.0 or adding an explicit
+	// unsafe override would break the local dev and e2e workflows and requires a
+	// deliberate team decision — it is not done here.
 	if agentVersion == "0.0.0" {
 		return plugins
 	}

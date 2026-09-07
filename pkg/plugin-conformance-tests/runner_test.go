@@ -5,8 +5,15 @@
 package conformance
 
 import (
+	"errors"
 	"os"
+	"slices"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/platform-engineering-labs/formae/pkg/api/model"
+	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
 func TestFilterTestCases(t *testing.T) {
@@ -130,7 +137,7 @@ func TestFilterTestCases(t *testing.T) {
 }
 
 // TestFilterTestCases_Regex verifies /…/ delimited regex matching
-// against test case name and resource type (RFC-0022).
+// against test case name and resource type.
 func TestFilterTestCases_Regex(t *testing.T) {
 	testCases := []TestCase{
 		{Name: "AWS::s3-bucket", ResourceType: "s3-bucket", PKLFile: "/path/s3-bucket.pkl", PluginName: "aws"},
@@ -405,10 +412,10 @@ func TestTestCaseNames_Empty(t *testing.T) {
 }
 
 // TestCompareProperties_NestedResolvable verifies that compareProperties handles
-// Resolvable references nested inside SubResource maps. This reproduces the
-// elasticbeanstalk failure where ResourceLifecycleConfig.ServiceRole is a
-// Resolvable: Pkl eval produces $visibility:Clear, but after Formae resolves
-// the reference the inventory has $value with the actual ARN.
+// Resolvable references nested inside SubResource maps. Case in point:
+// ResourceLifecycleConfig.ServiceRole is a Resolvable where Pkl eval produces
+// $visibility:Clear, but after Formae resolves the reference the inventory has
+// $value with the actual ARN. The two must still compare equal.
 func TestCompareProperties_NestedResolvable(t *testing.T) {
 	// Expected: from Pkl eval — Resolvable has $visibility but no $value
 	expectedProperties := map[string]any{
@@ -471,6 +478,323 @@ func TestCompareProperties_NestedResolvable(t *testing.T) {
 		t.Errorf("compareProperties should pass when SubResource contains a nested Resolvable with resolved $value")
 	}
 }
+
+// TestCompareProperties_Embed verifies that a $embed field whose stored
+// $template carries the resolved $value and Go sorted-key envelope encoding
+// compares equal to an authored expected $template that has neither.
+func TestCompareProperties_Embed(t *testing.T) {
+	// Expected (from Pkl eval): $res span, insertion-order keys, no $value.
+	expectedSpan := pkgmodel.FrameEnvelope(
+		`{"$res":true,"$label":"kvs","$type":"AWS::CloudFront::KeyValueStore","$stack":"s","$property":"Id","$visibility":"Clear"}`)
+	expectedProperties := map[string]any{
+		"FunctionCode": map[string]any{
+			"$embed":    true,
+			"$template": "const kvsId = '" + expectedSpan + "';",
+		},
+	}
+
+	// Actual (from inventory after resolution): same span with sorted keys + $value.
+	actualSpan := pkgmodel.FrameEnvelope(
+		`{"$label":"kvs","$property":"Id","$res":true,"$stack":"s","$type":"AWS::CloudFront::KeyValueStore","$value":"21775858-76bb"}`)
+	actualResource := map[string]any{
+		"Properties": map[string]any{
+			"FunctionCode": map[string]any{
+				"$embed":    true,
+				"$template": "const kvsId = '" + actualSpan + "';",
+			},
+		},
+	}
+
+	if !compareProperties(t, expectedProperties, actualResource, "after create", map[string]providerDefault{}) {
+		t.Errorf("compareProperties should pass for an embedded resolvable whose stored $template carries the resolved $value and sorted-key encoding")
+	}
+}
+
+// A literal segment difference in a $embed $template MUST be detected (negative).
+func TestCompareEmbed_DifferentLiteralFails(t *testing.T) {
+	span := pkgmodel.FrameEnvelope(`{"$res":true,"$label":"kvs","$type":"T","$stack":"s","$property":"Id"}`)
+	expected := map[string]any{"$embed": true, "$template": "A-" + span + "-B"}
+	actual := map[string]any{"$embed": true, "$template": "A-" + span + "-DIFFERENT"}
+	rec := &recordingReporter{}
+	if compareEmbed(rec, "FunctionCode", expected, actual) {
+		t.Errorf("compareEmbed should fail when the literal template text differs")
+	}
+}
+
+// An opaque secret field is hashed at rest, so inventory returns an opaque
+// envelope rather than the authored plaintext. compareProperties must verify it
+// by digest (positive: correct SHA-256 of the authored plaintext).
+func TestCompareProperties_OpaqueSecret_VerifiedByDigest(t *testing.T) {
+	expectedProperties := map[string]any{
+		"MasterUserPassword": "TestPassword123!",
+	}
+	actualResource := map[string]any{
+		"Properties": map[string]any{
+			"MasterUserPassword": map[string]any{
+				"$visibility": pkgmodel.VisibilityOpaque,
+				"$hashed":     true,
+				"$value":      pkgmodel.ComputeValueHash("TestPassword123!"),
+			},
+		},
+	}
+	if !compareProperties(t, expectedProperties, actualResource, "after create", map[string]providerDefault{}) {
+		t.Errorf("compareProperties should pass when the opaque value's digest matches the authored secret")
+	}
+}
+
+// A digest that does not match the authored plaintext MUST be flagged (negative).
+func TestCompareProperties_OpaqueSecret_WrongDigestFails(t *testing.T) {
+	expected := map[string]any{"MasterUserPassword": "TestPassword123!"}
+	actual := map[string]any{
+		"Properties": map[string]any{
+			"MasterUserPassword": map[string]any{
+				"$visibility": pkgmodel.VisibilityOpaque,
+				"$hashed":     true,
+				"$value":      pkgmodel.ComputeValueHash("a-different-password"),
+			},
+		},
+	}
+	rec := &recordingReporter{}
+	if compareProperties(rec, expected, actual, "after create", map[string]providerDefault{}) || rec.errors == 0 {
+		t.Errorf("compareProperties should fail when the opaque digest does not match the authored secret")
+	}
+}
+
+// After extraction the digest may be omitted; the opaque envelope is then
+// accepted as-is (no plaintext to leak), mirroring resolvable handling.
+func TestCompareOpaqueValue_NoDigestAccepted(t *testing.T) {
+	actual := map[string]any{"$visibility": pkgmodel.VisibilityOpaque}
+	if !compareOpaqueValue(t, "MasterUserPassword", "TestPassword123!", actual, "after extract") {
+		t.Errorf("compareOpaqueValue should accept an opaque envelope with no verifiable digest")
+	}
+}
+
+func TestContainsOpaqueValue(t *testing.T) {
+	tests := []struct {
+		name     string
+		value    any
+		expected bool
+	}{
+		{
+			name:     "no opaque values",
+			value:    map[string]any{"Name": "my-bucket", "Tags": map[string]any{"env": "test"}},
+			expected: false,
+		},
+		{
+			name:     "envelope at the top level",
+			value:    map[string]any{"$visibility": pkgmodel.VisibilityOpaque, "$hashed": true, "$value": "abc123"},
+			expected: true,
+		},
+		{
+			name: "envelope nested in a map",
+			value: map[string]any{
+				"Name": "my-db",
+				"Credentials": map[string]any{
+					"MasterUserPassword": map[string]any{"$visibility": pkgmodel.VisibilityOpaque, "$hashed": true, "$value": "abc123"},
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "envelope nested inside an array",
+			value: map[string]any{
+				"Receivers": []any{
+					map[string]any{"Type": "webhook"},
+					map[string]any{"Token": map[string]any{"$hashed": true, "$value": "abc123"}},
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "envelope with $visibility only",
+			value: map[string]any{
+				"Secret": map[string]any{"$visibility": pkgmodel.VisibilityOpaque},
+			},
+			expected: true,
+		},
+		{
+			name:     "resolvable is not opaque",
+			value:    map[string]any{"VpcId": map[string]any{"$ref": "vpc", "$type": "AWS::EC2::VPC"}},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := containsOpaqueValue(tt.value); got != tt.expected {
+				t.Errorf("containsOpaqueValue() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
+
+// fakeReapplyHarness records the calls the extract re-apply sub-step makes, so a
+// test can pin exactly where a guarded check returned.
+type fakeReapplyHarness struct {
+	calls []string
+
+	simulation  *model.Simulation
+	simulateErr error
+}
+
+func (f *fakeReapplyHarness) SimulateApply(pklFile string, mode string) (*model.Simulation, error) {
+	f.calls = append(f.calls, "SimulateApply:"+mode)
+	return f.simulation, f.simulateErr
+}
+
+// reapplyResource builds an inventory-shaped resource with the given identity.
+func reapplyResource(label, stack, nativeID string, properties map[string]any) map[string]any {
+	return map[string]any{
+		"Label":      label,
+		"Stack":      stack,
+		"Type":       "NS::Storage::Bucket",
+		"NativeID":   nativeID,
+		"Properties": properties,
+	}
+}
+
+func TestVerifyExtractReapply(t *testing.T) {
+	properties := map[string]any{"BucketName": "my-bucket"}
+	created := reapplyResource("my-bucket", "default", "bucket-1", properties)
+	extracted := reapplyResource("my-bucket", "default", "bucket-1", properties)
+
+	tests := []struct {
+		name          string
+		harness       *fakeReapplyHarness
+		extracted     map[string]any
+		created       map[string]any
+		expectedPass  bool
+		expectedCalls []string
+		expectedError string
+	}{
+		{
+			name:          "faithful extract simulates to a zero-operation apply",
+			harness:       &fakeReapplyHarness{simulation: &model.Simulation{ChangesRequired: false}},
+			expectedPass:  true,
+			expectedCalls: []string{"SimulateApply:patch"},
+		},
+		{
+			name:          "simulate returns an error",
+			harness:       &fakeReapplyHarness{simulateErr: errors.New("agent unreachable")},
+			expectedPass:  false,
+			expectedCalls: []string{"SimulateApply:patch"},
+			expectedError: "agent unreachable",
+		},
+		{
+			name:          "simulate returns no simulation",
+			harness:       &fakeReapplyHarness{},
+			expectedPass:  false,
+			expectedCalls: []string{"SimulateApply:patch"},
+		},
+		{
+			name: "lossy extract plans a change",
+			harness: &fakeReapplyHarness{simulation: &model.Simulation{
+				ChangesRequired: true,
+				Command: model.Command{ResourceUpdates: []model.ResourceUpdate{{
+					Operation:     model.OperationUpdate,
+					ResourceLabel: "my-bucket",
+					ResourceType:  "NS::Storage::Bucket",
+				}}},
+			}},
+			expectedPass:  false,
+			expectedCalls: []string{"SimulateApply:patch"},
+			expectedError: "update my-bucket (NS::Storage::Bucket)",
+		},
+		{
+			name: "lossy extract failure names the diffing properties",
+			harness: &fakeReapplyHarness{simulation: &model.Simulation{
+				ChangesRequired: true,
+				Command: model.Command{ResourceUpdates: []model.ResourceUpdate{{
+					Operation:     model.OperationUpdate,
+					ResourceLabel: "my-alias",
+					ResourceType:  "NS::KMS::Alias",
+					PatchDocument: []byte(`[{"op":"replace","path":"/TargetKeyId","value":"abc123"}]`),
+				}}},
+			}},
+			expectedPass:  false,
+			expectedCalls: []string{"SimulateApply:patch"},
+			expectedError: `update my-alias (NS::KMS::Alias) patch: [{"op":"replace","path":"/TargetKeyId","value":"abc123"}]`,
+		},
+		{
+			name:          "skipped when the extracted properties carry an opaque secret",
+			harness:       &fakeReapplyHarness{},
+			extracted:     reapplyResource("my-db", "default", "db-1", map[string]any{"Password": map[string]any{"$visibility": pkgmodel.VisibilityOpaque}}),
+			expectedPass:  true,
+			expectedCalls: nil,
+		},
+		{
+			name:          "skipped when the created properties carry an opaque secret",
+			harness:       &fakeReapplyHarness{},
+			created:       reapplyResource("my-db", "default", "db-1", map[string]any{"Password": map[string]any{"$hashed": true, "$value": "abc123"}}),
+			expectedPass:  true,
+			expectedCalls: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			extractedResource := extracted
+			if tt.extracted != nil {
+				extractedResource = tt.extracted
+			}
+			createdResource := created
+			if tt.created != nil {
+				createdResource = tt.created
+			}
+
+			rc := NewResultCollector()
+			idx := rc.NewCRUDResult("NS::Storage::Bucket")
+			fakeT := &testing.T{}
+
+			passed := rc.verifyExtractReapply(fakeT, idx, tt.harness, "/tmp/extracted.pkl",
+				extractedResource, createdResource)
+
+			if passed != tt.expectedPass {
+				t.Errorf("verifyExtractReapply() = %v, want %v", passed, tt.expectedPass)
+			}
+			if !slices.Equal(tt.harness.calls, tt.expectedCalls) {
+				t.Errorf("harness calls = %v, want %v", tt.harness.calls, tt.expectedCalls)
+			}
+
+			rc.mu.Lock()
+			defer rc.mu.Unlock()
+			phase := rc.crudResults[idx].Phases[int(PhaseExtract)]
+			errCount := len(rc.crudResults[idx].Errors)
+			if tt.expectedError != "" {
+				found := false
+				for _, e := range rc.crudResults[idx].Errors {
+					if strings.Contains(e.Msg, tt.expectedError) {
+						found = true
+					}
+				}
+				if !found {
+					t.Errorf("recorded errors %v should contain %q", rc.crudResults[idx].Errors, tt.expectedError)
+				}
+			}
+			if tt.expectedPass {
+				if phase == StepFailed {
+					t.Error("Extract phase should not be failed when the re-apply passes")
+				}
+				if errCount != 0 {
+					t.Errorf("expected no recorded errors, got %d", errCount)
+				}
+				return
+			}
+			if phase != StepFailed {
+				t.Errorf("Extract phase should be StepFailed, got %v", phase)
+			}
+			if errCount == 0 {
+				t.Error("a failing re-apply should record at least one error")
+			}
+		})
+	}
+}
+
+// recordingReporter captures errors without failing the test (for negative cases).
+type recordingReporter struct{ errors int }
+
+func (r *recordingReporter) Errorf(string, ...any) { r.errors++ }
+func (r *recordingReporter) Logf(string, ...any)   {}
 
 func TestCompareMap(t *testing.T) {
 	t.Run("nested resolvable passes", func(t *testing.T) {
@@ -587,6 +911,52 @@ func TestCompareMap(t *testing.T) {
 		}
 		if compareMap(fakeT, "Config", expected, actual, "test", map[string]providerDefault{}) {
 			t.Error("compareMap should fail when expected key is missing from actual")
+		}
+	})
+
+	// Cloud providers commonly return [] / {} for fields the user didn't
+	// set; that's semantically equivalent to the key being omitted and
+	// must NOT be flagged as drift. The forward loop already has this
+	// forgiveness — these cases verify the reverse loop matches it.
+	t.Run("extra empty array in actual passes", func(t *testing.T) {
+		expected := map[string]any{"Name": "my-app"}
+		actual := map[string]any{"Name": "my-app", "Tags": []any{}}
+		if !compareMap(t, "Config", expected, actual, "test", map[string]providerDefault{}) {
+			t.Error("compareMap should pass when actual has an extra key with an empty array value")
+		}
+	})
+
+	t.Run("extra empty map in actual passes", func(t *testing.T) {
+		expected := map[string]any{"Name": "my-app"}
+		actual := map[string]any{"Name": "my-app", "Labels": map[string]any{}}
+		if !compareMap(t, "Config", expected, actual, "test", map[string]providerDefault{}) {
+			t.Error("compareMap should pass when actual has an extra key with an empty map value")
+		}
+	})
+
+	t.Run("extra nil value in actual passes", func(t *testing.T) {
+		expected := map[string]any{"Name": "my-app"}
+		actual := map[string]any{"Name": "my-app", "Optional": nil}
+		if !compareMap(t, "Config", expected, actual, "test", map[string]providerDefault{}) {
+			t.Error("compareMap should pass when actual has an extra key with a nil value")
+		}
+	})
+
+	t.Run("extra non-empty array in actual still fails", func(t *testing.T) {
+		fakeT := &testing.T{}
+		expected := map[string]any{"Name": "my-app"}
+		actual := map[string]any{"Name": "my-app", "Tags": []any{"prod"}}
+		if compareMap(fakeT, "Config", expected, actual, "test", map[string]providerDefault{}) {
+			t.Error("compareMap should still fail when actual has an extra key with a non-empty value (real drift)")
+		}
+	})
+
+	t.Run("extra non-empty map in actual still fails", func(t *testing.T) {
+		fakeT := &testing.T{}
+		expected := map[string]any{"Name": "my-app"}
+		actual := map[string]any{"Name": "my-app", "Labels": map[string]any{"env": "prod"}}
+		if compareMap(fakeT, "Config", expected, actual, "test", map[string]providerDefault{}) {
+			t.Error("compareMap should still fail when actual has an extra key with a non-empty map value (real drift)")
 		}
 	})
 }
@@ -719,10 +1089,10 @@ func TestCompareArrayUnordered_NestedProviderDefaults(t *testing.T) {
 		},
 	}
 	providerDefaults := map[string]providerDefault{
-		"webhooks.matchPolicy":          {},
-		"webhooks.timeoutSeconds":       {},
-		"webhooks.failurePolicy":        {},
-		"webhooks.sideEffects":          {},
+		"webhooks.matchPolicy":               {},
+		"webhooks.timeoutSeconds":            {},
+		"webhooks.failurePolicy":             {},
+		"webhooks.sideEffects":               {},
 		"webhooks.clientConfig.service.port": {},
 	}
 	result := compareArrayUnordered(t, "webhooks", expected, actual, "after create", providerDefaults)
@@ -768,8 +1138,8 @@ func TestCompareProperties_ExtraTopLevelProviderDefault(t *testing.T) {
 	}
 	actualResource := map[string]any{
 		"Properties": map[string]any{
-			"metadata":      map[string]any{"name": "my-svc"},
-			"clusterIP":     "10.96.0.1",
+			"metadata":  map[string]any{"name": "my-svc"},
+			"clusterIP": "10.96.0.1",
 		},
 	}
 	providerDefaults := map[string]providerDefault{
@@ -797,6 +1167,40 @@ func TestCompareProperties_ExtraTopLevelNonProviderDefault(t *testing.T) {
 	result := compareProperties(inner, expectedProperties, actualResource, "after create", providerDefaults)
 	if result {
 		t.Error("should fail when extra top-level key is not a provider default")
+	}
+}
+
+// Cloud providers commonly return [] / {} at the top level for fields the
+// user didn't set; that's semantically equivalent to the key being omitted
+// and must NOT be flagged as drift. Real drift (non-empty extras) still flagged.
+func TestCompareProperties_ExtraTopLevelEmptyValuesAllowed(t *testing.T) {
+	expectedProperties := map[string]any{"Name": "my-app"}
+	actualResource := map[string]any{
+		"Properties": map[string]any{
+			"Name":           "my-app",
+			"Tags":           []any{},
+			"DockerLabels":   map[string]any{},
+			"OptionalScalar": nil,
+		},
+	}
+	providerDefaults := map[string]providerDefault{}
+	if !compareProperties(t, expectedProperties, actualResource, "after create", providerDefaults) {
+		t.Error("compareProperties should pass when extra top-level keys hold structurally-absent values (nil / [] / {})")
+	}
+}
+
+func TestCompareProperties_ExtraTopLevelNonEmptyStillFails(t *testing.T) {
+	expectedProperties := map[string]any{"Name": "my-app"}
+	actualResource := map[string]any{
+		"Properties": map[string]any{
+			"Name": "my-app",
+			"Tags": []any{"prod"},
+		},
+	}
+	providerDefaults := map[string]providerDefault{}
+	inner := &testing.T{}
+	if compareProperties(inner, expectedProperties, actualResource, "after create", providerDefaults) {
+		t.Error("compareProperties should still fail when extra top-level key has a non-empty value")
 	}
 }
 
@@ -1154,4 +1558,39 @@ func TestFindMainResourceNativeID(t *testing.T) {
 			t.Fatal("expected error when no resource matches type")
 		}
 	})
+}
+
+func TestGetSyncTimeout(t *testing.T) {
+	tests := []struct {
+		name string
+		env  string
+		want time.Duration
+	}{
+		{"unset falls back to default", "", defaultSyncTimeout},
+		{"minutes are honoured", "7", 7 * time.Minute},
+		{"non-numeric falls back to default", "soon", defaultSyncTimeout},
+		{"zero falls back to default", "0", defaultSyncTimeout},
+		{"negative falls back to default", "-3", defaultSyncTimeout},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("FORMAE_TEST_SYNC_TIMEOUT", tt.env)
+			if got := getSyncTimeout(); got != tt.want {
+				t.Errorf("getSyncTimeout() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// The plugin-side retry budget (exponential backoff over recoverable
+// CloudControl errors) can legitimately keep a single read in flight for
+// minutes. If the harness gives up first it reports a failure for a sync that
+// was still making progress, so the default must leave room for that budget.
+func TestSyncTimeoutDefaultExceedsPluginRetryBudget(t *testing.T) {
+	const observedPluginRetryBudget = 3 * time.Minute
+	if defaultSyncTimeout <= observedPluginRetryBudget {
+		t.Errorf("defaultSyncTimeout = %v, must exceed the plugin retry budget of %v",
+			defaultSyncTimeout, observedPluginRetryBudget)
+	}
 }

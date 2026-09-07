@@ -7,18 +7,20 @@ package changeset
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"time"
 
 	"ergo.services/ergo/act"
 	"ergo.services/ergo/gen"
-	"github.com/google/uuid"
 	"github.com/tidwall/gjson"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
-	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/provenance"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
@@ -55,19 +57,16 @@ func NewResolveCache() gen.ProcessBehavior {
 func (r *ResolveCache) Init(args ...any) error {
 	r.cache = make(map[pkgmodel.FormaeURI]gjson.Result)
 
-	// Read retry config from node environment (set by metastructure).
-	if cfg, ok := r.Env("RetryConfig"); ok {
-		if retryCfg, ok := cfg.(pkgmodel.RetryConfig); ok {
-			r.maxRetries = retryCfg.MaxRetries
-			r.retryDelay = retryCfg.RetryDelay
-		}
+	cfg, ok := r.Env("RetryConfig")
+	if !ok {
+		return fmt.Errorf("resolveCache: missing 'RetryConfig' environment variable")
 	}
-	if r.maxRetries == 0 {
-		r.maxRetries = 3
+	retryCfg, ok := cfg.(pkgmodel.RetryConfig)
+	if !ok {
+		return fmt.Errorf("resolveCache: 'RetryConfig' environment variable has wrong type %T", cfg)
 	}
-	if r.retryDelay == 0 {
-		r.retryDelay = 2 * time.Second
-	}
+	r.maxRetries = retryCfg.MaxRetries
+	r.retryDelay = retryCfg.RetryDelay
 
 	r.Log().Debug("ResolveCache actor initialized maxRetries=%d retryDelay=%s", r.maxRetries, r.retryDelay)
 
@@ -89,88 +88,156 @@ func (r *ResolveCache) HandleMessage(from gen.PID, message any) error {
 	return nil
 }
 
+// resolveMissReason builds a human-readable explanation for a terminal
+// resolve miss — a referenced property that is absent from the source
+// resource even after a successful Read. It names the reference and the
+// missing property so the operator can act without log spelunking, and
+// additionally identifies the source resource by triplet when it is known.
+func resolveMissReason(resourceURI pkgmodel.FormaeURI, source *pkgmodel.Resource) string {
+	property := resourceURI.PropertyPath()
+	if source != nil && source.Label != "" {
+		return fmt.Sprintf("could not resolve reference %q: source resource %q has no property %q",
+			string(resourceURI), source.Stack+"/"+source.Type+"/"+source.Label, property)
+	}
+	return fmt.Sprintf("could not resolve reference %q: source resource has no property %q",
+		string(resourceURI), property)
+}
+
+// rootDigestOf computes the canonical-domain root digest of a resolved value
+// while its gjson type is still known: the wrapped/enveloped forms are
+// unwrapped first, a string digests as the string it is, and everything else
+// digests as its JSON form. The flattened Value string in the message is
+// type-lossy and must never be re-digested downstream.
+func rootDigestOf(value gjson.Result) string {
+	unwrapped := provenance.UnwrapEffectiveValue(value)
+	if unwrapped.Type == gjson.String {
+		return provenance.DigestOfString(unwrapped.String())
+	}
+	return provenance.DigestOfJSON(unwrapped.Raw)
+}
+
 // startResolve handles a new ResolveValue request: checks the cache, loads from
 // the persister if needed, and kicks off the first read attempt.
 func (r *ResolveCache) startResolve(from gen.PID, resourceURI pkgmodel.FormaeURI) {
 	// Check if the resource is already in the cache
 	if json, ok := r.cache[resourceURI.Stripped()]; ok {
-		r.Log().Debug("Cache hit for resource URI uri=%v value=%v", resourceURI, json)
-		value := json.Get(resourceURI.PropertyPath())
+		r.Log().Debug("Cache hit for resource URI uri=%v", resourceURI)
+		value := resolvedValueAt(json, resourceURI.PropertyPath())
 		if !value.Exists() {
 			r.Log().Error("Unable to resolve property in cached properties property=%s resourceURI=%v", resourceURI.PropertyPath(), resourceURI)
-			_ = r.Send(from, messages.FailedToResolveValue(messages.ResolveValue{ResourceURI: resourceURI}))
+			_ = r.Send(from, messages.FailedToResolveValue{ResourceURI: resourceURI, Reason: resolveMissReason(resourceURI, nil)})
 			return
 		}
-		_ = r.Send(from, messages.ValueResolved{ResourceURI: resourceURI, Value: value.String()})
+		_ = r.Send(from, messages.ValueResolved{ResourceURI: resourceURI, Value: value.String(),
+			SourceRootDigest: rootDigestOf(value)})
 		return
 	}
 
 	// Load the resource from the stack to get the native id
 	r.Log().Debug("Cache miss for resource URI uri=%v", resourceURI)
-	stackerResult, err := r.Call(
+	stackerResult, err := messages.UnwrapCall(r.Call(
 		gen.ProcessID{Name: actornames.ResourcePersister, Node: r.Node().Name()},
 		messages.LoadResource{
 			ResourceURI: resourceURI.Stripped(),
-		})
+		}))
 	if err != nil {
 		r.Log().Error("Failed to load resource from resource persister resourceURI=%v: %v", resourceURI, err)
-		_ = r.Send(from, messages.FailedToResolveValue(messages.ResolveValue{ResourceURI: resourceURI}))
+		_ = r.Send(from, messages.FailedToResolveValue{ResourceURI: resourceURI,
+			Reason: fmt.Sprintf("could not resolve reference %q: %v", string(resourceURI), err)})
 		return
 	}
 	loadResourceResult, ok := stackerResult.(messages.LoadResourceResult)
 	if !ok {
 		r.Log().Error("Unexpected result type from resource persister resultType=%v", reflect.TypeOf(stackerResult))
-		_ = r.Send(from, messages.FailedToResolveValue(messages.ResolveValue{ResourceURI: resourceURI}))
+		_ = r.Send(from, messages.FailedToResolveValue{ResourceURI: resourceURI,
+			Reason: fmt.Sprintf("could not resolve reference %q: unexpected reply from the resource store", string(resourceURI))})
 		return
 	}
 
-	// The persisted target config may contain resolvable metadata ($ref/$value
-	// wrappers) that plugins cannot parse.  Strip these to produce clean JSON
-	// the plugin can unmarshal.
-	targetConfig := loadResourceResult.Target.Config
-	if cleanConfig, err := resolver.ConvertToPluginFormat(targetConfig); err == nil {
-		targetConfig = cleanConfig
-	}
-
-	// Execute the first attempt inline (no delay).
+	// Execute the first attempt inline (no delay). Both the source target's
+	// config resolution and the Read happen in continueResolve, so a recoverable
+	// failure in EITHER reschedules via SendAfter on one non-blocking budget.
 	retry := resolveRetry{
 		From:        from,
 		ResourceURI: resourceURI,
 		Attempt:     1,
 		loadResult:  loadResourceResult,
-		config:      targetConfig,
 	}
 	r.continueResolve(retry)
 }
 
-// continueResolve executes a single read attempt and either resolves, schedules
-// a retry via SendAfter, or sends a failure back to the original requester.
+// strategy is the retry strategy for a resolve read: exponential-for-throttling,
+// and the single source of truth the caller's timeout budget is derived from.
+// It uses the command-global RetryConfig the actor reads at startup. Honoring a
+// per-plugin retry override for the source namespace is a known gap: it would
+// need the cache to query the coordinator for that namespace's config, plus a
+// per-namespace timeout budget (a resource can reference secrets across several
+// plugins), so it is deferred.
+func (r *ResolveCache) strategy() resource.RetryStrategy {
+	return resource.RetryStrategy{MaxRetries: r.maxRetries, BaseDelay: r.retryDelay}
+}
+
+// scheduleRetry reschedules a resolve attempt without blocking the actor loop.
+func (r *ResolveCache) scheduleRetry(retry resolveRetry, after time.Duration) {
+	if _, err := r.SendAfter(r.PID(), retry, after); err != nil {
+		r.Log().Error("Failed to schedule resolve retry: %v", err)
+		_ = r.Send(retry.From, messages.FailedToResolveValue{ResourceURI: retry.ResourceURI})
+	}
+}
+
+// continueResolve resolves the source target's config (single-shot) and executes
+// a read attempt; on a recoverable failure in either it schedules a retry via
+// SendAfter (non-blocking), otherwise it resolves or reports failure.
 func (r *ResolveCache) continueResolve(retry resolveRetry) {
 	resourceURI := retry.ResourceURI
 	from := retry.From
 
+	// Resolve the source target's opaque config (single-shot) before the Read.
+	// When the target authenticates from a secret, its persisted config carries a
+	// bare opaque $ref with no $value at rest (reference-don't-store), and
+	// ConvertToPluginFormat only strips metadata — it does not read the source. A
+	// recoverable failure here reschedules the whole resolve via SendAfter, on the
+	// same non-blocking budget as the Read below.
+	if retry.config == nil {
+		targetConfig, err := resource_update.ResolveOpaqueTargetConfig(r, retry.loadResult.Target)
+		if err != nil {
+			var rec *resource_update.RecoverableResolveError
+			if errors.As(err, &rec) {
+				if dec := r.strategy().Decide(retry.Attempt, rec.Code); dec.Retry {
+					r.Log().Info("ResolveCache: recoverable target-config resolve error, retrying errorCode=%s resourceURI=%v attempt=%d",
+						rec.Code, resourceURI, retry.Attempt)
+					retry.Attempt++
+					r.scheduleRetry(retry, dec.After)
+					return
+				}
+			}
+			r.Log().Error("Failed to resolve target config for resolve-read resourceURI=%v: %v", resourceURI, err)
+			_ = r.Send(from, messages.FailedToResolveValue{ResourceURI: resourceURI, Reason: err.Error()})
+			return
+		}
+		retry.config = targetConfig
+	}
+
 	progress, err := r.readViaPlugin(retry)
 	if err != nil {
 		r.Log().Error("Failed to read resource via plugin resourceURI=%v: %v", resourceURI, err)
-		_ = r.Send(from, messages.FailedToResolveValue(messages.ResolveValue{ResourceURI: resourceURI}))
+		_ = r.Send(from, messages.FailedToResolveValue{ResourceURI: resourceURI})
 		return
 	}
 
-	// Retry on recoverable errors via SendAfter (non-blocking).
+	// Retry on recoverable read errors via SendAfter (non-blocking), sharing the
+	// same attempt budget as the config resolution above.
 	if progress.OperationStatus == resource.OperationStatusFailure && resource.IsRecoverable(progress.ErrorCode) {
-		if retry.Attempt < r.maxRetries {
+		if dec := r.strategy().Decide(retry.Attempt, progress.ErrorCode); dec.Retry {
 			r.Log().Info("ResolveCache: recoverable error, retrying errorCode=%s resourceURI=%v attempt=%d maxRetries=%d",
 				progress.ErrorCode, resourceURI, retry.Attempt, r.maxRetries)
 			retry.Attempt++
-			if _, err := r.SendAfter(r.PID(), retry, r.retryDelay); err != nil {
-				r.Log().Error("Failed to schedule resolve retry: %v", err)
-				_ = r.Send(from, messages.FailedToResolveValue(messages.ResolveValue{ResourceURI: resourceURI}))
-			}
+			r.scheduleRetry(retry, dec.After)
 			return
 		}
 		r.Log().Error("ResolveCache: exhausted retries errorCode=%s resourceURI=%v attempts=%d",
 			progress.ErrorCode, resourceURI, retry.Attempt)
-		_ = r.Send(from, messages.FailedToResolveValue(messages.ResolveValue{ResourceURI: resourceURI}))
+		_ = r.Send(from, messages.FailedToResolveValue{ResourceURI: resourceURI})
 		return
 	}
 
@@ -178,7 +245,7 @@ func (r *ResolveCache) continueResolve(retry resolveRetry) {
 	if progress.OperationStatus == resource.OperationStatusFailure {
 		r.Log().Error("ResolveCache: non-recoverable error reading resource errorCode=%s resourceURI=%v",
 			progress.ErrorCode, resourceURI)
-		_ = r.Send(from, messages.FailedToResolveValue(messages.ResolveValue{ResourceURI: resourceURI}))
+		_ = r.Send(from, messages.FailedToResolveValue{ResourceURI: resourceURI})
 		return
 	}
 
@@ -187,65 +254,33 @@ func (r *ResolveCache) continueResolve(retry resolveRetry) {
 	enhancedParsed := r.preserveRefMetadata(retry.loadResult.Resource, parsed)
 
 	r.cache[resourceURI.Stripped()] = enhancedParsed
-	r.Log().Debug("Cached resolved properties uri=%v value=%v", resourceURI, enhancedParsed)
-	value := enhancedParsed.Get(resourceURI.PropertyPath())
+	r.Log().Debug("Cached resolved properties uri=%v", resourceURI)
+	value := resolvedValueAt(enhancedParsed, resourceURI.PropertyPath())
 	if !value.Exists() {
 		r.Log().Error("Unable to resolve property in cached properties property=%s resourceURI=%v", resourceURI.PropertyPath(), resourceURI)
-		_ = r.Send(from, messages.FailedToResolveValue(messages.ResolveValue{ResourceURI: resourceURI}))
+		_ = r.Send(from, messages.FailedToResolveValue{ResourceURI: resourceURI, Reason: resolveMissReason(resourceURI, &retry.loadResult.Resource)})
 		return
 	}
 
-	_ = r.Send(from, messages.ValueResolved{ResourceURI: resourceURI, Value: value.String()})
+	_ = r.Send(from, messages.ValueResolved{ResourceURI: resourceURI, Value: value.String(),
+		SourceRootDigest: rootDigestOf(value)})
 }
 
 // readViaPlugin spawns a PluginOperator and executes a single Read call.
 func (r *ResolveCache) readViaPlugin(retry resolveRetry) (*plugin.TrackedProgress, error) {
-	operationID := uuid.New().String()
-	spawnResult, err := r.Call(
-		gen.ProcessID{Name: actornames.PluginCoordinator, Node: r.Node().Name()},
-		messages.SpawnPluginOperator{
-			Namespace:   retry.loadResult.Resource.Namespace(),
-			ResourceURI: string(retry.ResourceURI.Stripped()),
-			Operation:   string(resource.OperationRead),
-			OperationID: operationID,
-			RequestedBy: r.PID(),
-		})
-	if err != nil {
-		return nil, fmt.Errorf("failed to spawn plugin operator: %w", err)
-	}
-	spawnRes, ok := spawnResult.(messages.SpawnPluginOperatorResult)
-	if !ok {
-		return nil, fmt.Errorf("unexpected result type from PluginCoordinator: %T", spawnResult)
-	}
-	if spawnRes.Error != "" {
-		return nil, fmt.Errorf("failed to spawn plugin operator: %s", spawnRes.Error)
-	}
-
-	progressResult, err := r.Call(
-		spawnRes.PID,
-		plugin.ReadResource{
-			Namespace:         retry.loadResult.Resource.Namespace(),
-			ResourceType:      retry.loadResult.Resource.Type,
-			ResourceNamespace: retry.loadResult.Resource.Namespace(),
-			ExistingResource:  retry.loadResult.Resource,
-			Resource:          retry.loadResult.Resource,
-			NativeID:          retry.loadResult.Resource.NativeID,
-			TargetConfig:      retry.config,
-		})
-	if err != nil {
-		return nil, fmt.Errorf("failed to read resource: %w", err)
-	}
-
-	progress, ok := progressResult.(plugin.TrackedProgress)
-	if !ok {
-		return nil, fmt.Errorf("unexpected result type from plugin operator: %T", progressResult)
-	}
-	return &progress, nil
+	return resource_update.ReadResourceViaPlugin(r, retry.loadResult.Resource, retry.config)
 }
 
 func (r *ResolveCache) preserveRefMetadata(originalResource pkgmodel.Resource, pluginResult gjson.Result) gjson.Result {
-	if !hasOpaqueValues(originalResource.Properties) {
+	schemaOpaqueFields := originalResource.Schema.Opaque()
+
+	if !hasOpaqueValues(originalResource.Properties) && len(schemaOpaqueFields) == 0 {
 		return pluginResult
+	}
+
+	opaqueFields := make(map[string]bool, len(schemaOpaqueFields))
+	for _, f := range schemaOpaqueFields {
+		opaqueFields[f] = true
 	}
 
 	originalProps := gjson.Parse(string(originalResource.Properties))
@@ -259,7 +294,9 @@ func (r *ResolveCache) preserveRefMetadata(originalResource pkgmodel.Resource, p
 	modified := false
 	for propName, propValue := range pluginProps {
 		originalProp := originalProps.Get(propName)
-		if originalProp.Exists() && originalProp.Get("$visibility").String() == "Opaque" {
+		isOpaque := opaqueFields[propName] ||
+			(originalProp.Exists() && originalProp.Get("$visibility").String() == "Opaque")
+		if isOpaque {
 			pluginProps[propName] = map[string]any{
 				"$value":      propValue,
 				"$visibility": "Opaque",
@@ -287,4 +324,38 @@ func (r *ResolveCache) preserveRefMetadata(originalResource pkgmodel.Resource, p
 func hasOpaqueValues(props json.RawMessage) bool {
 	return bytes.Contains(props, []byte(`"$visibility"`)) &&
 		bytes.Contains(props, []byte(`"Opaque"`))
+}
+
+// resolvedValueAt extracts the resolved value for propertyPath from cached
+// plugin properties. preserveRefMetadata wraps an opaque field as
+// {"$value": <fieldValue>, "$visibility": "Opaque"}, so a scalar secret whose
+// path IS the field name resolves directly. A ref into a MAP-shaped opaque
+// secret selects a key (e.g. "decodedData.username") that lives beneath the
+// wrapper at "<field>.$value.<subpath>"; when the direct lookup misses, descend
+// into the opaque parent's $value and re-wrap the leaf in the same envelope
+// shape so downstream handling is identical for scalar and map secrets.
+func resolvedValueAt(props gjson.Result, propertyPath string) gjson.Result {
+	if v := props.Get(propertyPath); v.Exists() {
+		return v
+	}
+	root, subpath, nested := strings.Cut(propertyPath, ".")
+	if !nested {
+		return gjson.Result{}
+	}
+	parent := props.Get(root)
+	if parent.Get("$visibility").String() != pkgmodel.VisibilityOpaque {
+		return gjson.Result{}
+	}
+	leaf := parent.Get("$value." + subpath)
+	if !leaf.Exists() {
+		return gjson.Result{}
+	}
+	wrapped, err := json.Marshal(map[string]any{
+		"$value":      leaf.Value(),
+		"$visibility": pkgmodel.VisibilityOpaque,
+	})
+	if err != nil {
+		return gjson.Result{}
+	}
+	return gjson.ParseBytes(wrapped)
 }

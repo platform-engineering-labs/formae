@@ -10,6 +10,16 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+
+	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
+)
+
+// Plugin type values a manifest's Type field may hold.
+const (
+	PluginTypeResource       = "resource"
+	PluginTypeAuth           = "auth"
+	PluginTypeOidcCredential = "oidc-credential"
 )
 
 // Manifest represents a parsed formae-plugin.pkl file.
@@ -20,7 +30,7 @@ type Manifest struct {
 	// Used in repository naming: formae-plugin-<name>
 	Name string `json:"name"`
 
-	// Type is the plugin type: "resource" (default) or "auth"
+	// Type is the plugin type: "resource" (default), "auth", or "oidc-credential"
 	Type string `json:"type,omitempty"`
 
 	// Version is the semantic version of the plugin
@@ -31,17 +41,54 @@ type Manifest struct {
 	// Only required for resource plugins.
 	Namespace string `json:"namespace,omitempty"`
 
+	// Namespaces lists the credential namespaces an oidc-credential plugin
+	// issues (e.g. "AWS", "GCP"). Only required for oidc-credential plugins.
+	Namespaces []string `json:"namespaces,omitempty"`
+
 	// License is the SPDX license identifier (e.g., "Apache-2.0", "MIT")
 	License string `json:"license"`
 
 	// MinFormaeVersion is the minimum formae version this plugin supports
 	// Used for compatibility checking and matrix testing
 	MinFormaeVersion string `json:"minFormaeVersion"`
+
+	// Summary is a short one-liner description for CLI listings (optional)
+	Summary string `json:"summary,omitempty"`
+
+	// Category is a UI filter tag, e.g. "cloud", "auth", "config" (optional)
+	Category string `json:"category,omitempty"`
+
+	// DefaultReapRaw is the plugin-level default reaping behaviour, kept as raw
+	// JSON so it can be peeked and decoded via DefaultReap(). Absent → nil.
+	DefaultReapRaw json.RawMessage `json:"defaultReap,omitempty"`
+}
+
+// DefaultReap decodes the plugin's default reaping behaviour from the manifest.
+// It returns (nil, nil) when the manifest declares no default, letting callers
+// fall through to the global reaping default.
+func (m *Manifest) DefaultReap() (pkgmodel.ReapingBehaviour, error) {
+	return pkgmodel.ParseReaping(m.DefaultReapRaw)
 }
 
 // IsAuthPlugin returns true if this manifest describes an auth plugin.
 func (m *Manifest) IsAuthPlugin() bool {
-	return m.Type == "auth"
+	return m.Type == PluginTypeAuth
+}
+
+// IsOidcCredentialPlugin returns true if this manifest describes an
+// oidc-credential plugin.
+func (m *Manifest) IsOidcCredentialPlugin() bool {
+	return m.Type == PluginTypeOidcCredential
+}
+
+// NormalizedNamespaces returns a copy of Namespaces with every entry
+// upper-cased, leaving the original manifest untouched.
+func (m *Manifest) NormalizedNamespaces() []string {
+	normalized := make([]string, len(m.Namespaces))
+	for i, ns := range m.Namespaces {
+		normalized[i] = strings.ToUpper(ns)
+	}
+	return normalized
 }
 
 // DefaultManifestPath is the expected location of the plugin manifest.
@@ -92,8 +139,11 @@ func (m *Manifest) Validate() error {
 	if m.Version == "" {
 		return fmt.Errorf("manifest: version is required")
 	}
-	if !m.IsAuthPlugin() && m.Namespace == "" {
+	if !m.IsAuthPlugin() && !m.IsOidcCredentialPlugin() && m.Namespace == "" {
 		return fmt.Errorf("manifest: namespace is required for resource plugins")
+	}
+	if m.IsOidcCredentialPlugin() && len(m.Namespaces) == 0 {
+		return fmt.Errorf("manifest: namespaces is required for oidc-credential plugins")
 	}
 	if m.License == "" {
 		return fmt.Errorf("manifest: license is required")

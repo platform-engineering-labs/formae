@@ -68,7 +68,7 @@ func TestMetastructure_FormaAppliedSuccess(t *testing.T) {
 
 		o.ApplyForma(f, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test")
+		}, "test", "", "")
 
 		assert.Eventually(t, func() bool {
 			fas, err := o.Datastore.LoadFormaCommands()
@@ -143,7 +143,7 @@ func TestMetastructure_FormaAppliedPartialSuccess(t *testing.T) {
 
 		o.ApplyForma(f, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test")
+		}, "test", "", "")
 
 		assert.Eventually(t, func() bool {
 			fas, err := o.Datastore.LoadFormaCommands()

@@ -24,11 +24,13 @@ const (
 	TargetOperationUpdate  = types.OperationUpdate
 	TargetOperationDelete  = types.OperationDelete
 	TargetOperationReplace = types.OperationReplace
+	TargetOperationResolve = types.OperationResolve
 
 	TargetUpdateStateNotStarted = types.TargetUpdateStateNotStarted
 	TargetUpdateStateInProgress = types.TargetUpdateStateInProgress
 	TargetUpdateStateSuccess    = types.TargetUpdateStateSuccess
 	TargetUpdateStateFailed     = types.TargetUpdateStateFailed
+	TargetUpdateStateCanceled   = types.TargetUpdateStateCanceled
 )
 
 // TargetUpdate represents an update to a target in the system
@@ -44,6 +46,12 @@ type TargetUpdate struct {
 	RemainingResolvables []pkgmodel.FormaeURI `json:"RemainingResolvables,omitempty"`
 	IsCascade            bool                 `json:"IsCascade,omitempty"`     // True if this delete is triggered by cascade
 	CascadeSource        string               `json:"CascadeSource,omitempty"` // Label of resource that triggered the cascade
+	// OpaqueOnly marks a synthetic Resolve that must resolve only opaque
+	// (credential) refs. Its non-opaque cross-resource refs point at sources
+	// being deleted in the same command, so they must not be resolved. The flag
+	// is preserved so execute-time revalidation keeps the opaque-only selection
+	// when it rebuilds resolvables against a concurrently-advanced config.
+	OpaqueOnly bool `json:"OpaqueOnly,omitempty"`
 }
 
 // NewTargetUpdateForCascadeDelete creates a cascade delete TargetUpdate for a target
@@ -67,8 +75,29 @@ func NewTargetUpdateForCascadeDelete(target *pkgmodel.Target, cascadeSource stri
 	}
 }
 
-// HasChange returns true if the discoverable field changed
+// NewResolveTargetUpdate creates a synthetic TargetUpdate that resolves opaque
+// $ref config values in-memory for an otherwise-unchanged target. The op is
+// never persisted and does not trigger discovery or cloud-side mutations.
+// ExistingTarget is nil because there is nothing to compare or persist.
+func NewResolveTargetUpdate(target pkgmodel.Target, resolvables []pkgmodel.FormaeURI) TargetUpdate {
+	now := util.TimeNow()
+	return TargetUpdate{
+		Target:               target,
+		ExistingTarget:       nil,
+		Operation:            TargetOperationResolve,
+		State:                TargetUpdateStateNotStarted,
+		StartTs:              now,
+		ModifiedTs:           now,
+		RemainingResolvables: resolvables,
+	}
+}
+
+// HasChange returns true if the discoverable field changed.
+// A Resolve op is synthetic and never persists anything, so it always returns false.
 func (tu *TargetUpdate) HasChange() bool {
+	if tu.Operation == TargetOperationResolve {
+		return false
+	}
 	if tu.ExistingTarget == nil {
 		return true
 	}

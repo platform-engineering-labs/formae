@@ -1,0 +1,29 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+module Crypto
+
+import "pkl:json"
+
+class KeyPair {
+  private: String
+  public: String
+}
+
+typealias Encoding = "pkcs1"|"pkcs8"|"sec1"
+typealias ECParams = "256"|"384"|"521"
+
+/// keyPair: get a new public and private key pair
+function keyPair(encoding: Encoding, bits: Number?, params: ECParams?): KeyPair =
+  let (uri = "libext:///crypto/keyPair?encoding=\(encoding)&bits=\(bits ?? 2048.toString())&params=\(params ?? 256.toString())")
+    let (result = new json.Parser{}.parse(read(uri)))
+      if (result.hasProperty("Error"))
+        throw("rsa.keyPair error: \(result.getProperty("Error"))")
+      else
+        new KeyPair {
+          private = result.getProperty("Body").getProperty("private")
+          public = result.getProperty("Body").getProperty("public")
+        }

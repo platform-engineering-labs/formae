@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"os/exec"
 	"testing"
 	"time"
@@ -270,8 +271,9 @@ func (f *FormaeCLI) Inventory(t *testing.T, args ...string) []Resource {
 
 // ExtractToFile runs `formae extract` with the given query and writes the
 // resulting PKL to targetPath. The --yes flag is set to overwrite without
-// prompting.
-func (f *FormaeCLI) ExtractToFile(t *testing.T, query string, targetPath string) {
+// prompting. Additional flags can be passed via extraArgs (e.g.
+// "--schema-location", "local").
+func (f *FormaeCLI) ExtractToFile(t *testing.T, query string, targetPath string, extraArgs ...string) {
 	t.Helper()
 
 	args := []string{
@@ -279,10 +281,37 @@ func (f *FormaeCLI) ExtractToFile(t *testing.T, query string, targetPath string)
 		"--config", f.configPath,
 		"--query", query,
 		"--yes",
-		targetPath,
 	}
+	args = append(args, extraArgs...)
+	args = append(args, targetPath)
 
 	f.run(t, args...)
+}
+
+// Eval runs `formae eval` against the given forma fixture and returns stdout
+// as bytes. The machine consumer + json output schema are set so the result
+// is parseable.
+//
+// The fixture path is placed immediately after the subcommand because
+// IsDynamicCommand (cmd.go) iterates os.Args looking for the first argument
+// containing a supported file extension and treats it as the forma file.
+// If --config (which points at formae.conf.pkl) appeared first, it would be
+// mis-detected as the forma file and the PKL evaluator would refuse to
+// load formae:/Config.pkl. Apply's helper uses the same ordering for the
+// same reason.
+func (f *FormaeCLI) Eval(t *testing.T, fixturePath string, extraArgs ...string) []byte {
+	t.Helper()
+
+	args := []string{
+		"eval",
+		fixturePath,
+		"--config", f.configPath,
+		"--output-consumer", "machine",
+		"--output-schema", "json",
+	}
+	args = append(args, extraArgs...)
+
+	return f.run(t, args...)
 }
 
 // StatusCommand queries the status of a specific command by ID.
@@ -481,7 +510,11 @@ func (f *FormaeCLI) DestroyExpectError(t *testing.T, fixturePath string, extraAr
 }
 
 // ProjectInit runs `formae project init` to generate a new project in the
-// given directory. This is a CLI-only command that does not require an agent.
+// given directory. The CLI consults the agent for installed plugin versions
+// (used to pin remote schema URIs in the generated PklProject), so an agent
+// must be running and the FormaeCLI must have been constructed with its
+// config path. --plugin-dir is only needed when an include uses the @local
+// suffix.
 func (f *FormaeCLI) ProjectInit(t *testing.T, dir string, includes ...string) {
 	t.Helper()
 
@@ -490,12 +523,16 @@ func (f *FormaeCLI) ProjectInit(t *testing.T, dir string, includes ...string) {
 		"--schema", "pkl",
 		"--yes",
 	}
+	if f.configPath != "" {
+		args = append(args, "--config", f.configPath)
+	}
+	if pluginDir := os.Getenv("FORMAE_PLUGIN_DIR"); pluginDir != "" {
+		args = append(args, "--plugin-dir", pluginDir)
+	}
 	for _, inc := range includes {
 		args = append(args, "--include", inc)
 	}
 
-	// ProjectInit does not need --config (no agent), so use exec.Command
-	// directly instead of f.run() which always adds --config.
 	cmd := exec.Command(f.binaryPath, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

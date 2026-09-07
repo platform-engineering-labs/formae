@@ -87,7 +87,7 @@ func TestMetastructure_FinishIncompleteFormaCommands(t *testing.T) {
 			},
 		}
 
-		_, err = m.ApplyForma(forma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id")
+		_, err = m.ApplyForma(forma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "test-client-id", "", "")
 		assert.NoError(t, err)
 
 		time.Sleep(5 * time.Millisecond)
@@ -144,10 +144,10 @@ func TestMetastructure_FinishIncompleteFormaCommands(t *testing.T) {
 // command without spawning a changeset executor.
 //
 // Scenario:
-// 1. Store a command with all resource updates already in terminal states
-//    (simulating a crash between last resource completion and command finalization)
-// 2. Restart the metastructure, triggering ReRunIncompleteCommands
-// 3. Verify the command transitions to the correct final state
+//  1. Store a command with all resource updates already in terminal states
+//     (simulating a crash between last resource completion and command finalization)
+//  2. Restart the metastructure, triggering ReRunIncompleteCommands
+//  3. Verify the command transitions to the correct final state
 func TestMetastructure_FinalizeAllTerminalAfterCrash(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		overrides := &pkgplugin.ResourcePluginOverrides{}
@@ -242,12 +242,12 @@ func TestMetastructure_FinalizeAllTerminalAfterCrash(t *testing.T) {
 // ProgressResult) are not re-included in the recovery changeset after a crash.
 //
 // This prevents the pendingCompletions underflow bug where:
-// 1. Resource B depends on A, A fails → B is cascade-marked as Failed
-// 2. Agent crashes
-// 3. On restart, B has state=Failed but empty ProgressResult
-// 4. Without the fix, UpdateState() would see empty progress → NotStarted
-// 5. Recovery changeset includes B, FormaCommandPersister counts B as already
-//    terminal → pendingCompletions too low → underflow on B's completion
+//  1. Resource B depends on A, A fails → B is cascade-marked as Failed
+//  2. Agent crashes
+//  3. On restart, B has state=Failed but empty ProgressResult
+//  4. Without the fix, UpdateState() would see empty progress → NotStarted
+//  5. Recovery changeset includes B, FormaCommandPersister counts B as already
+//     terminal → pendingCompletions too low → underflow on B's completion
 func TestMetastructure_CascadedFailuresNotReExecutedAfterCrash(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		createCallCount := 0

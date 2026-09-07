@@ -19,6 +19,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_persister"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
@@ -69,20 +70,36 @@ type SynchronizerData struct {
 	datastore datastore.Datastore
 	cfg       pkgmodel.SynchronizationConfig
 
-	isScheduledSync bool
-	timeStarted     time.Time
-	commandID       string
+	timeStarted time.Time
+	commandID   string
 
-	// excludedResources tracks resources that are currently being updated by
-	// non-sync operations (e.g., user apply/destroy commands). These resources
-	// should be excluded from synchronization to prevent race conditions.
-	excludedResources map[string]struct{}
+	// excludedResources counts, per resource, how many in-flight changesets are
+	// writing it. Anything present is held out of synchronization; a resource
+	// drops out only when the last writer releases it. It is a count rather
+	// than a set because a set cannot express two writers: the first to finish
+	// would release a claim it did not solely hold, and the other changeset
+	// would keep writing with the synchronizer free to read mid-write.
+	excludedResources map[string]int
 }
 
 // Messages processed by Synchronizer
 
-type Synchronize struct {
-	Once bool
+type Synchronize struct{}
+
+const syncTickName = gen.Atom("sync-tick")
+
+// rescheduleAction returns the action that schedules the next periodic
+// synchronization. Setting a GenericTimeout with the same name auto-cancels
+// any prior pending timer, so exactly one tick is in flight at any time.
+func rescheduleAction(data SynchronizerData) []statemachine.Action {
+	if !data.cfg.Enabled {
+		return nil
+	}
+	return []statemachine.Action{statemachine.GenericTimeout{
+		Name:     syncTickName,
+		Duration: data.cfg.Interval,
+		Message:  Synchronize{},
+	}}
 }
 
 func (s *Synchronizer) Init(args ...any) (statemachine.StateMachineSpec[SynchronizerData], error) {
@@ -106,7 +123,7 @@ func (s *Synchronizer) Init(args ...any) (statemachine.StateMachineSpec[Synchron
 	data := SynchronizerData{
 		datastore:         ds.(datastore.Datastore),
 		cfg:               synchronizerCfg,
-		excludedResources: make(map[string]struct{}),
+		excludedResources: make(map[string]int),
 	}
 
 	spec := statemachine.NewStateMachineSpec(StateIdle,
@@ -138,21 +155,17 @@ func (s *Synchronizer) Init(args ...any) (statemachine.StateMachineSpec[Synchron
 func onStateChange(oldState gen.Atom, newState gen.Atom, data SynchronizerData, proc gen.Process) (gen.Atom, SynchronizerData, error) {
 	if oldState == StateSynchronizing && newState == StateIdle {
 		proc.Log().Debug("Synchronization finished duration=%s", time.Since(data.timeStarted))
-		if err := scheduleNextSync(data, proc); err != nil {
-			return newState, data, gen.TerminateReasonPanic
-		}
 	}
 	return newState, data, nil
 }
 
 func synchronize(from gen.PID, state gen.Atom, data SynchronizerData, message Synchronize, proc gen.Process) (gen.Atom, SynchronizerData, []statemachine.Action, error) {
-	data.isScheduledSync = !message.Once
-	data.timeStarted = time.Now()
-
 	if state == StateSynchronizing {
 		proc.Log().Debug("Synchronizer already running, consider configuring a longer interval")
 		return state, data, nil, nil
 	}
+
+	data.timeStarted = time.Now()
 	proc.Log().Debug("Starting resource synchronization timestamp=%v", data.timeStarted)
 
 	return synchronizeAllResources(state, data, proc)
@@ -180,15 +193,16 @@ func synchronizeAllResources(state gen.Atom, data SynchronizerData, proc gen.Pro
 	}
 
 	type pluginCache struct {
-		available bool
-		schemas   map[string]pkgmodel.Schema
+		available    bool
+		schemas      map[string]pkgmodel.Schema
+		matchFilters []pkgmodel.MatchFilter
 	}
 	pluginInfoByNamespace := make(map[string]pluginCache)
 	for namespace := range namespaceSeen {
-		response, err := proc.Call(
+		response, err := messages.UnwrapCall(proc.Call(
 			gen.ProcessID{Name: actornames.PluginCoordinator, Node: proc.Node().Name()},
 			messages.GetPluginInfo{Namespace: namespace},
-		)
+		))
 		if err != nil {
 			proc.Log().Debug("Failed to check plugin availability, skipping namespace=%s: %v",
 				namespace, err)
@@ -205,8 +219,9 @@ func synchronizeAllResources(state gen.Atom, data SynchronizerData, proc gen.Pro
 		}
 
 		pluginInfoByNamespace[namespace] = pluginCache{
-			available: true,
-			schemas:   pluginInfo.ResourceSchemas,
+			available:    true,
+			schemas:      pluginInfo.ResourceSchemas,
+			matchFilters: pluginInfo.MatchFilters,
 		}
 	}
 
@@ -236,6 +251,7 @@ func synchronizeAllResources(state gen.Atom, data SynchronizerData, proc gen.Pro
 			existingTargets,
 			data.datastore,
 			nil, nil,
+			false,
 		)
 		if err != nil {
 			proc.Log().Error("failed to generate resource updates for stack %s: %v", stackLabel, err)
@@ -271,12 +287,23 @@ func synchronizeAllResources(state gen.Atom, data SynchronizerData, proc gen.Pro
 	}
 	allResourceUpdates = availableResourceUpdates
 
+	// Attach per-namespace, per-type discovery filters to each update so the
+	// ResourcePersister can evict unmanaged rows whose freshly-read cloud state
+	// matches a filter. Scoped strictly to the update's own namespace cache to
+	// prevent filter bleed across namespaces.
+	for i := range allResourceUpdates {
+		namespace := allResourceUpdates[i].DesiredState.Namespace()
+		if cache, ok := pluginInfoByNamespace[namespace]; ok && cache.available {
+			filters := pkgmodel.FiltersForType(cache.matchFilters, allResourceUpdates[i].DesiredState.Type)
+			if len(filters) > 0 {
+				allResourceUpdates[i].MatchFilters = filters
+			}
+		}
+	}
+
 	if len(allResourceUpdates) == 0 {
 		proc.Log().Debug("Synchronizer: no resources found to synchronize")
-		if err = scheduleNextSync(data, proc); err != nil {
-			return state, data, nil, gen.TerminateReasonPanic
-		}
-		return StateIdle, data, nil, nil
+		return StateIdle, data, rescheduleAction(data), nil
 	}
 
 	var resourcesToSynchronize []pkgmodel.Resource
@@ -294,21 +321,40 @@ func synchronizeAllResources(state gen.Atom, data SynchronizerData, proc gen.Pro
 		nil, // No target updates on sync
 		nil, // No stack updates on sync
 		nil, // No policy updates on sync
+		nil, // No generator updates on sync
 		"synchronizer",
+		"",
+		"",
+		forma_command.SourceSynchronizer,
 	)
 	data.commandID = syncCommand.ID
 	proc.Log().Debug("Synchronizer: created sync command commandID=%s resourceUpdateCount=%d", syncCommand.ID, len(allResourceUpdates))
 
-	_, err = proc.Call(
+	_, err = messages.UnwrapCall(proc.Call(
 		gen.ProcessID{Name: actornames.FormaCommandPersister, Node: proc.Node().Name()},
-		forma_persister.StoreNewFormaCommand{Command: *syncCommand})
+		forma_persister.StoreNewFormaCommand{Command: *syncCommand}))
 	if err != nil {
 		proc.Log().Error("failed to store batch forma command: %v", err)
 		return state, data, nil, gen.TerminateReasonPanic
 	}
 
-	// Sync commands (READs) will never contain cycles so we can safely ignore the error here.
-	cs, _ := changeset.NewChangeset(allResourceUpdates, nil, syncCommand.ID, pkgmodel.CommandSync)
+	synth, err := target_update.SynthesizeResolveTargetUpdates(
+		resource_update.ReferencedTargetLabels(allResourceUpdates),
+		resource_update.SourceTargetByKsuid(allResourceUpdates),
+		nil, data.datastore)
+	if err != nil {
+		proc.Log().Error("Synchronizer: failed to build changeset, skipping sync cycle commandID=%s: %v", syncCommand.ID, err)
+		finalizeFailedCommand(syncCommand, proc)
+		return StateIdle, data, rescheduleAction(data), nil
+	}
+	// No generator draws: a sync command only reads the inventory, so no
+	// destination in it is waiting for a generated value.
+	cs, err := changeset.NewChangeset(allResourceUpdates, synth, nil, syncCommand.ID, pkgmodel.CommandSync, syncCommand.Config.Mode)
+	if err != nil {
+		proc.Log().Error("Synchronizer: failed to build changeset, skipping sync cycle commandID=%s: %v", syncCommand.ID, err)
+		finalizeFailedCommand(syncCommand, proc)
+		return StateIdle, data, rescheduleAction(data), nil
+	}
 
 	proc.Log().Debug("Ensuring ChangesetExecutor for sync command commandID=%s", syncCommand.ID)
 	_, err = proc.Call(
@@ -339,28 +385,65 @@ func changesetCompleted(from gen.PID, state gen.Atom, data SynchronizerData, mes
 		return state, data, nil, nil
 	}
 
-	return StateIdle, data, nil, nil
+	return StateIdle, data, rescheduleAction(data), nil
+}
+
+// excludeFromSync claims uri on behalf of one in-flight changeset.
+func excludeFromSync(excluded map[string]int, uri string) {
+	excluded[uri]++
+}
+
+// releaseFromSync drops one changeset's claim on uri, lifting the exclusion
+// only once the last writer has released it. A release with no matching claim
+// is inert rather than an error: it must not leave a negative count that a
+// later claim would have to climb out of before the resource is protected.
+func releaseFromSync(excluded map[string]int, uri string) {
+	remaining, claimed := excluded[uri]
+	if !claimed {
+		return
+	}
+	if remaining <= 1 {
+		delete(excluded, uri)
+		return
+	}
+	excluded[uri] = remaining - 1
 }
 
 func registerInProgressResource(from gen.PID, state gen.Atom, data SynchronizerData, message messages.RegisterInProgressResource, proc gen.Process) (gen.Atom, SynchronizerData, []statemachine.Action, error) {
-	data.excludedResources[message.ResourceURI] = struct{}{}
+	excludeFromSync(data.excludedResources, message.ResourceURI)
 	proc.Log().Debug("Resource registered as in-progress, excluded from sync resourceURI=%s", message.ResourceURI)
 	return state, data, nil, nil
 }
 
 func unregisterInProgressResource(from gen.PID, state gen.Atom, data SynchronizerData, message messages.UnregisterInProgressResource, proc gen.Process) (gen.Atom, SynchronizerData, []statemachine.Action, error) {
-	delete(data.excludedResources, message.ResourceURI)
+	releaseFromSync(data.excludedResources, message.ResourceURI)
 	proc.Log().Debug("Resource unregistered from in-progress, can be synced resourceURI=%s", message.ResourceURI)
 	return state, data, nil, nil
 }
 
-func scheduleNextSync(data SynchronizerData, proc gen.Process) error {
-	if data.isScheduledSync {
-		_, err := proc.SendAfter(proc.PID(), Synchronize{}, data.cfg.Interval)
-		if err != nil {
-			return fmt.Errorf("failed to schedule next resource synchronization %w", err)
+// finalizeFailedCommand marks all resource updates in the command as failed and then
+// finalizes the command itself, preventing persisted commands from being left in a
+// non-terminal pending state when changeset construction fails after storage.
+func finalizeFailedCommand(cmd *forma_command.FormaCommand, proc gen.Process) {
+	refs := make([]forma_persister.ResourceUpdateRef, 0, len(cmd.ResourceUpdates))
+	for _, ru := range cmd.ResourceUpdates {
+		refs = append(refs, forma_persister.ResourceUpdateRef{
+			URI:       ru.URI(),
+			Operation: ru.Operation,
+		})
+	}
+	persister := gen.ProcessID{Name: actornames.FormaCommandPersister, Node: proc.Node().Name()}
+	if len(refs) > 0 {
+		if _, err := messages.UnwrapCall(proc.Call(persister, forma_persister.MarkResourcesAsFailed{
+			CommandID:          cmd.ID,
+			Resources:          refs,
+			ResourceModifiedTs: time.Now(),
+		})); err != nil {
+			proc.Log().Error("Synchronizer: failed to mark resources as failed for aborted command commandID=%s: %v", cmd.ID, err)
+			return
 		}
 	}
-
-	return nil
+	if _, err := messages.UnwrapCall(proc.Call(persister, forma_persister.FinalizeIncompleteCommand{CommandID: cmd.ID})); err != nil {
+		proc.Log().Error("Synchronizer: failed to finalize aborted command commandID=%s: %v", cmd.ID, err)
+	}
 }

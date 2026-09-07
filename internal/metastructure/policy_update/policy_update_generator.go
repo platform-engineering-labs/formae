@@ -17,8 +17,9 @@ import (
 type PolicyDatastore interface {
 	// GetStackByLabel retrieves a stack by its label
 	GetStackByLabel(label string) (*pkgmodel.Stack, error)
-	// GetPoliciesForStack returns all non-deleted policies for a given stack ID
-	GetPoliciesForStack(stackID string) ([]pkgmodel.Policy, error)
+	// GetInlinePoliciesForStack returns the non-deleted inline policies of a stack,
+	// leaving out the standalone policies attached to it
+	GetInlinePoliciesForStack(stackID string) ([]pkgmodel.Policy, error)
 	// GetStandalonePolicy retrieves a standalone policy by label (stack_id IS NULL)
 	// Returns nil, nil if no policy is found
 	GetStandalonePolicy(label string) (pkgmodel.Policy, error)
@@ -41,7 +42,7 @@ func NewPolicyUpdateGenerator(ds PolicyDatastore) *PolicyUpdateGenerator {
 }
 
 // GeneratePolicyUpdates determines what policy changes are needed
-func (pg *PolicyUpdateGenerator) GeneratePolicyUpdates(forma *pkgmodel.Forma, command pkgmodel.Command) ([]PolicyUpdate, error) {
+func (pg *PolicyUpdateGenerator) GeneratePolicyUpdates(forma *pkgmodel.Forma, command pkgmodel.Command, mode pkgmodel.FormaApplyMode) ([]PolicyUpdate, error) {
 	// For destroy commands, handle standalone policy deletion
 	// Inline policies are NOT shown - they're deleted implicitly with their stack
 	if command == pkgmodel.CommandDestroy {
@@ -52,7 +53,7 @@ func (pg *PolicyUpdateGenerator) GeneratePolicyUpdates(forma *pkgmodel.Forma, co
 
 	// Process inline policies from stacks
 	for _, stack := range forma.Stacks {
-		stackUpdates, err := pg.generateInlinePolicyUpdates(stack)
+		stackUpdates, err := pg.generateInlinePolicyUpdates(stack, mode)
 		if err != nil {
 			return nil, fmt.Errorf("failed to generate policy updates for stack %s: %w", stack.Label, err)
 		}
@@ -83,8 +84,15 @@ func (pg *PolicyUpdateGenerator) GeneratePolicyUpdates(forma *pkgmodel.Forma, co
 	return updates, nil
 }
 
-func (pg *PolicyUpdateGenerator) generateInlinePolicyUpdates(stack pkgmodel.Stack) ([]PolicyUpdate, error) {
-	if len(stack.Policies) == 0 {
+func (pg *PolicyUpdateGenerator) generateInlinePolicyUpdates(stack pkgmodel.Stack, mode pkgmodel.FormaApplyMode) ([]PolicyUpdate, error) {
+	// Reconcile is exact: the incoming stack is the source of truth, so an inline
+	// policy that is no longer declared is deleted. That means the stored policies
+	// have to be inspected even when the stack declares none. Every other mode
+	// only applies what is declared, so a stack without inline policies returns
+	// straight away and performs no lookups.
+	exact := mode == pkgmodel.FormaApplyModeReconcile
+
+	if len(stack.Policies) == 0 && !exact {
 		return nil, nil
 	}
 
@@ -99,7 +107,7 @@ func (pg *PolicyUpdateGenerator) generateInlinePolicyUpdates(stack pkgmodel.Stac
 		inlinePolicies = append(inlinePolicies, raw)
 	}
 
-	if len(inlinePolicies) == 0 {
+	if len(inlinePolicies) == 0 && !exact {
 		return nil, nil
 	}
 
@@ -108,22 +116,22 @@ func (pg *PolicyUpdateGenerator) generateInlinePolicyUpdates(stack pkgmodel.Stac
 		return nil, fmt.Errorf("failed to parse policies: %w", err)
 	}
 
-	// Look up existing policies for this stack
-	existingPoliciesByType := make(map[string]pkgmodel.Policy)
-	if pg.datastore != nil {
-		existingStack, err := pg.datastore.GetStackByLabel(stack.Label)
-		if err == nil && existingStack != nil {
-			existingPolicies, err := pg.datastore.GetPoliciesForStack(existingStack.ID)
-			if err == nil {
-				for _, p := range existingPolicies {
-					existingPoliciesByType[p.GetType()] = p
-				}
-			}
-		}
+	existingPolicies, err := pg.existingInlinePolicies(stack.Label)
+	if err != nil {
+		return nil, err
+	}
+
+	existingPoliciesByType := make(map[string]pkgmodel.Policy, len(existingPolicies))
+	for _, p := range existingPolicies {
+		existingPoliciesByType[p.GetType()] = p
 	}
 
 	now := util.TimeNow()
 	var updates []PolicyUpdate
+	// Labels of the stored policies a declaration matched. Within a stack's
+	// inline set the label identifies the row, so it is what the delete pass
+	// checks a stored policy against.
+	matchedLabels := make(map[string]bool, len(policies))
 
 	for _, policy := range policies {
 		var operation PolicyOperation
@@ -131,23 +139,18 @@ func (pg *PolicyUpdateGenerator) generateInlinePolicyUpdates(stack pkgmodel.Stac
 
 		// Check if a policy of this type already exists for this stack
 		if existing, found := existingPoliciesByType[policy.GetType()]; found {
+			matchedLabels[existing.GetLabel()] = true
 			// Reuse the existing label for inline policies
 			if label == "" {
 				label = existing.GetLabel()
-				// Set the label on the policy
-				if ttl, ok := policy.(*pkgmodel.TTLPolicy); ok {
-					ttl.Label = label
-				}
+				setPolicyLabel(policy, label)
 			}
 			operation = PolicyOperationUpdate
 		} else {
 			// New policy - generate label if not provided
 			if label == "" {
 				label = fmt.Sprintf("%s-%s-%s", stack.Label, policy.GetType(), util.NewID()[:8])
-				// Set the label on the policy
-				if ttl, ok := policy.(*pkgmodel.TTLPolicy); ok {
-					ttl.Label = label
-				}
+				setPolicyLabel(policy, label)
 			}
 			operation = PolicyOperationCreate
 		}
@@ -169,7 +172,58 @@ func (pg *PolicyUpdateGenerator) generateInlinePolicyUpdates(stack pkgmodel.Stac
 			"operation", update.Operation)
 	}
 
+	if !exact {
+		return updates, nil
+	}
+
+	for _, existing := range existingPolicies {
+		if matchedLabels[existing.GetLabel()] {
+			continue // Still declared, handled as an update above
+		}
+
+		update := PolicyUpdate{
+			Policy:     existing,
+			Operation:  PolicyOperationDelete,
+			State:      PolicyUpdateStateNotStarted,
+			StackLabel: stack.Label, // Mark as inline
+			StartTs:    now,
+			ModifiedTs: now,
+		}
+
+		updates = append(updates, update)
+		slog.Debug("Generated inline policy delete",
+			"label", existing.GetLabel(),
+			"type", existing.GetType(),
+			"stack", stack.Label)
+	}
+
 	return updates, nil
+}
+
+// existingInlinePolicies returns the policies the stack owns inline. A stack the
+// datastore does not know yet has none. The lookup is inline-scoped: the
+// standalone policies attached to the stack are attachments, generated and
+// removed by generatePolicyAttachments and generatePolicyDetachments, and are
+// never deleted from here.
+func (pg *PolicyUpdateGenerator) existingInlinePolicies(stackLabel string) ([]pkgmodel.Policy, error) {
+	if pg.datastore == nil {
+		return nil, nil
+	}
+
+	existingStack, err := pg.datastore.GetStackByLabel(stackLabel)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load stack: %w", err)
+	}
+	if existingStack == nil {
+		return nil, nil
+	}
+
+	inline, err := pg.datastore.GetInlinePoliciesForStack(existingStack.ID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load policies for stack: %w", err)
+	}
+
+	return inline, nil
 }
 
 func (pg *PolicyUpdateGenerator) generateStandalonePolicyUpdates(rawPolicies []json.RawMessage) ([]PolicyUpdate, error) {
@@ -238,6 +292,20 @@ func (pg *PolicyUpdateGenerator) generateStandalonePolicyUpdates(rawPolicies []j
 	return updates, nil
 }
 
+// policyLabelSetter is satisfied by concrete policy types that can have their
+// label written back (TTLPolicy, AutoReconcilePolicy). Kept unexported so the
+// public Policy interface is not widened.
+type policyLabelSetter interface {
+	SetLabel(string)
+}
+
+// setPolicyLabel writes label back onto policy when the concrete type supports it.
+func setPolicyLabel(policy pkgmodel.Policy, label string) {
+	if ls, ok := policy.(policyLabelSetter); ok {
+		ls.SetLabel(label)
+	}
+}
+
 // policiesEqual compares two policies for equality
 func policiesEqual(a, b pkgmodel.Policy) bool {
 	if a == nil || b == nil {
@@ -257,7 +325,27 @@ func policiesEqual(a, b pkgmodel.Policy) bool {
 		if !ok {
 			return false
 		}
+		if pa.IsAbsolute() != pb.IsAbsolute() {
+			// Switching a policy between a duration and an instant is a change,
+			// not a no-op.
+			return false
+		}
+		if pa.IsAbsolute() {
+			// Compare the canonical form rather than the time.Time: storage
+			// normalises to UTC whole seconds, so two spellings of one instant
+			// are the same deadline, and == would additionally compare monotonic
+			// and location representation.
+			return pa.CanonicalExpiresAt() == pb.CanonicalExpiresAt() && pa.OnDependents == pb.OnDependents
+		}
 		return pa.TTLSeconds == pb.TTLSeconds && pa.OnDependents == pb.OnDependents
+	case *pkgmodel.AutoReconcilePolicy:
+		pb, ok := b.(*pkgmodel.AutoReconcilePolicy)
+		if !ok {
+			return false
+		}
+		// Desired-config equality: LastReconcileAt is runtime state (populated at
+		// query time) and is deliberately not compared.
+		return pa.IntervalSeconds == pb.IntervalSeconds
 	default:
 		// For unknown types, assume not equal to be safe
 		return false

@@ -8,12 +8,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"os/signal"
-	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
@@ -24,10 +21,12 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/imconc"
 	"github.com/platform-engineering-labs/formae/internal/logging"
 	"github.com/platform-engineering-labs/formae/internal/metastructure"
+	"github.com/platform-engineering-labs/formae/internal/network"
 	_ "github.com/platform-engineering-labs/formae/internal/network/all"
 	_ "github.com/platform-engineering-labs/formae/internal/schema/all"
 	"github.com/platform-engineering-labs/formae/internal/util"
 	pkgauth "github.com/platform-engineering-labs/formae/pkg/auth"
+	"github.com/platform-engineering-labs/formae/pkg/credential"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 	plugindiscovery "github.com/platform-engineering-labs/formae/pkg/plugin/discovery"
@@ -94,22 +93,37 @@ func (a *Agent) Start() error {
 		// Setup logging with OTel handler
 		logging.SetupBackendLogging(&a.cfg.Agent.Logging, otelLogHandler)
 
-		// Migrate resource plugins (with manifest and schema) from system directory.
-		// This handles backwards compatibility when OLD upgrade command didn't know
-		// about resource plugins. Also wipes existing plugins since interface changed.
-		if err := migrateResourcePlugins(a.cfg.PluginDir); err != nil {
-			slog.Warn("Failed to migrate resource plugins", "error", err)
-			// Non-fatal - continue anyway, plugins might already be in place
-		}
+		devPluginDir := util.ExpandHomePath(a.cfg.PluginDir)
 
-		pluginDir := util.ExpandHomePath(a.cfg.PluginDir)
-		resourceInfos := plugindiscovery.DiscoverPlugins(pluginDir, plugindiscovery.Resource)
+		binPath, err := os.Executable()
+		if err != nil {
+			slog.Error("Failed to determine binary path", "error", err)
+			return
+		}
+		systemPluginDir := plugindiscovery.SystemPluginDir(binPath)
+
+		resourceInfos := plugindiscovery.DiscoverPluginsMulti(
+			[]string{devPluginDir, systemPluginDir}, plugindiscovery.Resource,
+		)
 		resourceInfos = plugindiscovery.FilterCompatiblePlugins(
 			resourceInfos, formae.Version, plugin.MinFormaeVersion, plugin.SDKVersion,
 		)
 		externalResourcePlugins := make([]plugin.ResourcePluginInfo, len(resourceInfos))
 		for i, p := range resourceInfos {
 			externalResourcePlugins[i] = p.ToResourcePluginInfo()
+		}
+
+		// Credential brokers are gated against the credential SDK's own
+		// compatibility floor, not the resource SDK's: they link pkg/credential.
+		brokerInfos := plugindiscovery.DiscoverPluginsMulti(
+			[]string{devPluginDir, systemPluginDir}, plugindiscovery.OidcCredential,
+		)
+		brokerInfos = plugindiscovery.FilterCompatiblePlugins(
+			brokerInfos, formae.Version, credential.MinFormaeVersion, credential.SDKVersion,
+		)
+		oidcCredentialPlugins := make([]plugin.OidcCredentialPluginInfo, len(brokerInfos))
+		for i, p := range brokerInfos {
+			oidcCredentialPlugins[i] = p.ToOidcCredentialPluginInfo()
 		}
 
 		// Create auth plugin handle if auth is configured and a matching
@@ -124,7 +138,9 @@ func (a *Agent) Start() error {
 				slog.Error("Agent auth config missing 'type' field — refusing to start without auth")
 				return
 			}
-			authPlugins := plugindiscovery.DiscoverPlugins(pluginDir, plugindiscovery.Auth)
+			authPlugins := plugindiscovery.DiscoverPluginsMulti(
+				[]string{devPluginDir, systemPluginDir}, plugindiscovery.Auth,
+			)
 			// For auth plugins, check compatibility separately so we can give a
 			// specific error message (not just "not installed").
 			var matchedPlugin *plugindiscovery.PluginInfo
@@ -156,7 +172,7 @@ func (a *Agent) Start() error {
 
 		slog.Info("Starting agent", "id", a.id)
 
-		ms, err := metastructure.NewMetastructure(a.ctx, a.cfg, externalResourcePlugins, a.id)
+		ms, err := metastructure.NewMetastructure(a.ctx, a.cfg, externalResourcePlugins, oidcCredentialPlugins, a.id)
 		if err != nil {
 			slog.Error("Failed to create ms", "error", err)
 			return
@@ -167,12 +183,29 @@ func (a *Agent) Start() error {
 			ms.AuthPluginHandle = authHandle
 		}
 
+		// An abnormal stop of the orchestrator application means every actor
+		// is gone while this process and its HTTP surface keep running and
+		// look healthy. Exit instead: the process supervisor (ECS, systemd)
+		// restarts the agent, and startup re-runs incomplete commands.
+		ms.OnApplicationStopped = func(reason error) {
+			slog.Error("Metastructure stopped; shutting down so the process supervisor restarts the agent", "reason", reason)
+			a.cancel()
+		}
+
 		imwg.Add(ms)
 
 		if err := ms.Start(); err != nil {
 			slog.Error("Failed to start metastructure", "error", err)
 			return
 		}
+
+		// Append this process start to the agent's own boot history. Deliberately
+		// after ms.Start(): the SQLite backend runs on a single connection
+		// (SetMaxOpenConns(1)), so a stalled boot write issued beforehand would
+		// hold the only connection while startup's own database work queued behind
+		// it. Best-effort, cancellable and off the startup goroutine; see
+		// recordBoot.
+		recordBoot(ms.Datastore, formae.Version)
 
 		// Start Ergo actor metrics collection (only if OTel is enabled)
 		if a.cfg.Agent.OTel.Enabled {
@@ -191,10 +224,28 @@ func (a *Agent) Start() error {
 		slog.Info("Agent started")
 
 		apiServer := api.NewServer(a.ctx, ms, authHandle, &a.cfg.Agent.Server, a.cfg.Network, metricsHandler)
+		// Plugin install/uninstall/update run locally on the CLI host
+		// (see internal/cli/plugin), so the agent does not construct an
+		// orbital-backed PluginManager. The installed-plugin listing
+		// endpoint serves from the in-process registry and a filesystem
+		// scan of these dirs — no orbital tree, no sudo re-exec.
+		apiServer.SetPluginDirs([]string{devPluginDir, systemPluginDir})
+
 		imwg.Add(apiServer)
 		imwg.Go(func() {
 			apiServer.Start()
 		})
+
+		// Egress starts after the inbound listener is on its way up, and a
+		// failure here is non-fatal: the API listener is how the CLI and MCP
+		// reach the agent, so an egress misconfiguration must not take it down.
+		egress, err := network.StartEgressProxy(a.ctx, a.cfg.Network)
+		if err != nil {
+			slog.Error("Failed to start network egress proxy", "error", err)
+		} else if egress != nil {
+			imwg.Add(egress)
+			imwg.Go(egress.Serve)
+		}
 
 		// Handle signals and shutdown
 		go func() {
@@ -336,122 +387,4 @@ func waitForPidFileRemoval(timeout time.Duration) bool {
 		time.Sleep(100 * time.Millisecond)
 	}
 	return false
-}
-
-// copyFile copies a file from src to dst, preserving the executable permission.
-func copyFile(src, dst string) (err error) {
-	srcFile, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = srcFile.Close() }()
-
-	srcInfo, err := srcFile.Stat()
-	if err != nil {
-		return err
-	}
-
-	dstFile, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, srcInfo.Mode())
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if cerr := dstFile.Close(); cerr != nil && err == nil {
-			err = cerr
-		}
-	}()
-
-	_, err = io.Copy(dstFile, srcFile)
-	return err
-}
-
-// migrateResourcePlugins checks for resource plugins in the system install
-// directory and copies them to the user's plugin directory. This handles
-// backwards compatibility when OLD upgrade command didn't know about resource
-// plugins. The user plugin directory is wiped first since the plugin interface
-// changed and old plugins are incompatible.
-func migrateResourcePlugins(userPluginDir string) error {
-	systemResourcePluginsDir := filepath.Join(formae.DefaultInstallPath, "resource-plugins")
-
-	namespaces, err := os.ReadDir(systemResourcePluginsDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil // No resource-plugins directory in system location
-		}
-		return fmt.Errorf("failed to read system resource-plugins directory: %w", err)
-	}
-
-	userPluginDir = util.ExpandHomePath(userPluginDir)
-
-	for _, nsEntry := range namespaces {
-		if !nsEntry.IsDir() {
-			continue
-		}
-		namespace := strings.ToLower(nsEntry.Name())
-		nsPath := filepath.Join(systemResourcePluginsDir, nsEntry.Name())
-
-		// Remove existing namespace directory before installing new versions
-		existingNamespaceDir := filepath.Join(userPluginDir, namespace)
-		if err := os.RemoveAll(existingNamespaceDir); err != nil {
-			return fmt.Errorf("failed to remove existing plugin directory %s: %w", existingNamespaceDir, err)
-		}
-		slog.Info("Removed existing plugin directory for migration", "path", existingNamespaceDir)
-
-		versions, err := os.ReadDir(nsPath)
-		if err != nil {
-			continue
-		}
-
-		for _, vEntry := range versions {
-			if !vEntry.IsDir() {
-				continue
-			}
-			version := vEntry.Name()
-			srcDir := filepath.Join(nsPath, version)
-			destDir := filepath.Join(userPluginDir, namespace, version)
-
-			// Create destination and copy entire directory
-			if err := copyDir(srcDir, destDir); err != nil {
-				return fmt.Errorf("failed to copy resource plugin %s/%s: %w", namespace, version, err)
-			}
-
-			slog.Info("Migrated resource plugin", "namespace", namespace, "version", version, "dest", destDir)
-		}
-	}
-
-	return nil
-}
-
-// copyDir recursively copies a directory from src to dst.
-func copyDir(src, dst string) error {
-	srcInfo, err := os.Stat(src)
-	if err != nil {
-		return err
-	}
-
-	if err := os.MkdirAll(dst, srcInfo.Mode()); err != nil {
-		return err
-	}
-
-	entries, err := os.ReadDir(src)
-	if err != nil {
-		return err
-	}
-
-	for _, entry := range entries {
-		srcPath := filepath.Join(src, entry.Name())
-		dstPath := filepath.Join(dst, entry.Name())
-
-		if entry.IsDir() {
-			if err := copyDir(srcPath, dstPath); err != nil {
-				return err
-			}
-		} else {
-			if err := copyFile(srcPath, dstPath); err != nil {
-				return err
-			}
-		}
-	}
-
-	return nil
 }

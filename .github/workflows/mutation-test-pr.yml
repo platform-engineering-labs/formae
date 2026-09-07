@@ -5,14 +5,22 @@ on:
     branches: [main]
 
 jobs:
+  # Contract: green means gremlins completed on every changed package —
+  # surviving mutants are allowed, since the content of the result is
+  # advisory. Red means at least one changed package produced no usable
+  # result. This check is advisory because it is not a required status
+  # check, not because of a `continue-on-error` flag: job-level
+  # `continue-on-error` only suppresses the workflow-run conclusion, not
+  # the check run itself, so it would have bought a green run over a red
+  # job rather than making the failure advisory.
   mutation-test:
     runs-on: ubuntu-latest
     timeout-minutes: 90
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          fetch-tags: true
 
       - name: Set up Go
         uses: actions/setup-go@v4
@@ -27,7 +35,26 @@ jobs:
         run: echo "/opt/pel/bin" >> $GITHUB_PATH
 
       - name: Install gremlins
-        run: go install github.com/go-gremlins/gremlins/cmd/gremlins@latest
+        run: make install-gremlins
 
+      # The PKL schema project reads its package version from this file, so a
+      # package that evaluates the schema cannot be mutated without it. This
+      # job needs the stamp and not the binary, so it stamps rather than builds.
+      - name: Stamp the version
+        run: make version-semver
+
+      # A mutant can turn a bounded loop into one that allocates without
+      # bound, exhausting the VM before gremlins' per-mutant timeout can
+      # fire; the runner is then torn down mid-run and gremlins exits 0
+      # without a report. Confining the run to a memory-capped cgroup makes
+      # the kernel kill the runaway test process instead: gremlins records
+      # the mutant as killed and the run completes. The cap leaves the
+      # 16 GB runner room for the runner agent; swap is denied so a runaway
+      # dies quickly instead of thrashing.
       - name: Run mutation tests on changed packages
-        run: ./scripts/mutation-test-changed.sh
+        run: |
+          sudo mkdir /sys/fs/cgroup/mutation
+          echo 12G | sudo tee /sys/fs/cgroup/mutation/memory.max
+          echo 0 | sudo tee /sys/fs/cgroup/mutation/memory.swap.max
+          echo $$ | sudo tee /sys/fs/cgroup/mutation/cgroup.procs
+          ./scripts/mutation-test-changed.sh

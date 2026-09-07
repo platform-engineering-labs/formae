@@ -20,6 +20,7 @@ import (
 
 // mockAuthPlugin implements pkgauth.AuthPlugin for testing.
 type mockAuthPlugin struct {
+	pkgauth.UnimplementedAuthPlugin
 	validResponse bool
 }
 

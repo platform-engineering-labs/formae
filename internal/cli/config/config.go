@@ -11,12 +11,12 @@ import (
 	"strings"
 
 	"github.com/segmentio/ksuid"
+
+	"github.com/platform-engineering-labs/formae/internal/cli/profile/store"
 )
 
 const (
-	ConfigFileNamePrefix = "formae.conf"
-	ConfigDirectory      = ".config/formae"
-	DataDirectory        = ".pel/formae"
+	DataDirectory = ".pel/formae"
 )
 
 var Config = cliconfig{}
@@ -24,12 +24,11 @@ var Config = cliconfig{}
 type cliconfig struct{}
 
 func (cliconfig) ConfigDirectory() string {
-	homePath, err := os.UserHomeDir()
+	dir, err := store.ResolveConfigDir()
 	if err != nil {
 		return ""
 	}
-
-	return filepath.Join(homePath, ConfigDirectory)
+	return dir
 }
 
 func (cliconfig) DataDirectory() string {
@@ -44,7 +43,7 @@ func (cliconfig) DataDirectory() string {
 func (cliconfig) EnsureConfigDirectory() error {
 	configPath := Config.ConfigDirectory()
 	if configPath == "" {
-		return fmt.Errorf("failed to ensure formae config directory")
+		return fmt.Errorf("failed to ensure config directory")
 	}
 
 	return os.MkdirAll(configPath, 0700)
@@ -53,7 +52,7 @@ func (cliconfig) EnsureConfigDirectory() error {
 func (cliconfig) EnsureDataDirectory() error {
 	dataPath := Config.DataDirectory()
 	if dataPath == "" {
-		return fmt.Errorf("failed to ensure formae data directory")
+		return fmt.Errorf("failed to ensure data directory")
 	}
 
 	return os.MkdirAll(dataPath, 0700)
@@ -62,11 +61,16 @@ func (cliconfig) EnsureDataDirectory() error {
 func (cliconfig) EnsureId(id string) error {
 	configPath := Config.DataDirectory()
 	if configPath == "" {
-		return fmt.Errorf("failed to ensure formae directory")
+		return fmt.Errorf("failed to ensure data directory")
 	}
 
 	idFile := filepath.Join(configPath, id)
 	if _, err := os.Stat(idFile); os.IsNotExist(err) {
+		// A fresh machine has no data directory yet; the id file must not be
+		// the thing that discovers that.
+		if err := os.MkdirAll(configPath, 0o755); err != nil {
+			return fmt.Errorf("failed to create data directory: %w", err)
+		}
 		err := os.WriteFile(idFile, []byte(ksuid.New().String()), 0600)
 		if err != nil {
 			return fmt.Errorf("failed to create ID file: %w", err)
@@ -89,7 +93,7 @@ func (cliconfig) EnsureAgentID() error {
 func (cliconfig) ClientID() (string, error) {
 	configPath := Config.DataDirectory()
 	if configPath == "" {
-		return "", fmt.Errorf("failed to retrieve formae directory")
+		return "", fmt.Errorf("failed to retrieve data directory")
 	}
 
 	clientIDFile := filepath.Join(configPath, "cli_client_id")
@@ -104,7 +108,7 @@ func (cliconfig) ClientID() (string, error) {
 func (cliconfig) AgentID() (string, error) {
 	configPath := Config.DataDirectory()
 	if configPath == "" {
-		return "", fmt.Errorf("failed to retrieve formae directory")
+		return "", fmt.Errorf("failed to retrieve data directory")
 	}
 
 	agentIDFile := filepath.Join(configPath, "agent_id")

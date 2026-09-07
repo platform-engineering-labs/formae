@@ -1,0 +1,8 @@
+[38;2;248;113;113mtarget 'aws-us-east-1' already exists with a different namespace:[0m
+[38;2;248;113;113m[0m                                                                 
+[38;2;248;113;113m[0m                                                                   Existing namespace: arn:aws:iam::111111111111:role/existing-role
+  Forma namespace:    arn:aws:iam::222222222222:role/new-role
+
+[38;2;181;181;91mPlease either:[0m
+[38;2;181;181;91m[0m                - Use a different target label in your forma file
+  - Update your forma file to use the existing namespace: arn:aws:iam::111111111111:role/existing-role

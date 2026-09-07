@@ -57,8 +57,7 @@ func TestStackTransition_Integration(t *testing.T) {
 				[]*pkgmodel.Target{&target},
 				m.Datastore,
 				nil,
-				nil,
-			)
+				nil, false)
 			require.NoError(t, err)
 			require.Len(t, updates, 1)
 
@@ -102,8 +101,7 @@ func TestStackTransition_Integration(t *testing.T) {
 				[]*pkgmodel.Target{&target},
 				m.Datastore,
 				nil,
-				nil,
-			)
+				nil, false)
 			require.NoError(t, err)
 			require.Len(t, updates, 1)
 

@@ -1,0 +1,6 @@
+[38;2;248;113;113mforma rejected because creating empty stacks is not allowed:[0m
+  staging
+  canary
+
+[38;2;181;181;91mStacks must contain at least one resource. Empty stacks are automatically cleaned up when the last resource is removed.[0m
+[38;2;181;181;91m[0m                                                                                                                       

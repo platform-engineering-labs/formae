@@ -7,10 +7,12 @@
 package plugin
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 
+	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -64,6 +66,47 @@ output { renderer = new JsonRenderer {} }
 	assert.Equal(t, "DirTest", manifest.Namespace)
 }
 
+func TestReadManifest_ParsesSummaryAndCategory(t *testing.T) {
+	tempDir := t.TempDir()
+	manifestContent := `
+name = "summary-test"
+version = "1.0.0"
+namespace = "Test"
+license = "MIT"
+minFormaeVersion = "0.85.0"
+summary = "A short one-liner for testing"
+category = "cloud"
+output { renderer = new JsonRenderer {} }
+`
+	err := os.WriteFile(filepath.Join(tempDir, "formae-plugin.pkl"), []byte(manifestContent), 0644)
+	require.NoError(t, err)
+
+	manifest, err := ReadManifestFromDir(tempDir)
+	require.NoError(t, err)
+	assert.Equal(t, "A short one-liner for testing", manifest.Summary)
+	assert.Equal(t, "cloud", manifest.Category)
+}
+
+func TestReadManifest_SummaryAndCategoryOptional(t *testing.T) {
+	tempDir := t.TempDir()
+	manifestContent := `
+name = "no-extras"
+version = "1.0.0"
+namespace = "Test"
+license = "MIT"
+minFormaeVersion = "0.85.0"
+output { renderer = new JsonRenderer {} }
+`
+	err := os.WriteFile(filepath.Join(tempDir, "formae-plugin.pkl"), []byte(manifestContent), 0644)
+	require.NoError(t, err)
+
+	manifest, err := ReadManifestFromDir(tempDir)
+	require.NoError(t, err)
+	assert.Equal(t, "", manifest.Summary)
+	assert.Equal(t, "", manifest.Category)
+	assert.NoError(t, manifest.Validate())
+}
+
 func TestManifest_Validate_RequiresAllFields(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -96,8 +139,13 @@ func TestManifest_Validate_RequiresAllFields(t *testing.T) {
 			expectError: "minFormaeVersion is required",
 		},
 		{
-			name:        "valid manifest",
+			name:        "valid manifest without summary or category",
 			manifest:    Manifest{Name: "test", Version: "1.0.0", Namespace: "Test", License: "MIT", MinFormaeVersion: "0.80.0"},
+			expectError: "",
+		},
+		{
+			name:        "valid manifest with summary and category",
+			manifest:    Manifest{Name: "test", Version: "1.0.0", Namespace: "Test", License: "MIT", MinFormaeVersion: "0.80.0", Summary: "A plugin", Category: "cloud"},
 			expectError: "",
 		},
 	}
@@ -113,4 +161,63 @@ func TestManifest_Validate_RequiresAllFields(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestManifestValidate_ResourceStillRequiresSingularNamespace(t *testing.T) {
+	m := Manifest{Name: "test", Version: "1.0.0", License: "MIT", MinFormaeVersion: "0.80.0"}
+	err := m.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "namespace is required")
+}
+
+func TestManifestValidate_OidcCredentialRequiresNamespaces(t *testing.T) {
+	m := Manifest{Name: "test", Type: PluginTypeOidcCredential, Version: "1.0.0", License: "MIT", MinFormaeVersion: "0.80.0"}
+	err := m.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "namespaces is required")
+
+	m.Namespaces = []string{"aws"}
+	assert.NoError(t, m.Validate())
+}
+
+func TestManifestValidate_OidcCredentialDoesNotRequireSingularNamespace(t *testing.T) {
+	m := Manifest{Name: "test", Type: PluginTypeOidcCredential, Version: "1.0.0", License: "MIT", MinFormaeVersion: "0.80.0", Namespaces: []string{"aws"}}
+	assert.NoError(t, m.Validate())
+	assert.True(t, m.IsOidcCredentialPlugin())
+}
+
+func TestNormalizedNamespaces_UppercasesEveryEntry(t *testing.T) {
+	m := Manifest{Namespaces: []string{"aws", "Gcp", "AZURE"}}
+	assert.Equal(t, []string{"AWS", "GCP", "AZURE"}, m.NormalizedNamespaces())
+}
+
+func TestManifest_DefaultReap_Absent(t *testing.T) {
+	var m Manifest
+	require.NoError(t, json.Unmarshal([]byte(`{"name":"x","version":"1","namespace":"X","license":"MIT","minFormaeVersion":"1"}`), &m))
+
+	reaping, err := m.DefaultReap()
+	require.NoError(t, err)
+	assert.Nil(t, reaping, "absent defaultReap must yield a nil reaping behaviour")
+}
+
+func TestManifest_DefaultReap_Never(t *testing.T) {
+	var m Manifest
+	require.NoError(t, json.Unmarshal([]byte(`{"name":"x","version":"1","namespace":"X","license":"MIT","minFormaeVersion":"1","defaultReap":{"Kind":"never"}}`), &m))
+
+	reaping, err := m.DefaultReap()
+	require.NoError(t, err)
+	require.NotNil(t, reaping)
+	assert.Equal(t, "never", reaping.GetKind())
+}
+
+func TestManifest_DefaultReap_After(t *testing.T) {
+	var m Manifest
+	require.NoError(t, json.Unmarshal([]byte(`{"name":"x","version":"1","namespace":"X","license":"MIT","minFormaeVersion":"1","defaultReap":{"Kind":"after","MaxUnreachableSeconds":7200}}`), &m))
+
+	reaping, err := m.DefaultReap()
+	require.NoError(t, err)
+	require.NotNil(t, reaping)
+	after, ok := reaping.(*pkgmodel.ReapAfter)
+	require.True(t, ok)
+	assert.Equal(t, int64(7200), after.MaxUnreachableSeconds)
 }

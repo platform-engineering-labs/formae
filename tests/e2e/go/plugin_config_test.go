@@ -102,7 +102,7 @@ func TestPluginConfig(t *testing.T) {
 				}
 			})
 
-			t.Run("discovery filters override", func(t *testing.T) {
+			t.Run("configured discovery filters reach the plugin", func(t *testing.T) {
 				if len(p.DiscoveryFilters) != 1 {
 					t.Fatalf("expected 1 discovery filter, got %d", len(p.DiscoveryFilters))
 				}

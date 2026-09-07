@@ -138,7 +138,6 @@ type ReadResource struct {
 	ExistingResource  model.Resource  `json:"ExistingResource"`
 	IsSync            bool            `json:"IsSync"`
 	IsDelete          bool            `json:"IsDelete"`
-	RedactSensitive   bool            `json:"RedactSensitive"`
 }
 
 func (r *ReadResource) TreatNotFoundAsSuccess() bool {
@@ -204,7 +203,6 @@ type Listing struct {
 	TargetConfig   json.RawMessage      `json:"TargetConfig"`
 	Error          string               `json:"Error"`
 }
-
 
 type PluginOperatorCheckStatus struct {
 	Namespace         string
@@ -399,6 +397,48 @@ func (data PluginUpdateData) newUnforeseenError() TrackedProgress {
 	}
 }
 
+// terminalCallError builds the terminal progress for a failed mutating plugin
+// call. A create, update or delete that failed may already have reached the
+// provider, so it is reported as terminal rather than retried.
+func (data PluginUpdateData) terminalCallError(operation resource.Operation, err error) TrackedProgress {
+	progress := data.newUnforeseenError()
+	progress.StatusMessage = err.Error()
+	return progress
+}
+
+// statusCheckAfterFailedCall returns the check to feed back into
+// handlePluginResult when a status call itself failed.
+// handlePluginResult re-issues the operation that started a check whenever the
+// check still carries it, so clearing Request guarantees the retry is another
+// status poll: only the poll failed, and a mutation that may already have
+// reached the provider must never be issued twice. Every identifier survives,
+// because a check's own StatusCheck is the identity.
+func statusCheckAfterFailedCall(check PluginOperatorCheckStatus) PluginOperatorCheckStatus {
+	check.Request = nil
+	return check
+}
+
+// statusCallFailure builds the failure progress for a status call that returned
+// an error instead of a result. A throttled call is safe to repeat, so it
+// widens into a recoverable code; every other error stays terminal. The check's
+// identifiers are carried over because the retry ladder rebuilds the next poll
+// from the progress.
+func (data PluginUpdateData) statusCallFailure(check PluginOperatorCheckStatus, err error) *resource.ProgressResult {
+	errorCode := resource.OperationErrorCodeUnforeseenError
+	if isThrottlingError(err) {
+		errorCode = resource.OperationErrorCodeThrottling
+	}
+
+	return &resource.ProgressResult{
+		Operation:       check.ResourceOperation,
+		OperationStatus: resource.OperationStatusFailure,
+		RequestID:       check.RequestID,
+		NativeID:        check.NativeID,
+		ErrorCode:       errorCode,
+		StatusMessage:   err.Error(),
+	}
+}
+
 func (o *PluginOperator) Init(args ...any) (statemachine.StateMachineSpec[PluginUpdateData], error) {
 	data := PluginUpdateData{
 		attempts: 1,
@@ -437,6 +477,34 @@ func (o *PluginOperator) Init(args ...any) (statemachine.StateMachineSpec[Plugin
 	}
 	data.config = cfg.(model.RetryConfig)
 
+	// RequestedBy: the requesting ResourceUpdater's PID, threaded in via Env so
+	// we can establish the operator→RU link asynchronously (off the operation
+	// critical path). Linking here in Init would block, so we defer it via a
+	// self-message handled once the operator is Running (mirrors PluginActor's
+	// deferred setupMonitoring).
+	if v, ok := o.Env("RequestedBy"); ok {
+		if pid, ok := v.(gen.PID); ok && pid != (gen.PID{}) {
+			data.requestedBy = pid
+			if err := o.Send(o.PID(), establishLinkRequester{}); err != nil {
+				o.Log().Error("PluginOperator: failed to schedule requester link: %v", err)
+			}
+		}
+	}
+
+	// OidcCredentialBroker{Node,Name}: the broker the coordinator paired with
+	// this plugin's namespace. The pair is injected atomically, so exactly one
+	// key present is a broken pairing - refuse to start rather than serve
+	// operations as if no broker existed. The client goes on the operator's
+	// context, which is passed to every operation, including discovery.
+	brokerClient, err := oidcBrokerClientFromEnv(o, data.plugin.Namespace())
+	if err != nil {
+		o.Log().Error("%v", err)
+		return statemachine.StateMachineSpec[PluginUpdateData]{}, err
+	}
+	if brokerClient != nil {
+		data.context = withOidcBrokerClient(data.context, brokerClient)
+	}
+
 	// Initialize OTel metrics
 	if err := setupPluginOperatorMetrics(&data); err != nil {
 		o.Log().Error("Failed to setup plugin operator metrics: %v", err)
@@ -459,6 +527,9 @@ func (o *PluginOperator) Init(args ...any) (statemachine.StateMachineSpec[Plugin
 		statemachine.WithStateCallHandler(StateRetrying, delete),
 
 		statemachine.WithStateMessageHandler(StateNotStarted, list),
+		statemachine.WithStateMessageHandler(StateNotStarted, establishLink),
+		statemachine.WithStateMessageHandler(StateWaitingForResource, establishLink),
+		statemachine.WithStateMessageHandler(StateRetrying, establishLink),
 		statemachine.WithStateMessageHandler(StateWaitingForResource, status),
 		statemachine.WithStateMessageHandler(StateRetrying, retry),
 		statemachine.WithStateMessageHandler(StateFinishedSuccessfully, shutdown),
@@ -468,6 +539,35 @@ func (o *PluginOperator) Init(args ...any) (statemachine.StateMachineSpec[Plugin
 
 func shutdown(from gen.PID, state gen.Atom, data PluginUpdateData, shutdown PluginOperatorShutdown, proc gen.Process) (gen.Atom, PluginUpdateData, []statemachine.Action, error) {
 	return state, data, nil, gen.TerminateReasonNormal
+}
+
+// establishLinkRequester is sent to self after Init to defer establishing the
+// operator→ResourceUpdater link until the operator is Running (linking in Init
+// would block on a synchronous cross-node link RPC, stalling the spawn and the
+// requesting RU). Mirrors PluginActor's deferred setupMonitoring.
+type establishLinkRequester struct{}
+
+// establishLink creates a unidirectional link from this operator to its
+// requesting ResourceUpdater (RU). Because ergo links are unidirectional, the
+// RU's termination terminates the operator, while an operator crash leaves the
+// RU untouched.
+// This lets the executor's LinkParent cascade tear down in-flight remote
+// operators when their RU dies, without an operator failure reaching back to
+// the RU (that path stays handled by the existing timeout logic).
+//
+// The PluginOperator (a StateMachine) does not trap exits, so the link
+// auto-terminates it when the RU dies; no MessageExit* handler is needed.
+//
+// A failed link is not fatal: the operator can still complete its operation; it
+// just won't auto-terminate if the RU dies. The most common cause is the RU
+// already being gone, in which case nothing in flight matters anyway.
+func establishLink(from gen.PID, state gen.Atom, data PluginUpdateData, msg establishLinkRequester, proc gen.Process) (gen.Atom, PluginUpdateData, []statemachine.Action, error) {
+	if data.requestedBy != (gen.PID{}) {
+		if err := proc.LinkPID(data.requestedBy); err != nil {
+			proc.Log().Error("PluginOperator: failed to link requester %v: %v", data.requestedBy, err)
+		}
+	}
+	return state, data, nil, nil
 }
 
 func onStateChange(oldState gen.Atom, newState gen.Atom, data PluginUpdateData, proc gen.Process) (gen.Atom, PluginUpdateData, error) {
@@ -508,7 +608,7 @@ func read(from gen.PID, state gen.Atom, data PluginUpdateData, operation ReadRes
 		NativeID:        operation.NativeID,
 		ResourceType:    operation.ResourceType,
 		TargetConfig:    operation.TargetConfig,
-		RedactSensitive: operation.RedactSensitive,
+		PriorProperties: operation.ExistingResource.Properties,
 	})
 	if err != nil {
 		proc.Log().Debug("PluginOperator: failed to read resource: %v", err)
@@ -548,9 +648,7 @@ func create(from gen.PID, state gen.Atom, data PluginUpdateData, operation Creat
 	})
 	if err != nil {
 		proc.Log().Error("PluginOperator: failed to create resource %s: %v", operation.ResourceType, err)
-		errProgress := data.newUnforeseenError()
-		errProgress.StatusMessage = err.Error()
-		return StateFinishedWithError, data, errProgress, nil, nil
+		return StateFinishedWithError, data, data.terminalCallError(resource.OperationCreate, err), nil, nil
 	}
 
 	return handlePluginResult(data, operation, proc, result.ProgressResult)
@@ -574,7 +672,7 @@ func update(from gen.PID, state gen.Atom, data PluginUpdateData, operation Updat
 	})
 	if err != nil {
 		proc.Log().Error("PluginOperator: failed to update resource: %v", err)
-		return StateFinishedWithError, data, data.newUnforeseenError(), nil, nil
+		return StateFinishedWithError, data, data.terminalCallError(resource.OperationUpdate, err), nil, nil
 	}
 
 	return handlePluginResult(data, operation, proc, result.ProgressResult)
@@ -594,7 +692,7 @@ func delete(from gen.PID, state gen.Atom, data PluginUpdateData, operation Delet
 	})
 	if err != nil {
 		proc.Log().Error("PluginOperator: failed to delete resource: %v", err)
-		return StateFinishedWithError, data, data.newUnforeseenError(), nil, nil
+		return StateFinishedWithError, data, data.terminalCallError(resource.OperationDelete, err), nil, nil
 	}
 
 	return handlePluginResult(data, operation, proc, result.ProgressResult)
@@ -602,6 +700,15 @@ func delete(from gen.PID, state gen.Atom, data PluginUpdateData, operation Delet
 
 func status(from gen.PID, state gen.Atom, data PluginUpdateData, operation PluginOperatorCheckStatus, proc gen.Process) (gen.Atom, PluginUpdateData, []statemachine.Action, error) {
 	if !validateNamespace(data, operation.Namespace, proc) {
+		mismatch := data.newNamespaceMismatchError()
+		// The requester tracks this update by the identifiers it polls with, so
+		// they travel with the failure.
+		mismatch.Operation = operation.ResourceOperation
+		mismatch.RequestID = operation.RequestID
+		mismatch.NativeID = operation.NativeID
+		if sendErr := proc.Send(data.requestedBy, mismatch); sendErr != nil {
+			proc.Log().Error("PluginOperator: failed to send namespace mismatch result: %v", sendErr)
+		}
 		return StateFinishedWithError, data, nil, nil
 	}
 
@@ -613,12 +720,26 @@ func status(from gen.PID, state gen.Atom, data PluginUpdateData, operation Plugi
 		ResourceType: operation.ResourceType,
 		TargetConfig: operation.TargetConfig,
 	})
+
+	var checkResult *resource.ProgressResult
 	if err != nil {
-		proc.Log().Error("PluginOperator: failed to get status of resource: %v", err)
-		return StateFinishedWithError, data, nil, nil
+		// A status call that returned no result leaves the operation's outcome
+		// unknown, so it travels the normal ladder as a failure of the check and
+		// only another check may follow it.
+		operation = statusCheckAfterFailedCall(operation)
+		checkResult = data.statusCallFailure(operation, err)
+		proc.Log().Error("PluginOperator: status check of resource %s failed with error code %s: %v", operation.RequestID, checkResult.ErrorCode, err)
+		// A failed call spends an attempt, unlike a poll that reports progress:
+		// it escalates the backoff and eventually ends the operation instead of
+		// polling a failing API forever. The message travels with the attempt so
+		// this failure is the one the requester reads, not an earlier one.
+		data.attempts++
+		data.LastStatusMessage = checkResult.StatusMessage
+	} else {
+		checkResult = result.ProgressResult
 	}
 
-	nextState, data, progress, actions, pluginErr := handlePluginResult(data, operation, proc, result.ProgressResult)
+	nextState, data, progress, actions, pluginErr := handlePluginResult(data, operation, proc, checkResult)
 	err = proc.Send(data.requestedBy, progress)
 	if err != nil {
 		proc.Log().Error("PluginOperator: failed to send status result: %v", err)
@@ -648,6 +769,12 @@ func retry(from gen.PID, state gen.Atom, data PluginUpdateData, operation Plugin
 		nextState, newData, progress, actions, pluginErr = update(data.requestedBy, state, data, operation.Request.(UpdateResource), proc)
 	case resource.OperationDelete:
 		nextState, newData, progress, actions, pluginErr = delete(data.requestedBy, state, data, operation.Request.(DeleteResource), proc)
+	default:
+		proc.Log().Error("PluginOperator: cannot retry unsupported operation %s", operation.ResourceOperation)
+		nextState, newData = StateFinishedWithError, data
+		progress = data.newUnforeseenError()
+		progress.Operation = operation.ResourceOperation
+		progress.StatusMessage = fmt.Sprintf("cannot retry unsupported operation %s", operation.ResourceOperation)
 	}
 
 	proc.Log().Debug("PluginOperator: sending progress update to resource updater %v", data.requestedBy)
@@ -677,31 +804,12 @@ func resume(from gen.PID, state gen.Atom, data PluginUpdateData, operation Resum
 	})
 	if err != nil {
 		proc.Log().Error("PluginOperator: failed to get resume waiting for resource: %v", err)
-		return StateFinishedWithError, data, data.newUnforeseenError(), nil, nil
+		errProgress := data.newUnforeseenError()
+		errProgress.StatusMessage = err.Error()
+		return StateFinishedWithError, data, errProgress, nil, nil
 	}
 
 	return handlePluginResult(data, operation.Request, proc, result.ProgressResult)
-}
-
-// calculateExponentialBackoff returns a delay that doubles with each attempt.
-// For throttling errors, this prevents the "thundering herd" problem where
-// all throttled operations retry simultaneously after a fixed delay.
-// Formula: baseDelay * 2^(attempt-1), capped at 30 seconds.
-func calculateExponentialBackoff(attempt int, baseDelay time.Duration) time.Duration {
-	const maxBackoff = 30 * time.Second
-
-	if attempt <= 1 {
-		return baseDelay
-	}
-
-	// Calculate 2^(attempt-1)
-	multiplier := 1 << (attempt - 1) // 1, 2, 4, 8, ...
-	backoff := baseDelay * time.Duration(multiplier)
-
-	if backoff > maxBackoff {
-		return maxBackoff
-	}
-	return backoff
 }
 
 // isThrottlingError checks if an error is a throttling/rate limit error.
@@ -748,7 +856,7 @@ func handlePluginResult(data PluginUpdateData, operation StatusCheck, proc gen.P
 			// Use exponential backoff for throttling errors to avoid thundering herd
 			retryDelay := data.config.RetryDelay
 			if progress.ErrorCode == resource.OperationErrorCodeThrottling {
-				retryDelay = calculateExponentialBackoff(data.attempts, data.config.RetryDelay)
+				retryDelay = resource.RetryStrategy{BaseDelay: data.config.RetryDelay}.Backoff(data.attempts)
 				proc.Log().Debug("PluginOperator: %T throttled, backing off for %v before retry (%d/%d)", operation, retryDelay, data.attempts, maxAttempts)
 			} else {
 				proc.Log().Info("PluginOperator: %T operation failed with recoverable error code %s. Status message: %s. Retrying (%d/%d)", operation, progress.ErrorCode, progress.StatusMessage, data.attempts, maxAttempts)
@@ -834,7 +942,7 @@ func list(from gen.PID, state gen.Atom, data PluginUpdateData, operation ListRes
 
 			// Check if this is a throttling error worth retrying
 			if isThrottlingError(err) && attempt < maxListAttempts {
-				backoff := calculateExponentialBackoff(attempt, data.config.RetryDelay)
+				backoff := resource.RetryStrategy{BaseDelay: data.config.RetryDelay}.Backoff(attempt)
 				proc.Log().Debug("PluginOperator: list %s throttled, backing off for %v before retry (%d/%d)",
 					operation.ResourceType, backoff, attempt, maxListAttempts)
 				time.Sleep(backoff)

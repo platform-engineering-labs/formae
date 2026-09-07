@@ -14,11 +14,31 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
+
+// rawPasswordGenerator builds the raw JSON shape ParseGenerators expects for
+// a password generator, the same shape PKL's PasswordGenerator.render()
+// produces.
+func rawPasswordGenerator(t *testing.T, label, stack string) json.RawMessage {
+	t.Helper()
+	data, err := json.Marshal(map[string]any{
+		"Type":                    "password",
+		"Label":                   label,
+		"Stack":                   stack,
+		"Length":                  32,
+		"Uppercase":               true,
+		"Lowercase":               true,
+		"Digits":                  true,
+		"RequireEachIncludedType": true,
+	})
+	require.NoError(t, err)
+	return data
+}
 
 func TestTranslateFormaeReferencesToKsuid(t *testing.T) {
 	ds, _ := GetDeps(t)
@@ -55,7 +75,7 @@ func TestTranslateFormaeReferencesToKsuid(t *testing.T) {
 			},
 		}
 
-		_, err := translateFormaeReferencesToKsuid(forma, ds)
+		_, _, err := translateFormaeReferencesToKsuid(forma, ds)
 		require.NoError(t, err)
 
 		var subnetProps map[string]any
@@ -103,7 +123,7 @@ func TestTranslateFormaeReferencesToKsuid(t *testing.T) {
 			},
 		}
 
-		_, err := translateFormaeReferencesToKsuid(forma, ds)
+		_, _, err := translateFormaeReferencesToKsuid(forma, ds)
 		require.NoError(t, err)
 
 		assert.NotEmpty(t, forma.Resources[0].Ksuid, "VPC should have KSUID")
@@ -146,7 +166,7 @@ func TestTranslateFormaeReferencesToKsuid(t *testing.T) {
 
 		originalProperties := string(forma.Resources[0].Properties)
 
-		_, err := translateFormaeReferencesToKsuid(forma, ds)
+		_, _, err := translateFormaeReferencesToKsuid(forma, ds)
 		require.NoError(t, err)
 
 		var originalProps, translatedProps map[string]any
@@ -173,7 +193,7 @@ func TestTranslateFormaeReferencesToKsuid(t *testing.T) {
 			},
 		}
 
-		_, err := translateFormaeReferencesToKsuid(forma, ds)
+		_, _, err := translateFormaeReferencesToKsuid(forma, ds)
 		require.NoError(t, err)
 		assert.Equal(t, existingKsuid, forma.Resources[0].Ksuid)
 	})
@@ -223,7 +243,7 @@ func TestTranslateFormaeReferencesToKsuid(t *testing.T) {
 			},
 		}
 
-		_, err := translateFormaeReferencesToKsuid(forma, ds)
+		_, _, err := translateFormaeReferencesToKsuid(forma, ds)
 		require.NoError(t, err)
 
 		// Verify all 3 different references were translated
@@ -282,7 +302,7 @@ func TestTranslateFormaeReferencesToKsuid(t *testing.T) {
 			},
 		}
 
-		_, err := translateFormaeReferencesToKsuid(forma, ds)
+		_, _, err := translateFormaeReferencesToKsuid(forma, ds)
 		require.NoError(t, err)
 
 		var resourceProps map[string]any
@@ -332,7 +352,7 @@ func TestTranslateFormaeReferencesToKsuid(t *testing.T) {
 			},
 		}
 
-		_, err = translateFormaeReferencesToKsuid(forma, ds)
+		_, _, err = translateFormaeReferencesToKsuid(forma, ds)
 		require.NoError(t, err)
 
 		var subnetProps map[string]any
@@ -371,7 +391,7 @@ func TestTranslateFormaeReferencesToKsuid(t *testing.T) {
 			},
 		}
 
-		_, err := translateFormaeReferencesToKsuid(forma, ds)
+		_, _, err := translateFormaeReferencesToKsuid(forma, ds)
 		require.NoError(t, err)
 
 		var resourceProps map[string]any
@@ -429,7 +449,7 @@ func TestGenerateResourceUpdatesWithTranslation(t *testing.T) {
 		},
 	}
 
-	updates, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds, nil, nil)
+	updates, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds, nil, nil, false)
 	require.NoError(t, err)
 	require.Len(t, updates, 2)
 
@@ -491,7 +511,7 @@ func TestTranslateFormaeReferencesToKsuid_ReturnsCompleteMapping(t *testing.T) {
 			},
 		}
 
-		mapping, err := translateFormaeReferencesToKsuid(forma, ds)
+		mapping, _, err := translateFormaeReferencesToKsuid(forma, ds)
 		require.NoError(t, err)
 
 		assert.Equal(t, "vpc", mapping[forma.Resources[0].Ksuid])
@@ -531,7 +551,7 @@ func TestTranslateFormaeReferencesToKsuid_ReturnsCompleteMapping(t *testing.T) {
 			},
 		}
 
-		mapping, err := translateFormaeReferencesToKsuid(forma, ds)
+		mapping, _, err := translateFormaeReferencesToKsuid(forma, ds)
 		require.NoError(t, err)
 
 		assert.Equal(t, "subnet", mapping[forma.Resources[0].Ksuid])
@@ -597,7 +617,7 @@ func TestGenerateResourceUpdates_PopulatesReferenceLabels(t *testing.T) {
 		},
 	}
 
-	updates, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds, nil, nil)
+	updates, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds, nil, nil, false)
 	require.NoError(t, err)
 	require.Len(t, updates, 2)
 
@@ -649,7 +669,7 @@ func TestGenerateResourceUpdates_ReferenceLabelsEdge(t *testing.T) {
 			},
 		}
 
-		updates, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds, nil, nil)
+		updates, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds, nil, nil, false)
 		require.NoError(t, err)
 		require.Len(t, updates, 1)
 
@@ -686,7 +706,7 @@ func TestGenerateResourceUpdates_ReferenceLabelsEdge(t *testing.T) {
 			},
 		}
 
-		_, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds, nil, nil)
+		_, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds, nil, nil, false)
 		require.Error(t, err)
 
 		var notFoundErr apimodel.FormaReferencedResourcesNotFoundError
@@ -723,7 +743,7 @@ func TestGenerateResourceUpdates_ReferenceLabelsEdge(t *testing.T) {
 			},
 		}
 
-		_, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds, nil, nil)
+		_, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds, nil, nil, false)
 		require.Error(t, err)
 
 		var notFoundErr apimodel.FormaReferencedResourcesNotFoundError
@@ -765,7 +785,7 @@ func TestGenerateResourceUpdates_ReferenceLabelsEdge(t *testing.T) {
 			},
 		}
 
-		_, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds, nil, nil)
+		_, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds, nil, nil, false)
 		require.Error(t, err)
 
 		var notFoundErr apimodel.FormaReferencedResourcesNotFoundError
@@ -811,7 +831,7 @@ func TestGenerateResourceUpdates_TargetValidation(t *testing.T) {
 			},
 		}
 
-		updates, err := GenerateResourceUpdates(&forma, command, mode, FormaCommandSourceUser, existingTargets, ds, nil, nil)
+		updates, err := GenerateResourceUpdates(&forma, command, mode, FormaCommandSourceUser, existingTargets, ds, nil, nil, false)
 		assert.NoError(t, err)
 		assert.Len(t, updates, 1)
 		assert.Equal(t, "test-target", updates[0].ResourceTarget.Label)
@@ -837,7 +857,7 @@ func TestGenerateResourceUpdates_TargetValidation(t *testing.T) {
 			},
 		}
 
-		updates, err := GenerateResourceUpdates(&forma, command, mode, FormaCommandSourceUser, existingTargets, ds, nil, nil)
+		updates, err := GenerateResourceUpdates(&forma, command, mode, FormaCommandSourceUser, existingTargets, ds, nil, nil, false)
 		assert.Error(t, err)
 		assert.Nil(t, updates)
 	})
@@ -862,7 +882,7 @@ func TestGenerateResourceUpdates_TargetValidation(t *testing.T) {
 			},
 		}
 
-		updates, err := GenerateResourceUpdates(&forma, command, mode, FormaCommandSourceUser, existingTargets, ds, nil, nil)
+		updates, err := GenerateResourceUpdates(&forma, command, mode, FormaCommandSourceUser, existingTargets, ds, nil, nil, false)
 		assert.Error(t, err)
 		assert.Nil(t, updates)
 	})
@@ -882,7 +902,7 @@ func TestGenerateResourceUpdates_TargetValidation(t *testing.T) {
 
 		existingTargets := []*pkgmodel.Target{} // No existing targets
 
-		updates, err := GenerateResourceUpdates(&forma, command, mode, FormaCommandSourceUser, existingTargets, ds, nil, nil)
+		updates, err := GenerateResourceUpdates(&forma, command, mode, FormaCommandSourceUser, existingTargets, ds, nil, nil, false)
 		assert.NoError(t, err)
 		assert.Len(t, updates, 1)
 		assert.Equal(t, "new-target", updates[0].ResourceTarget.Label)
@@ -1083,9 +1103,167 @@ func TestFindDependencyUpdates_SameLabel_DifferentTypes(t *testing.T) {
 		"aws-target": {Label: "aws-target", Namespace: "AWS"},
 	}
 
-	dependencyDeletes := findDependencyUpdates(allDeleteUpdates, allResources, targetMap, FormaCommandSourceUser)
+	dependencyDeletes, cascadeUpdates := findDependencyUpdates(allDeleteUpdates, nil, allResources, targetMap, FormaCommandSourceUser, nil)
 
 	assert.Len(t, dependencyDeletes, 0, "Should not create duplicates when resources with same label but different types are already being deleted")
+	assert.Len(t, cascadeUpdates, 0, "No cascade-updates expected when no dependents reference the deletes")
+}
+
+// TestFindDependencyUpdates_CreateOnlyBranch exercises the cascade
+// decision: branches on the dependent's referring FieldHint.CreateOnly.
+// CreateOnly=true → cascade-delete (dependent gets torn down).
+// CreateOnly=false → cascade-update (the resolvable re-resolves at apply
+// time; the provider's Update absorbs the new parent value).
+func TestFindDependencyUpdates_CreateOnlyBranch(t *testing.T) {
+	parentKsuid := util.NewID()
+	dependentKsuid := util.NewID()
+
+	parentDelete := ResourceUpdate{
+		DesiredState: pkgmodel.Resource{
+			Label: "parent",
+			Type:  "AWS::Versioned::Parent",
+			Stack: "test-stack",
+			Ksuid: parentKsuid,
+		},
+		Operation: OperationDelete,
+	}
+	targetMap := map[string]*pkgmodel.Target{
+		"test-target": {Label: "test-target", Namespace: "AWS"},
+	}
+
+	// makeDependent returns a dependent resource referencing the parent via
+	// the given property at the given path with the given CreateOnly hint.
+	makeDependent := func(propsJSON string, hints map[string]pkgmodel.FieldHint) pkgmodel.Resource {
+		return pkgmodel.Resource{
+			Label:      "dependent",
+			Type:       "AWS::Versioned::Consumer",
+			Stack:      "test-stack",
+			Target:     "test-target",
+			Ksuid:      dependentKsuid,
+			Properties: json.RawMessage(propsJSON),
+			Schema: pkgmodel.Schema{
+				Identifier: "Name",
+				Hints:      hints,
+			},
+		}
+	}
+
+	parentRefJSON := fmt.Sprintf(`{"ParentRef":{"$ref":"formae://%s#/Name","$value":"parent-v1"}}`, parentKsuid)
+	parentRefArrayJSON := fmt.Sprintf(`{"Refs":[{"Target":{"$ref":"formae://%s#/Name","$value":"parent-v1"}}]}`, parentKsuid)
+	otherKsuid := util.NewID()
+	mixedRefsJSON := fmt.Sprintf(
+		`{"ImmutableRef":{"$ref":"formae://%s#/Name","$value":"parent-v1"},"MutableRef":{"$ref":"formae://%s#/Other","$value":"x"}}`,
+		parentKsuid, otherKsuid,
+	)
+	nestedWrapperRefJSON := fmt.Sprintf(
+		`{"LinkedNetwork":{"Uri":{"$ref":"formae://%s#/SelfLink","$value":"https://net-1"}}}`, parentKsuid,
+	)
+	literalDottedKeyRefJSON := fmt.Sprintf(
+		`{"Foo.Bar":{"$ref":"formae://%s#/Name","$value":"parent-v1"}}`, parentKsuid,
+	)
+	digitFieldRefJSON := fmt.Sprintf(
+		`{"42":{"$ref":"formae://%s#/Name","$value":"parent-v1"}}`, parentKsuid,
+	)
+
+	cases := []struct {
+		name              string
+		dependent         pkgmodel.Resource
+		wantCascadeDelete bool // true => dependencyDeletes has 1, cascadeUpdates 0
+	}{
+		{
+			name: "createOnly=true emits cascade-delete",
+			dependent: makeDependent(parentRefJSON, map[string]pkgmodel.FieldHint{
+				"ParentRef": {CreateOnly: true},
+			}),
+			wantCascadeDelete: true,
+		},
+		{
+			name: "createOnly=false emits cascade-update",
+			dependent: makeDependent(parentRefJSON, map[string]pkgmodel.FieldHint{
+				"ParentRef": {CreateOnly: false},
+			}),
+			wantCascadeDelete: false,
+		},
+		{
+			// Per the plan's mixed-refs case: a single CreateOnly ref to a
+			// deletion target forces cascade-replace for the whole dependent
+			// even when another ref to the same target is mutable.
+			name: "mixed refs — any CreateOnly forces cascade-delete",
+			dependent: makeDependent(mixedRefsJSON, map[string]pkgmodel.FieldHint{
+				"ImmutableRef": {CreateOnly: true},
+				"MutableRef":   {CreateOnly: false},
+			}),
+			wantCascadeDelete: true,
+		},
+		{
+			// Array-indexed TargetPath ("Refs.0.Target") must be looked up
+			// under the stripped key ("Refs.Target") — same convention as
+			// changeset.fieldHintForPath / the attachesTo edge hint.
+			name: "array-indexed path uses stripped hint key",
+			dependent: makeDependent(parentRefArrayJSON, map[string]pkgmodel.FieldHint{
+				"Refs.Target": {CreateOnly: true},
+			}),
+			wantCascadeDelete: true,
+		},
+		{
+			// A CreateOnly hint on a wrapper field covers references nested
+			// inside it — the same at-or-below matching the patch pipeline
+			// uses to classify createOnly ops, so a schema annotating the
+			// provider's immutability unit (the wrapper object) cascades the
+			// same way one annotating the leaf member does.
+			name: "wrapper-level createOnly covers a nested ref",
+			dependent: makeDependent(nestedWrapperRefJSON, map[string]pkgmodel.FieldHint{
+				"LinkedNetwork": {CreateOnly: true},
+			}),
+			wantCascadeDelete: true,
+		},
+		{
+			// A literal dotted key is one segment, not nesting: a ref under
+			// the top-level key "Foo.Bar" does not sit below a field named
+			// "Foo", so a CreateOnly hint there must not force a replacement.
+			name: "literal dotted key is not below a dot-prefix field",
+			dependent: makeDependent(literalDottedKeyRefJSON, map[string]pkgmodel.FieldHint{
+				"Foo": {CreateOnly: true},
+			}),
+			wantCascadeDelete: false,
+		},
+		{
+			// A single all-digits segment is a top-level field name, not an
+			// array index — an index can only appear under a field. Its hint
+			// must still be found.
+			name: "digit-named top-level field keeps its hint",
+			dependent: makeDependent(digitFieldRefJSON, map[string]pkgmodel.FieldHint{
+				"42": {CreateOnly: true},
+			}),
+			wantCascadeDelete: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			allResources := map[string][]*pkgmodel.Resource{
+				"test-stack": {&tc.dependent},
+			}
+			dependencyDeletes, cascadeUpdates := findDependencyUpdates(
+				[]ResourceUpdate{parentDelete}, nil, allResources, targetMap, FormaCommandSourceUser, nil,
+			)
+
+			if tc.wantCascadeDelete {
+				require.Len(t, dependencyDeletes, 1, "expected a cascade-delete for the dependent")
+				assert.Equal(t, OperationDelete, dependencyDeletes[0].Operation)
+				assert.Equal(t, "dependent", dependencyDeletes[0].DesiredState.Label)
+				assert.Len(t, cascadeUpdates, 0, "no cascade-updates expected when CreateOnly forces delete")
+			} else {
+				require.Len(t, cascadeUpdates, 1, "expected a cascade-update for the dependent")
+				assert.Equal(t, OperationUpdate, cascadeUpdates[0].Operation)
+				assert.Equal(t, "dependent", cascadeUpdates[0].DesiredState.Label)
+				assert.True(t, cascadeUpdates[0].IsCascade, "cascade-update should be marked IsCascade")
+				assert.Equal(t, "parent", cascadeUpdates[0].CascadeSource,
+					"cascade-update should record the source label for debugging")
+				assert.Len(t, dependencyDeletes, 0, "no cascade-deletes expected when all refs are mutable")
+			}
+		})
+	}
 }
 
 func TestGenerateResourceUpdatesForApply_SameLabelDifferentTypes_ReplaceNotGenerated(t *testing.T) {
@@ -1128,7 +1306,7 @@ func TestGenerateResourceUpdatesForApply_SameLabelDifferentTypes_ReplaceNotGener
 		"aws-target": {Label: "aws-target", Namespace: "AWS"},
 	}
 
-	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, targetMap, ds, nil)
+	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, targetMap, ds, nil, false)
 	require.NoError(t, err)
 
 	assert.Len(t, updates, 2, "Should have delete for old type and create for new type")
@@ -1242,7 +1420,7 @@ func TestTranslateFormaeReferencesToKsuid_TargetConfig(t *testing.T) {
 		},
 	}
 
-	_, err := translateFormaeReferencesToKsuid(forma, ds)
+	_, _, err := translateFormaeReferencesToKsuid(forma, ds)
 	require.NoError(t, err)
 
 	var config map[string]any
@@ -1259,4 +1437,795 @@ func TestTranslateFormaeReferencesToKsuid_TargetConfig(t *testing.T) {
 
 	// Plain values should be unchanged
 	assert.Equal(t, "us-east-1", config["region"])
+}
+
+// TestAppendCascadeUpdatesIfAbsent_MarksExistingUpdate covers the cascade-update
+// merge-vs-dedup semantics. The conformance test's ecs-service-update
+// fixture changes BOTH the Service's deploymentConfiguration (mutable Service
+// field — user-driven Update) AND the TaskDef's container image (CreateOnly
+// — TaskDef Replace, cascades to Service). The planner emits both a user-
+// driven Update for the Service and a cascade-update from
+// findDependencyUpdates. They target the same URI. Dropping the cascade-
+// update without preserving its information would lose the IsCascade flag,
+// and the executor wouldn't regenerate the patch with the new resolvable
+// value — sending the user's plan-time patch (deploymentConfiguration only)
+// to the provider, which then has no idea TaskDefinitionArn should change.
+//
+// The fix: when the dependent already has a user-driven Update,
+// appendCascadeUpdatesIfAbsent must mark that Update IsCascade=true so the
+// executor knows to regenerate.
+func TestAppendCascadeUpdatesIfAbsent_MarksExistingUpdate(t *testing.T) {
+	dependentURI := pkgmodel.NewFormaeURI("dependent-ksuid", "")
+	sourceLabel := "parent"
+
+	t.Run("existing user-driven Update gets IsCascade=true", func(t *testing.T) {
+		existing := ResourceUpdate{
+			DesiredState: pkgmodel.Resource{Label: "dependent", Type: "T", Stack: "s", Ksuid: dependentURI.KSUID()},
+			Operation:    OperationUpdate,
+			IsCascade:    false,
+		}
+		cascade := ResourceUpdate{
+			DesiredState:  pkgmodel.Resource{Label: "dependent", Type: "T", Stack: "s", Ksuid: dependentURI.KSUID()},
+			Operation:     OperationUpdate,
+			IsCascade:     true,
+			CascadeSource: sourceLabel,
+		}
+
+		out := appendCascadeUpdatesIfAbsent([]ResourceUpdate{existing}, []ResourceUpdate{cascade})
+
+		require.Len(t, out, 1, "must dedup — exactly one op for the dependent")
+		assert.Equal(t, OperationUpdate, out[0].Operation)
+		assert.True(t, out[0].IsCascade,
+			"existing Update must be marked IsCascade so the executor regenerates the patch")
+		assert.Equal(t, sourceLabel, out[0].CascadeSource,
+			"existing Update should inherit the cascade source label for diagnostics")
+	})
+
+	t.Run("no duplicate — cascade-update appended as-is", func(t *testing.T) {
+		cascade := ResourceUpdate{
+			DesiredState: pkgmodel.Resource{Label: "dependent", Type: "T", Stack: "s", Ksuid: dependentURI.KSUID()},
+			Operation:    OperationUpdate,
+			IsCascade:    true,
+		}
+		out := appendCascadeUpdatesIfAbsent(nil, []ResourceUpdate{cascade})
+		require.Len(t, out, 1)
+		assert.True(t, out[0].IsCascade)
+	})
+
+	t.Run("existing Create/Delete is not modified", func(t *testing.T) {
+		// If something else already owns the dependent's slot — e.g. a
+		// Replace decomposed into Delete+Create — the cascade-update is
+		// dropped without touching the existing op. Those "complete"
+		// operations carry their own desired state and don't need patch
+		// augmentation.
+		existing := ResourceUpdate{
+			DesiredState: pkgmodel.Resource{Label: "dependent", Type: "T", Stack: "s", Ksuid: dependentURI.KSUID()},
+			Operation:    OperationCreate,
+			IsCascade:    false,
+		}
+		cascade := ResourceUpdate{
+			DesiredState: pkgmodel.Resource{Label: "dependent", Type: "T", Stack: "s", Ksuid: dependentURI.KSUID()},
+			Operation:    OperationUpdate,
+			IsCascade:    true,
+		}
+		out := appendCascadeUpdatesIfAbsent([]ResourceUpdate{existing}, []ResourceUpdate{cascade})
+		require.Len(t, out, 1)
+		assert.Equal(t, OperationCreate, out[0].Operation)
+		assert.False(t, out[0].IsCascade, "Create/Delete should not be repurposed")
+	})
+}
+
+// TestSynthesizeCascadeUpdatePatch_UserProvidedSource exercises the case
+// where the parent's target property is a user-set field whose new value
+// lives in the forma at plan time (e.g. a versioned-parent's Name). The
+// synthesized patch op should be a normal `replace` carrying the concrete
+// new value, ready for the renderer to display `from "old" to "new"`.
+func TestSynthesizeCascadeUpdatePatch_UserProvidedSource(t *testing.T) {
+	parentKsuid := "parent-ksuid"
+	dep := pkgmodel.Resource{
+		Label: "consumer",
+		Type:  "FakeAWS::Versioned::Consumer",
+		Properties: json.RawMessage(`{
+			"Name": "consumer-1",
+			"ParentRef": {"$ref": "formae://` + parentKsuid + `#/Name", "$value": "parent-v1"}
+		}`),
+	}
+	formaByKsuid := map[string]*pkgmodel.Resource{
+		parentKsuid: {
+			Label:      "parent",
+			Type:       "FakeAWS::Versioned::Parent",
+			Ksuid:      parentKsuid,
+			Properties: json.RawMessage(`{"Name": "parent-v2"}`),
+		},
+	}
+
+	patchDoc, err := synthesizeCascadeUpdatePatch(
+		dep,
+		map[string]bool{parentKsuid: true},
+		nil, // replacedKsuids — none in this test scenario
+		map[string]string{parentKsuid: "parent"},
+		formaByKsuid,
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, patchDoc)
+	patchStr := string(patchDoc)
+	assert.Contains(t, patchStr, `"path":"/ParentRef"`, "patch must target the consumer's referring field")
+	assert.Contains(t, patchStr, `"value":"parent-v2"`, "patch must carry the forma's new value for the user-set source field")
+	assert.NotContains(t, patchStr, "$cascade-resolvable",
+		"user-provided source values should produce normal ops, no marker needed")
+}
+
+// TestSynthesizeCascadeUpdatePatch_ProviderAssignedSource exercises the case
+// where the parent's target property is provider-assigned (e.g. TaskDef's
+// TaskDefinitionArn — only known after AWS Create). The synthesized op
+// should carry a `$cascade-resolvable` marker so the CLI renderer prints
+// the friendly "to point at the new <source> (current: ...)" wording
+// instead of attempting `from X to Y` with a placeholder.
+func TestSynthesizeCascadeUpdatePatch_ProviderAssignedSource(t *testing.T) {
+	parentKsuid := "taskdef-ksuid"
+	dep := pkgmodel.Resource{
+		Label: "ecs-service",
+		Type:  "AWS::ECS::Service",
+		Properties: json.RawMessage(`{
+			"ServiceName": "svc",
+			"TaskDefinition": {"$ref": "formae://` + parentKsuid + `#/TaskDefinitionArn", "$value": "arn:aws:ecs:us-east-1:0:task-definition/test:1"}
+		}`),
+	}
+	// forma's parent has the user-set fields (family, containerDefinitions,
+	// etc.) but NOT TaskDefinitionArn — that's assigned by AWS at Create.
+	formaByKsuid := map[string]*pkgmodel.Resource{
+		parentKsuid: {
+			Label:      "test-taskdef-for-service",
+			Type:       "AWS::ECS::TaskDefinition",
+			Ksuid:      parentKsuid,
+			Properties: json.RawMessage(`{"Family": "test", "ContainerDefinitions": [{"Image": "nginx:1.27"}]}`),
+		},
+	}
+
+	patchDoc, err := synthesizeCascadeUpdatePatch(
+		dep,
+		map[string]bool{parentKsuid: true},
+		nil, // replacedKsuids — none in this test scenario
+		map[string]string{parentKsuid: "test-taskdef-for-service"},
+		formaByKsuid,
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, patchDoc)
+	patchStr := string(patchDoc)
+	assert.Contains(t, patchStr, `"path":"/TaskDefinition"`)
+	assert.Contains(t, patchStr, `"$cascade-resolvable":true`,
+		"provider-assigned sources must emit the marker so the renderer falls back to the friendly phrasing")
+	assert.Contains(t, patchStr, `"test-taskdef-for-service"`,
+		"marker must carry the source label so the renderer can name the parent")
+	assert.Contains(t, patchStr, "task-definition/test:1",
+		"marker must carry the current $value so the user sees what's being replaced")
+}
+
+// TestSynthesizeCascadeUpdatePatch_NoMatchingRefs returns empty when the
+// dependent has no resolvables pointing at the to-be-deleted set. This is
+// the common path for refs pointing at unaffected parents.
+func TestSynthesizeCascadeUpdatePatch_NoMatchingRefs(t *testing.T) {
+	dep := pkgmodel.Resource{
+		Label: "consumer",
+		Properties: json.RawMessage(`{
+			"OtherRef": {"$ref": "formae://unrelated-ksuid#/Foo", "$value": "x"}
+		}`),
+	}
+	patchDoc, err := synthesizeCascadeUpdatePatch(
+		dep,
+		map[string]bool{"some-other-ksuid": true},
+		nil, // replacedKsuids — none in this test scenario
+		map[string]string{},
+		map[string]*pkgmodel.Resource{},
+	)
+	require.NoError(t, err)
+	assert.Empty(t, patchDoc, "no refs to deletion targets → no synthesized ops")
+}
+
+// TestSynthesizeCascadeUpdatePatch_ArrayIndexedPath exercises the path
+// translation from the resolver's dot-separated form (e.g. "Refs.0.Target")
+// into JSON Pointer (e.g. "/Refs/0/Target"). The array-indexed
+// case applies equally to the rendered patch.
+func TestSynthesizeCascadeUpdatePatch_ArrayIndexedPath(t *testing.T) {
+	parentKsuid := "parent-ksuid"
+	dep := pkgmodel.Resource{
+		Label: "consumer",
+		Properties: json.RawMessage(`{
+			"Refs": [{"Target": {"$ref": "formae://` + parentKsuid + `#/Name", "$value": "v1"}}]
+		}`),
+	}
+	formaByKsuid := map[string]*pkgmodel.Resource{
+		parentKsuid: {
+			Ksuid:      parentKsuid,
+			Properties: json.RawMessage(`{"Name": "v2"}`),
+		},
+	}
+	patchDoc, err := synthesizeCascadeUpdatePatch(
+		dep,
+		map[string]bool{parentKsuid: true},
+		nil, // replacedKsuids — none in this test scenario
+		map[string]string{parentKsuid: "parent"},
+		formaByKsuid,
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, patchDoc)
+	assert.Contains(t, string(patchDoc), `"path":"/Refs/0/Target"`,
+		"dot-separated TargetPath with numeric segments must convert to JSON Pointer with slashes")
+}
+
+// TestSynthesizeCascadeUpdatePatch_ReplacedParentWithRecoverableValue covers
+// the REPLACE'd-parent case: the parent's delete-half has a matching
+// create-half in the same plan, AND the forma's parent state already carries
+// a concrete value for the property the dependent's Resolvable points at
+// (because the agent has merged its stale cached $value into the forma).
+// The optimization at synthesizeCascadeUpdatePatch's "recover the new value
+// from the forma's parent state" branch is unsafe for REPLACE: the recovered
+// value is the OLD revision, not the post-apply value. We expect the marker
+// to be emitted so the renderer prints the friendly phrasing.
+func TestSynthesizeCascadeUpdatePatch_ReplacedParentWithRecoverableValue(t *testing.T) {
+	parentKsuid := "taskdef-ksuid"
+	dep := pkgmodel.Resource{
+		Label: "ecs-service",
+		Type:  "AWS::ECS::Service",
+		Properties: json.RawMessage(`{
+			"ServiceName": "svc",
+			"TaskDefinition": {"$ref": "formae://` + parentKsuid + `#/TaskDefinitionArn", "$value": "arn:aws:ecs:us-east-1:0:task-definition/test:20"}
+		}`),
+	}
+	// forma's parent state DOES carry TaskDefinitionArn — simulates the
+	// production scenario where the resolver merges the cached value in.
+	formaByKsuid := map[string]*pkgmodel.Resource{
+		parentKsuid: {
+			Label:      "hub-task-def",
+			Type:       "AWS::ECS::TaskDefinition",
+			Ksuid:      parentKsuid,
+			Properties: json.RawMessage(`{"Family": "test", "TaskDefinitionArn": "arn:aws:ecs:us-east-1:0:task-definition/test:20"}`),
+			Schema: pkgmodel.Schema{
+				Hints: map[string]pkgmodel.FieldHint{
+					"TaskDefinitionArn": {HasProviderDefault: true},
+				},
+			},
+		},
+	}
+
+	patchDoc, err := synthesizeCascadeUpdatePatch(
+		dep,
+		map[string]bool{parentKsuid: true},
+		map[string]bool{parentKsuid: true}, // replacedKsuids — parent IS being REPLACE'd
+		map[string]string{parentKsuid: "hub-task-def"},
+		formaByKsuid,
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, patchDoc)
+	patchStr := string(patchDoc)
+	assert.Contains(t, patchStr, `"path":"/TaskDefinition"`)
+	assert.Contains(t, patchStr, `"$cascade-resolvable":true`,
+		"REPLACE'd parents must emit the marker, not a concrete (stale) value")
+	assert.Contains(t, patchStr, `"hub-task-def"`,
+		"marker must carry the source label")
+	assert.NotContains(t, patchStr, `"value":"arn:aws:ecs:us-east-1:0:task-definition/test:20"`,
+		"stale cached value must not be emitted as the concrete 'to' target")
+}
+
+// TestFindDependencyUpdates_ReplaceParentEmitsCascadeMarker verifies the full
+// path: when a parent is being REPLACE'd and a dependent has a Resolvable
+// pointing at one of the parent's provider-assigned properties, the cascade-
+// update's PatchDocument carries the $cascade-resolvable marker (not a
+// concrete stale value pulled from the forma's parent state).
+func TestFindDependencyUpdates_ReplaceParentEmitsCascadeMarker(t *testing.T) {
+	parentKsuid := "taskdef-ksuid"
+	parentLabel := "hub-task-def"
+	depLabel := "hub-service"
+	target := pkgmodel.Target{Label: "default"}
+
+	parent := pkgmodel.Resource{
+		Ksuid:      parentKsuid,
+		Label:      parentLabel,
+		Type:       "AWS::ECS::TaskDefinition",
+		Stack:      "hub-app",
+		Target:     target.Label,
+		Properties: json.RawMessage(`{"Family": "hub", "TaskDefinitionArn": "arn:aws:ecs:us-east-1:0:task-definition/hub:20"}`),
+		Schema: pkgmodel.Schema{
+			Hints: map[string]pkgmodel.FieldHint{
+				"TaskDefinitionArn": {HasProviderDefault: true},
+			},
+		},
+	}
+	dep := pkgmodel.Resource{
+		Label:  depLabel,
+		Type:   "AWS::ECS::Service",
+		Stack:  "hub-app",
+		Target: target.Label,
+		Properties: json.RawMessage(`{
+			"ServiceName": "hub-svc",
+			"TaskDefinition": {"$ref": "formae://` + parentKsuid + `#/TaskDefinitionArn", "$value": "arn:aws:ecs:us-east-1:0:task-definition/hub:20"}
+		}`),
+	}
+
+	// resourceReplaces holds the two halves of a REPLACE on the parent.
+	resourceReplaces := []ResourceUpdate{
+		{Operation: OperationDelete, DesiredState: parent},
+		{Operation: OperationCreate, DesiredState: parent},
+	}
+
+	allResources := map[string][]*pkgmodel.Resource{
+		"hub-app": {&parent, &dep},
+	}
+	existingTargetMap := map[string]*pkgmodel.Target{target.Label: &target}
+	forma := &pkgmodel.Forma{Resources: []pkgmodel.Resource{parent, dep}}
+
+	// Build replacedKsuids the same way the production callers do.
+	replacedKsuids := make(map[string]bool)
+	for _, ru := range resourceReplaces {
+		if ru.Operation == OperationDelete && ru.DesiredState.Ksuid != "" {
+			replacedKsuids[ru.DesiredState.Ksuid] = true
+		}
+	}
+
+	_, dependencyUpdates := findDependencyUpdates(
+		resourceReplaces,
+		replacedKsuids,
+		allResources,
+		existingTargetMap,
+		FormaCommandSourceUser,
+		forma,
+	)
+
+	require.Len(t, dependencyUpdates, 1, "exactly one cascade-update for the dependent")
+	cu := dependencyUpdates[0]
+	require.NotEmpty(t, cu.DesiredState.PatchDocument, "cascade-update must carry a synthesized patch")
+	patchStr := string(cu.DesiredState.PatchDocument)
+	assert.Contains(t, patchStr, `"$cascade-resolvable":true`,
+		"REPLACE'd parent must produce a marker, not a stale concrete value")
+	assert.NotContains(t, patchStr, `"value":"arn:aws:ecs:us-east-1:0:task-definition/hub:20"`,
+		"stale cached value must not appear as the concrete 'to' target")
+}
+
+// TestSynthesizeCascadeUpdatePatch_DeletedParentNotReplaced confirms that
+// when a parent is being deleted outright (not REPLACE'd), the recover-
+// concrete-value optimization still runs — preserving the existing behavior
+// of TestSynthesizeCascadeUpdatePatch_UserProvidedSource for the non-REPLACE
+// case explicitly.
+func TestSynthesizeCascadeUpdatePatch_DeletedParentNotReplaced(t *testing.T) {
+	parentKsuid := "parent-ksuid"
+	dep := pkgmodel.Resource{
+		Label: "consumer",
+		Properties: json.RawMessage(`{
+			"ParentRef": {"$ref": "formae://` + parentKsuid + `#/Name", "$value": "parent-v1"}
+		}`),
+	}
+	formaByKsuid := map[string]*pkgmodel.Resource{
+		parentKsuid: {
+			Label:      "parent",
+			Ksuid:      parentKsuid,
+			Properties: json.RawMessage(`{"Name": "parent-v2"}`),
+		},
+	}
+
+	patchDoc, err := synthesizeCascadeUpdatePatch(
+		dep,
+		map[string]bool{parentKsuid: true},
+		map[string]bool{}, // replacedKsuids — explicitly empty: parent is DELETE-only
+		map[string]string{parentKsuid: "parent"},
+		formaByKsuid,
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, patchDoc)
+	patchStr := string(patchDoc)
+	assert.Contains(t, patchStr, `"value":"parent-v2"`,
+		"DELETE-only parents must still use the recover-concrete-value path")
+	assert.NotContains(t, patchStr, "$cascade-resolvable",
+		"no marker for DELETE-only when the forma has the value")
+}
+
+// TestSynthesizeCascadeUpdatePatch_ReplacedParentIndexedProviderField covers
+// the case where a dependent's Resolvable targets a provider-assigned field
+// nested inside an array on the parent (e.g. an ALB Listener referencing
+// /DefaultActions/0/TargetGroupArn). Schema hint keys are stored without
+// numeric segments, so the lookup must strip array indices before consulting
+// HasProviderDefault — otherwise REPLACE'd parents fall through to the
+// recover-concrete-value path and emit the stale cached value.
+func TestSynthesizeCascadeUpdatePatch_ReplacedParentIndexedProviderField(t *testing.T) {
+	parentKsuid := "parent-ksuid"
+	dep := pkgmodel.Resource{
+		Label: "listener",
+		Type:  "AWS::ElasticLoadBalancingV2::Listener",
+		Properties: json.RawMessage(`{
+			"Name": "listener-1",
+			"TargetGroupRef": {"$ref": "formae://` + parentKsuid + `#/DefaultActions.0.TargetGroupArn", "$value": "arn:aws:elasticloadbalancing:...:targetgroup/old/1111"}
+		}`),
+	}
+	formaByKsuid := map[string]*pkgmodel.Resource{
+		parentKsuid: {
+			Label:      "alb",
+			Ksuid:      parentKsuid,
+			Type:       "AWS::ElasticLoadBalancingV2::TargetGroup",
+			Properties: json.RawMessage(`{"DefaultActions": [{"TargetGroupArn": "arn:aws:elasticloadbalancing:...:targetgroup/old/1111"}]}`),
+			Schema: pkgmodel.Schema{
+				Hints: map[string]pkgmodel.FieldHint{
+					// Schema hints are keyed without array indices.
+					"DefaultActions.TargetGroupArn": {HasProviderDefault: true},
+				},
+			},
+		},
+	}
+
+	patchDoc, err := synthesizeCascadeUpdatePatch(
+		dep,
+		map[string]bool{parentKsuid: true},
+		map[string]bool{parentKsuid: true}, // parent is REPLACE'd
+		map[string]string{parentKsuid: "alb"},
+		formaByKsuid,
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, patchDoc)
+	patchStr := string(patchDoc)
+	assert.Contains(t, patchStr, `"$cascade-resolvable":true`,
+		"indexed provider-assigned source on REPLACE'd parent must still emit the marker after array-index stripping")
+	assert.Contains(t, patchStr, `"alb"`, "marker must carry the source label")
+	assert.Contains(t, patchStr, `"arn:aws:elasticloadbalancing:...:targetgroup/old/1111"`,
+		"marker must carry the current $value so the user sees what is being replaced")
+	// The stale value must appear only inside the cascade marker, not as a bare replace target.
+	assert.NotContains(t, patchStr, `"value":"arn:`,
+		"stale cached value must not be emitted as a bare concrete replace value outside the cascade marker")
+}
+
+// A reference names an opaque property when the opaque set holds the exact
+// path, the path's map-secret root, or any hint nested under the referenced
+// path: a container holding a credential is itself a credential.
+func TestReferencesOpaqueProperty_DescendantHint(t *testing.T) {
+	nested := map[string]bool{"Config.Password": true}
+	mapSecret := map[string]bool{"data": true}
+
+	cases := []struct {
+		name     string
+		opaque   map[string]bool
+		property string
+		want     bool
+	}{
+		{"container with opaque descendant", nested, "Config", true},
+		{"exact descendant path", nested, "Config.Password", true},
+		{"sibling under the same container", nested, "Config.User", false},
+		{"unrelated field", nested, "Name", false},
+		{"key into a map-shaped secret", mapSecret, "data.token", true},
+		{"key below a nested opaque hint", nested, "Config.Password.value", true},
+		{"key below a non-opaque sibling", nested, "Config.Other.sub", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, referencesOpaqueProperty(tc.opaque, tc.property))
+		})
+	}
+}
+
+// $resolvedFrom is a formae-written record, never a user-writable key: a
+// desired document arriving with one (on a raw $ref envelope, bypassing the
+// $res sugar that is rewritten wholesale) must have it stripped at ingestion,
+// or forged provenance would suppress a genuine write on the next plan.
+func TestTranslateFormaeReferences_StripsUntrustedProvenance(t *testing.T) {
+	ds, _ := GetDeps(t)
+	forged := "v1:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	forma := &pkgmodel.Forma{
+		Stacks: []pkgmodel.Stack{{Label: "test-stack"}},
+		Resources: []pkgmodel.Resource{{
+			Label: "consumer", Type: "Test::Consumer", Stack: "test-stack",
+			Properties: json.RawMessage(`{
+				"Password": {"$ref": "formae://2abcdefghijklmnopqrstuvwxyz#/S", "$resolvedFrom": "` + forged + `"},
+				"Nested": {"Deep": {"$ref": "formae://2abcdefghijklmnopqrstuvwxyz#/T", "$resolvedFrom": "` + forged + `"}}
+			}`),
+		}},
+	}
+
+	_, _, err := TranslateFormaeReferencesToKsuid(forma, ds)
+	require.NoError(t, err)
+
+	props := string(forma.Resources[0].Properties)
+	assert.NotContains(t, props, "$resolvedFrom",
+		"user-authored provenance must be stripped at ingestion")
+	assert.Contains(t, props, "$ref", "the reference itself is preserved")
+}
+
+// The strip is scoped to reference envelopes: an ordinary map property that
+// happens to contain a literal "$resolvedFrom" key is user data, not
+// provenance, and must round-trip untouched.
+func TestTranslateFormaeReferences_KeepsLiteralResolvedFromInPlainMaps(t *testing.T) {
+	ds, _ := GetDeps(t)
+	forma := &pkgmodel.Forma{
+		Stacks: []pkgmodel.Stack{{Label: "test-stack"}},
+		Resources: []pkgmodel.Resource{{
+			Label: "config", Type: "Test::Config", Stack: "test-stack",
+			Properties: json.RawMessage(`{
+				"Data": {"$resolvedFrom": "a-user-value", "other": "kept"}
+			}`),
+		}},
+	}
+
+	_, _, err := TranslateFormaeReferencesToKsuid(forma, ds)
+	require.NoError(t, err)
+
+	var props map[string]map[string]any
+	require.NoError(t, json.Unmarshal(forma.Resources[0].Properties, &props))
+	assert.Equal(t, "a-user-value", props["Data"]["$resolvedFrom"],
+		"a literal key in a plain map is user data and must survive")
+}
+
+// ── $gen resolution ──────────────────────────────────────────────────────────
+
+// A generator declared in the SAME command as its consumer is resolvable
+// even though it has no row in the datastore yet — the most common
+// authoring shape, and the one a datastore-only lookup would break.
+func TestTranslate_GenReference_ResolvesInCommandGenerator(t *testing.T) {
+	ds, _ := GetDeps(t)
+	forma := &pkgmodel.Forma{
+		Stacks:     []pkgmodel.Stack{{Label: "test-stack"}},
+		Generators: []json.RawMessage{rawPasswordGenerator(t, "db-password", "test-stack")},
+		Resources: []pkgmodel.Resource{{
+			Label: "db", Type: "Test::Database", Stack: "test-stack",
+			Properties: json.RawMessage(`{
+				"MasterPassword": {"$gen": true, "$label": "db-password", "$stack": "test-stack", "$output": "value", "$visibility": "Opaque"}
+			}`),
+		}},
+	}
+
+	_, _, err := TranslateFormaeReferencesToKsuid(forma, ds)
+	require.NoError(t, err)
+
+	translated := gjson.ParseBytes(forma.Resources[0].Properties).Get("MasterPassword")
+	assert.True(t, translated.Get("$gen").Bool())
+	assert.NotEmpty(t, translated.Get("$generator").String())
+	assert.Equal(t, "value", translated.Get("$output").String())
+	assert.Equal(t, "Opaque", translated.Get("$visibility").String())
+	assert.False(t, translated.Get("$label").Exists(), "authored $label must not survive translation")
+	assert.False(t, translated.Get("$stack").Exists(), "authored $stack must not survive translation")
+}
+
+// A flat $gen node already carrying $generator (already translated) must
+// survive a second translation pass unchanged, not be misread as dangling
+// because it no longer carries $label/$stack.
+func TestTranslate_GenReference_TranslationIsIdempotent(t *testing.T) {
+	ds, _ := GetDeps(t)
+	forma := &pkgmodel.Forma{
+		Stacks:     []pkgmodel.Stack{{Label: "test-stack"}},
+		Generators: []json.RawMessage{rawPasswordGenerator(t, "db-password", "test-stack")},
+		Resources: []pkgmodel.Resource{{
+			Label: "db", Type: "Test::Database", Stack: "test-stack",
+			Properties: json.RawMessage(`{
+				"MasterPassword": {"$gen": true, "$label": "db-password", "$stack": "test-stack", "$output": "value", "$visibility": "Opaque"}
+			}`),
+		}},
+	}
+
+	_, _, err := TranslateFormaeReferencesToKsuid(forma, ds)
+	require.NoError(t, err)
+	firstPass := string(forma.Resources[0].Properties)
+
+	// A second translation pass over the already-translated forma (as would
+	// happen if translation ran twice, or over a resource whose properties
+	// were already resolved) must be a no-op.
+	_, _, err = TranslateFormaeReferencesToKsuid(forma, ds)
+	require.NoError(t, err)
+
+	assert.Equal(t, firstPass, string(forma.Resources[0].Properties),
+		"a second translation pass over an already-translated $gen must be idempotent")
+}
+
+// A generator not declared in this command's forma, but already persisted,
+// resolves via the datastore — the tier-2 fallback, mirroring how a $res
+// resolves a resource declared in an earlier apply.
+func TestTranslate_GenReference_ResolvesViaDatastore(t *testing.T) {
+	ds, _ := GetDeps(t)
+	ds.StoreGeneratorIdentity("db-password", "test-stack", "2existinggeneratorksuid")
+
+	forma := &pkgmodel.Forma{
+		Stacks: []pkgmodel.Stack{{Label: "test-stack"}},
+		Resources: []pkgmodel.Resource{{
+			Label: "db", Type: "Test::Database", Stack: "test-stack",
+			Properties: json.RawMessage(`{
+				"MasterPassword": {"$gen": true, "$label": "db-password", "$stack": "test-stack", "$output": "value"}
+			}`),
+		}},
+	}
+
+	_, _, err := TranslateFormaeReferencesToKsuid(forma, ds)
+	require.NoError(t, err)
+
+	translated := gjson.ParseBytes(forma.Resources[0].Properties).Get("MasterPassword")
+	assert.Equal(t, "2existinggeneratorksuid", translated.Get("$generator").String())
+}
+
+// A datastore-tier generator referenced by more than one occurrence in the
+// same command — here, two different resources — is looked up in the
+// datastore only once. Without memoization, a stack of many resources
+// sharing one pre-existing generator would issue one GetGeneratorIdentity
+// call per occurrence instead of one per generator per command.
+func TestTranslate_GenReference_DatastoreLookupIsMemoizedAcrossOccurrences(t *testing.T) {
+	ds, _ := GetDeps(t)
+	ds.StoreGeneratorIdentity("db-password", "test-stack", "2existinggeneratorksuid")
+
+	forma := &pkgmodel.Forma{
+		Stacks: []pkgmodel.Stack{{Label: "test-stack"}},
+		Resources: []pkgmodel.Resource{
+			{
+				Label: "db-one", Type: "Test::Database", Stack: "test-stack",
+				Properties: json.RawMessage(`{
+					"MasterPassword": {"$gen": true, "$label": "db-password", "$stack": "test-stack", "$output": "value"}
+				}`),
+			},
+			{
+				Label: "db-two", Type: "Test::Database", Stack: "test-stack",
+				Properties: json.RawMessage(`{
+					"MasterPassword": {"$gen": true, "$label": "db-password", "$stack": "test-stack", "$output": "value"}
+				}`),
+			},
+		},
+	}
+
+	_, _, err := TranslateFormaeReferencesToKsuid(forma, ds)
+	require.NoError(t, err)
+
+	for _, r := range forma.Resources {
+		translated := gjson.ParseBytes(r.Properties).Get("MasterPassword")
+		assert.Equal(t, "2existinggeneratorksuid", translated.Get("$generator").String())
+	}
+	assert.Equal(t, 1, ds.GeneratorIdentityLookupCount("db-password", "test-stack"),
+		"a generator shared across occurrences in one command must be looked up once, not once per occurrence")
+}
+
+// An in-command generator that already has a live identity keeps that exact
+// identity rather than minting a new one — an update to an existing
+// generator must not change the KSUID a $gen reference resolves to.
+func TestTranslate_GenReference_InCommandGeneratorKeepsExistingIdentity(t *testing.T) {
+	ds, _ := GetDeps(t)
+	ds.StoreGeneratorIdentity("db-password", "test-stack", "2existinggeneratorksuid")
+
+	forma := &pkgmodel.Forma{
+		Stacks:     []pkgmodel.Stack{{Label: "test-stack"}},
+		Generators: []json.RawMessage{rawPasswordGenerator(t, "db-password", "test-stack")},
+		Resources: []pkgmodel.Resource{{
+			Label: "db", Type: "Test::Database", Stack: "test-stack",
+			Properties: json.RawMessage(`{
+				"MasterPassword": {"$gen": true, "$label": "db-password", "$stack": "test-stack", "$output": "value"}
+			}`),
+		}},
+	}
+
+	_, _, err := TranslateFormaeReferencesToKsuid(forma, ds)
+	require.NoError(t, err)
+
+	translated := gjson.ParseBytes(forma.Resources[0].Properties).Get("MasterPassword")
+	assert.Equal(t, "2existinggeneratorksuid", translated.Get("$generator").String())
+}
+
+// A generator declared with Alias (a rename in progress) resolves a same-
+// command $gen reference to its NEW label by finding the existing row via
+// the old label, keeping the existing KSUID rather than minting an orphan
+// one — mirrors assignKSUIDs' identical resource-rename handling.
+func TestTranslate_GenReference_InCommandRenamedGeneratorKeepsExistingIdentity(t *testing.T) {
+	ds, _ := GetDeps(t)
+	ds.StoreGeneratorIdentity("old-password-label", "test-stack", "2existinggeneratorksuid")
+
+	renamed, err := json.Marshal(map[string]any{
+		"Type":                    "password",
+		"Label":                   "new-password-label",
+		"Stack":                   "test-stack",
+		"Alias":                   "old-password-label",
+		"Length":                  32,
+		"Uppercase":               true,
+		"Lowercase":               true,
+		"Digits":                  true,
+		"RequireEachIncludedType": true,
+	})
+	require.NoError(t, err)
+
+	forma := &pkgmodel.Forma{
+		Stacks:     []pkgmodel.Stack{{Label: "test-stack"}},
+		Generators: []json.RawMessage{renamed},
+		Resources: []pkgmodel.Resource{{
+			Label: "db", Type: "Test::Database", Stack: "test-stack",
+			Properties: json.RawMessage(`{
+				"MasterPassword": {"$gen": true, "$label": "new-password-label", "$stack": "test-stack", "$output": "value"}
+			}`),
+		}},
+	}
+
+	_, _, err = TranslateFormaeReferencesToKsuid(forma, ds)
+	require.NoError(t, err)
+
+	translated := gjson.ParseBytes(forma.Resources[0].Properties).Get("MasterPassword")
+	assert.Equal(t, "2existinggeneratorksuid", translated.Get("$generator").String(),
+		"a renamed generator's KSUID must not change")
+}
+
+// A resource bound to a generator that the forma never declares, and that no
+// stack holds, is rejected before anything is planned. PKL renders this
+// envelope happily (a bare `local` generator still produces a well-formed
+// $gen via pw.gen.value without ever being collected into Generators), so
+// the check here is the only one.
+func TestTranslate_GenReferenceToUndeclaredGenerator_IsRejected(t *testing.T) {
+	ds, _ := GetDeps(t)
+	command := pkgmodel.CommandApply
+	mode := pkgmodel.FormaApplyModeReconcile
+	forma := &pkgmodel.Forma{
+		Stacks:  []pkgmodel.Stack{{Label: "test-stack"}},
+		Targets: []pkgmodel.Target{{Label: "aws-target", Config: json.RawMessage(`{}`), Namespace: "aws"}},
+		Resources: []pkgmodel.Resource{{
+			Label: "db", Type: "Test::Database", Stack: "test-stack", Target: "aws-target",
+			Properties: json.RawMessage(`{
+				"MasterPassword": {"$gen": true, "$label": "phantom-generator", "$stack": "test-stack", "$output": "value"}
+			}`),
+		}},
+	}
+
+	updates, err := GenerateResourceUpdates(forma, command, mode, FormaCommandSourceUser, []*pkgmodel.Target{}, ds, nil, nil, false)
+	require.Error(t, err)
+	assert.Nil(t, updates, "a dangling generator reference must not produce a partial plan")
+
+	var notFoundErr apimodel.FormaReferencedGeneratorsNotFoundError
+	require.ErrorAs(t, err, &notFoundErr)
+	require.Len(t, notFoundErr.Missing, 1)
+	assert.Equal(t, "phantom-generator", notFoundErr.Missing[0].Label)
+	assert.Equal(t, "test-stack", notFoundErr.Missing[0].Stack)
+	assert.Equal(t, "value", notFoundErr.Missing[0].Output)
+}
+
+// A $gen naming an output its generator does not produce is rejected. PKL
+// owns the authorable case — PasswordOutputs only ever defines a `value`
+// field, so pw.gen.<anything else> is a PKL-time error and this shape can
+// never be rendered by real PKL. This is the model-level backstop for a
+// directly-constructed (non-PKL) forma document carrying an invalid output.
+func TestTranslate_GenReference_UnknownOutputIsRejected(t *testing.T) {
+	ds, _ := GetDeps(t)
+	forma := &pkgmodel.Forma{
+		Stacks:     []pkgmodel.Stack{{Label: "test-stack"}},
+		Generators: []json.RawMessage{rawPasswordGenerator(t, "db-password", "test-stack")},
+		Resources: []pkgmodel.Resource{{
+			Label: "db", Type: "Test::Database", Stack: "test-stack",
+			Properties: json.RawMessage(`{
+				"MasterPassword": {"$gen": true, "$label": "db-password", "$stack": "test-stack", "$output": "nosuchoutput"}
+			}`),
+		}},
+	}
+
+	_, _, err := TranslateFormaeReferencesToKsuid(forma, ds)
+	require.Error(t, err)
+
+	var notFoundErr apimodel.FormaReferencedGeneratorsNotFoundError
+	require.ErrorAs(t, err, &notFoundErr)
+	require.Len(t, notFoundErr.Missing, 1)
+	assert.Equal(t, "nosuchoutput", notFoundErr.Missing[0].Output)
+}
+
+// A $gen naming no stack is an incomplete reference and is rejected the same
+// way as an incomplete $res triplet, without ever reaching the datastore.
+func TestTranslate_GenReference_IncompleteReferenceIsRejected(t *testing.T) {
+	ds, _ := GetDeps(t)
+	forma := &pkgmodel.Forma{
+		Stacks: []pkgmodel.Stack{{Label: "test-stack"}},
+		Resources: []pkgmodel.Resource{{
+			Label: "db", Type: "Test::Database", Stack: "test-stack",
+			Properties: json.RawMessage(`{
+				"MasterPassword": {"$gen": true, "$label": "db-password", "$output": "value"}
+			}`),
+		}},
+	}
+
+	_, _, err := TranslateFormaeReferencesToKsuid(forma, ds)
+	require.Error(t, err)
+
+	var notFoundErr apimodel.FormaReferencedGeneratorsNotFoundError
+	require.ErrorAs(t, err, &notFoundErr)
+	require.Len(t, notFoundErr.Missing, 1)
+	assert.Equal(t, "db-password", notFoundErr.Missing[0].Label)
+}
+
+// The provenance strip recognizes a $gen envelope as an envelope shape,
+// exactly as it does $ref/$res, so a directly-authored $gen carrying a
+// forged $resolvedFrom has it removed before any resolution is attempted.
+func TestStripUntrustedProvenance_StripsForgedResolvedFrom_FromGenEnvelope(t *testing.T) {
+	props := `{"Password": {"$gen": true, "$label": "db-password", "$stack": "default", "$output": "value", "$resolvedFrom": "forged"}}`
+
+	stripped, err := stripUntrustedProvenance(props)
+	require.NoError(t, err)
+	assert.NotContains(t, stripped, "$resolvedFrom")
+	assert.Contains(t, stripped, `"$gen":true`)
 }

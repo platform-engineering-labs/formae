@@ -1,0 +1,58 @@
+// © 2025 Platform Engineering Labs Inc.
+//
+// SPDX-License-Identifier: FSL-1.1-ALv2
+
+//go:build integration
+
+package store_test
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/platform-engineering-labs/formae/internal/cli/profile/store"
+	"github.com/platform-engineering-labs/formae/internal/schema/pkl"
+	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// The embedded stub must parse on a clean machine with ZERO plugins installed
+// (clean-install bootstrap writes it). We force an empty plugin dir.
+func TestStubTemplate_ParsesWithEmptyPluginDir(t *testing.T) {
+	t.Setenv("FORMAE_PLUGIN_DIR", t.TempDir()) // empty: no plugin wrappers
+	dir := t.TempDir()
+	path := filepath.Join(dir, "default.pkl")
+	require.NoError(t, os.WriteFile(path, []byte(store.StubTemplate), 0o644))
+
+	cfg, err := pkl.PKL{}.FormaeConfig(path)
+	require.NoError(t, err, "stub must parse with no plugins installed")
+	classic, ok := cfg.Cli.Connection.(*pkgmodel.ClassicConnection)
+	require.True(t, ok)
+	assert.Equal(t, "http://localhost", classic.URL)
+	assert.Equal(t, 49684, classic.Port)
+}
+
+// A minimal config that only `amends` the schema — materializing no cli/agent
+// values — must still evaluate to a complete, working localhost setup purely
+// from schema defaults. This is what lets the clean-install stub stay minimal
+// (no materialized snapshot to drift from the schema): the schema declares
+// cli.connection as an optional `(Classic|Hosted)?` with no default of its
+// own, and the localhost fallback is supplied in Go, by buildConnection in
+// internal/schema/pkl/connection.go, when cli.connection is unset.
+func TestSchemaDefaults_BareAmendsYieldsLocalhost(t *testing.T) {
+	t.Setenv("FORMAE_PLUGIN_DIR", t.TempDir()) // empty: no plugin wrappers
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bare.pkl")
+	require.NoError(t, os.WriteFile(path, []byte("amends \"formae:/Config.pkl\"\n"), 0o644))
+
+	cfg, err := pkl.PKL{}.FormaeConfig(path)
+	require.NoError(t, err, "a bare amends must evaluate from schema defaults alone")
+	classic, ok := cfg.Cli.Connection.(*pkgmodel.ClassicConnection)
+	require.True(t, ok)
+	assert.Equal(t, "http://localhost", classic.URL)
+	assert.Equal(t, 49684, classic.Port)
+	assert.Equal(t, "localhost", cfg.Agent.Server.Hostname)
+	assert.Equal(t, 49684, cfg.Agent.Server.Port)
+}

@@ -67,7 +67,7 @@ func TestChangesetExecutor_SingleResourceUpdate(t *testing.T) {
 		})
 
 		// Create changeset and start executor
-		cs, err := changeset.NewChangeset([]resource_update.ResourceUpdate{resourceUpdate}, nil, commandID, pkgmodel.CommandApply)
+		cs, err := buildChangesetWithResolves([]resource_update.ResourceUpdate{resourceUpdate}, nil, commandID, pkgmodel.CommandApply, m.Datastore)
 		assert.NoError(t, err)
 
 		// Ensure the changeset executor exists
@@ -93,7 +93,15 @@ func TestChangesetExecutor_SingleResourceUpdate(t *testing.T) {
 		})
 		assert.NoError(t, err)
 
-		command, ok := commandRes.(*forma_command.FormaCommand)
+		commandLoadRes, ok := commandRes.(forma_persister.LoadFormaCommandResult)
+
+		var command *forma_command.FormaCommand
+
+		if ok {
+
+			command = commandLoadRes.Command
+
+		}
 		assert.True(t, ok)
 		assert.Equal(t, forma_command.CommandStateSuccess, command.State)
 		assert.Len(t, command.ResourceUpdates, 1)
@@ -166,7 +174,7 @@ func TestChangesetExecutor_DependentResources(t *testing.T) {
 		})
 
 		// Create changeset - it will automatically build the dependency pipeline
-		cs, err := changeset.NewChangeset([]resource_update.ResourceUpdate{vpcUpdate, subnetUpdate}, nil, commandID, pkgmodel.CommandApply)
+		cs, err := buildChangesetWithResolves([]resource_update.ResourceUpdate{vpcUpdate, subnetUpdate}, nil, commandID, pkgmodel.CommandApply, m.Datastore)
 		assert.NoError(t, err)
 
 		// Ensure the changeset executor exists
@@ -197,7 +205,15 @@ func TestChangesetExecutor_DependentResources(t *testing.T) {
 		})
 		assert.NoError(t, err)
 
-		command, ok := commandRes.(*forma_command.FormaCommand)
+		commandLoadRes, ok := commandRes.(forma_persister.LoadFormaCommandResult)
+
+		var command *forma_command.FormaCommand
+
+		if ok {
+
+			command = commandLoadRes.Command
+
+		}
 		assert.True(t, ok)
 		assert.Equal(t, forma_command.CommandStateSuccess, command.State)
 		assert.Len(t, command.ResourceUpdates, 2)
@@ -265,7 +281,7 @@ func TestChangesetExecutor_CascadeFailure(t *testing.T) {
 		})
 
 		// Create changeset - it will automatically build the dependency pipeline
-		cs, err := changeset.NewChangeset([]resource_update.ResourceUpdate{vpcUpdate, subnetUpdate}, nil, commandID, pkgmodel.CommandApply)
+		cs, err := buildChangesetWithResolves([]resource_update.ResourceUpdate{vpcUpdate, subnetUpdate}, nil, commandID, pkgmodel.CommandApply, m.Datastore)
 		assert.NoError(t, err)
 
 		// Ensure the changeset executor exists
@@ -281,9 +297,21 @@ func TestChangesetExecutor_CascadeFailure(t *testing.T) {
 		})
 
 		// Wait for completion (even with failures, the changeset completes)
+		var completed changeset.ChangesetCompleted
 		testutil.ExpectMessageWithPredicate(t, messages, 10*time.Second, func(msg changeset.ChangesetCompleted) bool {
-			return msg.CommandID == commandID
+			if msg.CommandID != commandID {
+				return false
+			}
+			completed = msg
+			return true
 		})
+
+		// The state the requester is told is the only thing it has to decide
+		// whether to retry. Anything that backs off on failure — the generator
+		// rotator most of all — reads a cascade reported as success as a reason
+		// to clear its backoff and try again on the very next sweep, forever.
+		assert.Equal(t, changeset.ChangeSetStateFinishedWithErrors, completed.State,
+			"a changeset that completed with failed nodes must report FinishedWithErrors")
 
 		// Verify cascading failure occurred
 		commandRes, err := testutil.Call(m.Node, "FormaCommandPersister", forma_persister.LoadFormaCommand{
@@ -291,7 +319,15 @@ func TestChangesetExecutor_CascadeFailure(t *testing.T) {
 		})
 		assert.NoError(t, err)
 
-		command, ok := commandRes.(*forma_command.FormaCommand)
+		commandLoadRes, ok := commandRes.(forma_persister.LoadFormaCommandResult)
+
+		var command *forma_command.FormaCommand
+
+		if ok {
+
+			command = commandLoadRes.Command
+
+		}
 		assert.True(t, ok)
 
 		// VPC should have failed, subnet should also have failed (cascade)
@@ -313,6 +349,77 @@ func TestChangesetExecutor_CascadeFailure(t *testing.T) {
 		if err == nil {
 			assert.Empty(t, resources, "No resources should be created when cascade fails")
 		}
+	})
+}
+
+// TestChangesetExecutor_SyncReadFailureDoesNotCascade verifies that a failed
+// Read inside a sync command does not trigger cascade-failure handling. A sync's
+// resources are Read operations with no inter-dependencies, so there is nothing
+// for a failure to cascade *to* — the only candidate is the failed Read itself.
+//
+// Without this, a single-resource sync whose Read failed would produce a
+// self-cascade: the executor reports the failed Read as a cascading failure and
+// pushes it to FormaCommandPersister.MarkResourcesAsFailed, which (for an empty
+// sync command already evicted from cache and deleted from the DB) panics the
+// persister with "forma command not found".
+func TestChangesetExecutor_SyncReadFailureDoesNotCascade(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		logCapture := test_helpers.SetupTestLogger()
+
+		overrides := &plugin.ResourcePluginOverrides{
+			Read: func(request *resource.ReadRequest) (*resource.ReadResult, error) {
+				return nil, fmt.Errorf("simulated read failure")
+			},
+		}
+
+		m, def, err := test_helpers.NewTestMetastructure(t, overrides)
+		defer def()
+		assert.NoError(t, err)
+
+		messages := make(chan any, 10)
+		_, err = testutil.StartTestHelperActor(m.Node, messages)
+		assert.NoError(t, err)
+
+		commandID := "test-command-sync-read-failure"
+
+		// A single read resource update originating from the Synchronizer.
+		readUpdate := newTestUpdateResourceUpdate("sync-vpc", "native-will-fail", "FakeAWS::EC2::VPC")
+		readUpdate.Operation = resource_update.OperationRead
+		readUpdate.Source = resource_update.FormaCommandSourceSynchronize
+
+		testutil.Call(m.Node, "FormaCommandPersister", forma_persister.StoreNewFormaCommand{
+			Command: forma_command.FormaCommand{
+				ID:      commandID,
+				Command: pkgmodel.CommandSync,
+				State:   forma_command.CommandStateNotStarted,
+				ResourceUpdates: []resource_update.ResourceUpdate{
+					readUpdate,
+				},
+			},
+		})
+
+		cs, err := buildChangesetWithResolves(
+			[]resource_update.ResourceUpdate{readUpdate}, nil, commandID, pkgmodel.CommandSync, m.Datastore)
+		assert.NoError(t, err)
+
+		_, err = testutil.Call(m.Node, "ChangesetSupervisor", changeset.EnsureChangesetExecutor{
+			CommandID: commandID,
+		})
+		assert.NoError(t, err)
+
+		testutil.Send(m.Node, actornames.ChangesetExecutor(commandID), changeset.Start{
+			Changeset:        cs,
+			NotifyOnComplete: true,
+		})
+
+		testutil.ExpectMessageWithPredicate(t, messages, 15*time.Second, func(msg changeset.ChangesetCompleted) bool {
+			return msg.CommandID == commandID
+		})
+
+		// The failed Read must not be treated as a cascading failure: a sync has
+		// no dependency edges, so the executor must never engage the cascade path.
+		assert.False(t, logCapture.ContainsAll("Cascading failures detected"),
+			"a failed Read in a sync command must not trigger cascade-failure handling")
 	})
 }
 
@@ -354,7 +461,7 @@ func TestChangesetExecutor_HashesAllResourcesOnCompletion(t *testing.T) {
 		})
 
 		// Create changeset
-		cs, err := changeset.NewChangeset([]resource_update.ResourceUpdate{resourceUpdate}, nil, commandID, pkgmodel.CommandApply)
+		cs, err := buildChangesetWithResolves([]resource_update.ResourceUpdate{resourceUpdate}, nil, commandID, pkgmodel.CommandApply, m.Datastore)
 		assert.NoError(t, err)
 
 		// Ensure the changeset executor exists
@@ -380,7 +487,15 @@ func TestChangesetExecutor_HashesAllResourcesOnCompletion(t *testing.T) {
 		})
 		assert.NoError(t, err)
 
-		command, ok := commandRes.(*forma_command.FormaCommand)
+		commandLoadRes, ok := commandRes.(forma_persister.LoadFormaCommandResult)
+
+		var command *forma_command.FormaCommand
+
+		if ok {
+
+			command = commandLoadRes.Command
+
+		}
 		assert.True(t, ok)
 		assert.Equal(t, forma_command.CommandStateSuccess, command.State)
 	})
@@ -423,7 +538,7 @@ func TestChangesetExecutor_HashesAllResourcesOnFailure(t *testing.T) {
 		})
 
 		// Create changeset
-		cs, err := changeset.NewChangeset([]resource_update.ResourceUpdate{resourceUpdate}, nil, commandID, pkgmodel.CommandApply)
+		cs, err := buildChangesetWithResolves([]resource_update.ResourceUpdate{resourceUpdate}, nil, commandID, pkgmodel.CommandApply, m.Datastore)
 		assert.NoError(t, err)
 
 		// Ensure the changeset executor exists
@@ -452,7 +567,15 @@ func TestChangesetExecutor_HashesAllResourcesOnFailure(t *testing.T) {
 		})
 		assert.NoError(t, err)
 
-		command, ok := commandRes.(*forma_command.FormaCommand)
+		commandLoadRes, ok := commandRes.(forma_persister.LoadFormaCommandResult)
+
+		var command *forma_command.FormaCommand
+
+		if ok {
+
+			command = commandLoadRes.Command
+
+		}
 		assert.True(t, ok)
 		// Verify the resource update failed
 		assert.Len(t, command.ResourceUpdates, 1)
@@ -500,9 +623,9 @@ func newTestResourceUpdate(label string, dependencies []pkgmodel.FormaeURI, reso
 // changeset executor reaches a terminal state when a Read operation fails
 // during the synchronize phase of an Update workflow.
 //
-// Regression test for a bug where handleProgressUpdate() returned
-// StateFinishedWithError without calling MarkAsFailed() when
-// message.Failed() was true. This left ResourceUpdate.State as InProgress
+// It guards handleProgressUpdate(): when message.Failed() is true it must call
+// MarkAsFailed() rather than returning StateFinishedWithError alone. Omitting
+// the MarkAsFailed() call leaves ResourceUpdate.State as InProgress
 // (set by UpdateState() which short-circuited when fewer progress results
 // than required operations existed). The changeset's UpdatePipeline treated
 // InProgress as a no-op, stranding the update.
@@ -563,8 +686,8 @@ func TestChangesetExecutor_StuckOnReadFailureDuringUpdate(t *testing.T) {
 		})
 
 		// Create changeset from the updates
-		cs, err := changeset.NewChangeset(
-			[]resource_update.ResourceUpdate{resOK, resFail}, nil, commandID, pkgmodel.CommandApply)
+		cs, err := buildChangesetWithResolves(
+			[]resource_update.ResourceUpdate{resOK, resFail}, nil, commandID, pkgmodel.CommandApply, m.Datastore)
 		assert.NoError(t, err)
 
 		// Ensure the changeset executor exists
@@ -641,11 +764,12 @@ func TestChangesetExecutor_MixedResourceAndTargetUpdates(t *testing.T) {
 		})
 
 		// Create changeset with both resource and target updates
-		cs, err := changeset.NewChangeset(
+		cs, err := buildChangesetWithResolves(
 			[]resource_update.ResourceUpdate{resourceUpdate},
 			[]target_update.TargetUpdate{targetUp},
 			commandID,
 			pkgmodel.CommandApply,
+			m.Datastore,
 		)
 		require.NoError(t, err)
 
@@ -719,4 +843,108 @@ func newTestUpdateResourceUpdate(label, nativeID, resourceType string) resource_
 		RemainingResolvables: []pkgmodel.FormaeURI{},
 		StackLabel:           "test-stack",
 	}
+}
+
+// A changeset that finished with errors must still clean up the stacks its
+// successful deletes emptied.
+//
+// Cleanup eligibility is about what the deletes actually did, not about the
+// changeset's aggregate verdict: one delete can succeed and take the last
+// resource out of a stack while an unrelated update fails in the same command,
+// and that stack is just as empty either way. Gating the cleanup on
+// FinishedSuccessfully alone leaves the emptied stack's record behind.
+func TestChangesetExecutor_PartialFailureStillCleansUpEmptiedStacks(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		logCapture := test_helpers.SetupTestLogger()
+
+		overrides := &plugin.ResourcePluginOverrides{
+			Create: func(request *resource.CreateRequest) (*resource.CreateResult, error) {
+				return &resource.CreateResult{
+					ProgressResult: &resource.ProgressResult{
+						Operation:       resource.OperationCreate,
+						OperationStatus: resource.OperationStatusFailure,
+						RequestID:       "test-request-id",
+						StatusMessage:   "deliberate failure, so the changeset ends with errors",
+					},
+				}, nil
+			},
+			Delete: func(request *resource.DeleteRequest) (*resource.DeleteResult, error) {
+				return &resource.DeleteResult{
+					ProgressResult: &resource.ProgressResult{
+						Operation:       resource.OperationDelete,
+						OperationStatus: resource.OperationStatusSuccess,
+						RequestID:       "test-request-id",
+					},
+				}, nil
+			},
+		}
+
+		m, def, err := test_helpers.NewTestMetastructure(t, overrides)
+		defer def()
+		assert.NoError(t, err)
+
+		messages := make(chan any, 10)
+		_, err = testutil.StartTestHelperActor(m.Node, messages)
+		assert.NoError(t, err)
+
+		commandID := "test-command-partial-failure-cleanup"
+
+		// Independent of each other: the delete is not what fails, and nothing
+		// cascades. The changeset simply ends with one of each.
+		doomed := newTestResourceUpdate("test-doomed", nil, "FakeAWS::EC2::VPC")
+		gone := newTestResourceUpdate("test-gone", nil, "FakeAWS::S3::Bucket")
+		gone.Operation = resource_update.OperationDelete
+
+		testutil.Call(m.Node, "FormaCommandPersister", forma_persister.StoreNewFormaCommand{
+			Command: forma_command.FormaCommand{
+				ID:              commandID,
+				State:           forma_command.CommandStateNotStarted,
+				ResourceUpdates: []resource_update.ResourceUpdate{doomed, gone},
+			},
+		})
+
+		cs, err := buildChangesetWithResolves(
+			[]resource_update.ResourceUpdate{doomed, gone}, nil, commandID, pkgmodel.CommandApply, m.Datastore)
+		assert.NoError(t, err)
+
+		_, err = testutil.Call(m.Node, "ChangesetSupervisor", changeset.EnsureChangesetExecutor{
+			CommandID: commandID,
+		})
+		assert.NoError(t, err)
+
+		testutil.Send(m.Node, actornames.ChangesetExecutor(commandID), changeset.Start{
+			Changeset:        cs,
+			NotifyOnComplete: true,
+		})
+
+		var completed changeset.ChangesetCompleted
+		testutil.ExpectMessageWithPredicate(t, messages, 15*time.Second, func(msg changeset.ChangesetCompleted) bool {
+			if msg.CommandID != commandID {
+				return false
+			}
+			completed = msg
+			return true
+		})
+
+		assert.Equal(t, changeset.ChangeSetStateFinishedWithErrors, completed.State,
+			"precondition: the changeset must have ended with errors")
+
+		// The datastore, not the executor's log line: that line is emitted
+		// before the dispatch guard, so it says only that the branch was
+		// entered, never that a stack was actually removed. Cleanup is sent
+		// asynchronously and handled by the persister, so poll for it.
+		// What this pins is the executor's half: that a changeset ending with
+		// errors still reaches the cleanup branch AND still dispatches, with
+		// the emptied stack named. The rendered stack list matters — the log
+		// line is emitted before the dispatch guard, so the message alone
+		// would pass even with nothing to send.
+		//
+		// It deliberately stops at the dispatch. Whether the persister then
+		// removes a stack, and only when it is genuinely empty, is
+		// TestResourcePersister_CleanupEmptyStacks; asserting it again here
+		// would need a fully wired delete, which this harness builds through
+		// ApplyForma rather than hand-assembled updates.
+		assert.True(t, logCapture.ContainsAll("Using pre-captured stacks for cleanup", "stacks=[test-stack]"),
+			"a changeset that ended with errors must still dispatch cleanup for the stacks its deletes emptied")
+	})
 }

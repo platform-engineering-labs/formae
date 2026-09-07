@@ -16,8 +16,12 @@ import (
 func TestProjectInit(t *testing.T) {
 	bin := FormaeBinary(t)
 
-	// No agent needed — this is a CLI-only test.
-	cli := NewFormaeCLI(bin, "", 0)
+	// project init resolves non-@local plugin versions via the agent's
+	// installed-plugins endpoint after the multi-source plugin-discovery
+	// refactor — orbital-installed plugins live with the agent, not on
+	// the CLI box. Start an agent so the version lookup succeeds.
+	agent := StartAgent(t, bin)
+	cli := NewFormaeCLI(bin, agent.ConfigPath(), agent.Port())
 
 	// Step 1: Create a temp directory for the new project.
 	dir := t.TempDir()

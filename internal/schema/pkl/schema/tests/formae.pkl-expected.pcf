@@ -34,6 +34,7 @@ examples {
       $value = "secret-password"
       $visibility = "Clear"
       $strategy = "Update"
+      $hashed = null
     }
   }
   ["Opaque Value"] {
@@ -41,6 +42,7 @@ examples {
       $value = "secret-password"
       $visibility = "Opaque"
       $strategy = "Update"
+      $hashed = null
     }
   }
   ["SetOnce Value"] {
@@ -48,6 +50,7 @@ examples {
       $value = "secret-password"
       $visibility = "Clear"
       $strategy = "SetOnce"
+      $hashed = null
     }
   }
   ["Tag"] {
@@ -73,6 +76,31 @@ examples {
       }
       ConfigSchema = null
       Discoverable = true
+      Reaping = null
+    }
+  }
+  ["NeverReap render()"] {
+    new {
+      Kind = "never"
+    }
+  }
+  ["ReapAfter render()"] {
+    new {
+      Kind = "after"
+      MaxUnreachableSeconds = 1800
+    }
+  }
+  ["Target with reap"] {
+    new {
+      Label = "reapable-target"
+      Namespace = "AWS"
+      Config = null
+      ConfigSchema = null
+      Discoverable = true
+      Reaping {
+        Kind = "after"
+        MaxUnreachableSeconds = 1800
+      }
     }
   }
   ["Test Resource - fields()"] {
@@ -89,30 +117,48 @@ examples {
         WriteOnly = false
         Required = true
         RequiredOnCreate = false
+        RequiredOnUpdate = false
         HasProviderDefault = false
+        Opaque = false
         AttachesTo = false
+        EdgeKind = "default"
         UpdateMethod = ""
+        CoOwned = null
+        PreserveEmptyValues = false
         IndexField = ""
+        Format = ""
       }
       ["Region"] {
         CreateOnly = true
         WriteOnly = false
         Required = false
         RequiredOnCreate = false
+        RequiredOnUpdate = false
         HasProviderDefault = false
+        Opaque = false
         AttachesTo = false
+        EdgeKind = "default"
         UpdateMethod = ""
+        CoOwned = null
+        PreserveEmptyValues = false
         IndexField = ""
+        Format = ""
       }
       ["Tags"] {
         CreateOnly = false
         WriteOnly = false
         Required = false
         RequiredOnCreate = false
+        RequiredOnUpdate = false
         HasProviderDefault = false
+        Opaque = false
         AttachesTo = false
+        EdgeKind = "default"
         UpdateMethod = ""
+        CoOwned = null
+        PreserveEmptyValues = false
         IndexField = ""
+        Format = ""
       }
     }
   }
@@ -130,35 +176,55 @@ examples {
           WriteOnly = false
           Required = true
           RequiredOnCreate = false
+          RequiredOnUpdate = false
           HasProviderDefault = false
+          Opaque = false
           AttachesTo = false
+          EdgeKind = "default"
           UpdateMethod = ""
+          CoOwned = null
+          PreserveEmptyValues = false
           IndexField = ""
+          Format = ""
         }
         ["Region"] {
           CreateOnly = true
           WriteOnly = false
           Required = false
           RequiredOnCreate = false
+          RequiredOnUpdate = false
           HasProviderDefault = false
+          Opaque = false
           AttachesTo = false
+          EdgeKind = "default"
           UpdateMethod = ""
+          CoOwned = null
+          PreserveEmptyValues = false
           IndexField = ""
+          Format = ""
         }
         ["Tags"] {
           CreateOnly = false
           WriteOnly = false
           Required = false
           RequiredOnCreate = false
+          RequiredOnUpdate = false
           HasProviderDefault = false
+          Opaque = false
           AttachesTo = false
+          EdgeKind = "default"
           UpdateMethod = ""
+          CoOwned = null
+          PreserveEmptyValues = false
           IndexField = ""
+          Format = ""
         }
       }
       Discoverable = true
       Extractable = true
       Portable = false
+      Parent = ""
+      ParentMappings {}
     }
   }
   ["Test Resource - type()"] {
@@ -184,6 +250,7 @@ examples {
         $res = true
         $visibility = "Clear"
       }
+      Alias = null
       Managed = true
       Type = "AWS::S3::Bucket"
       Schema {
@@ -199,35 +266,55 @@ examples {
             WriteOnly = false
             Required = true
             RequiredOnCreate = false
+            RequiredOnUpdate = false
             HasProviderDefault = false
+            Opaque = false
             AttachesTo = false
+            EdgeKind = "default"
             UpdateMethod = ""
+            CoOwned = null
+            PreserveEmptyValues = false
             IndexField = ""
+            Format = ""
           }
           ["Region"] {
             CreateOnly = true
             WriteOnly = false
             Required = false
             RequiredOnCreate = false
+            RequiredOnUpdate = false
             HasProviderDefault = false
+            Opaque = false
             AttachesTo = false
+            EdgeKind = "default"
             UpdateMethod = ""
+            CoOwned = null
+            PreserveEmptyValues = false
             IndexField = ""
+            Format = ""
           }
           ["Tags"] {
             CreateOnly = false
             WriteOnly = false
             Required = false
             RequiredOnCreate = false
+            RequiredOnUpdate = false
             HasProviderDefault = false
+            Opaque = false
             AttachesTo = false
+            EdgeKind = "default"
             UpdateMethod = ""
+            CoOwned = null
+            PreserveEmptyValues = false
             IndexField = ""
+            Format = ""
           }
         }
         Discoverable = true
         Extractable = true
         Portable = false
+        Parent = ""
+        ParentMappings {}
       }
       Properties {
         bucketName = "my-test-bucket"
@@ -261,6 +348,7 @@ examples {
         $res = true
         $visibility = "Clear"
       }
+      Alias = null
       Managed = true
       Type = "AWS::S3::Bucket"
       Schema {
@@ -276,40 +364,59 @@ examples {
             WriteOnly = false
             Required = true
             RequiredOnCreate = false
+            RequiredOnUpdate = false
             HasProviderDefault = false
+            Opaque = false
             AttachesTo = false
+            EdgeKind = "default"
             UpdateMethod = ""
+            CoOwned = null
+            PreserveEmptyValues = false
             IndexField = ""
+            Format = ""
           }
           ["Region"] {
             CreateOnly = true
             WriteOnly = false
             Required = false
             RequiredOnCreate = false
+            RequiredOnUpdate = false
             HasProviderDefault = false
+            Opaque = false
             AttachesTo = false
+            EdgeKind = "default"
             UpdateMethod = ""
+            CoOwned = null
+            PreserveEmptyValues = false
             IndexField = ""
+            Format = ""
           }
           ["Tags"] {
             CreateOnly = false
             WriteOnly = false
             Required = false
             RequiredOnCreate = false
+            RequiredOnUpdate = false
             HasProviderDefault = false
+            Opaque = false
             AttachesTo = false
+            EdgeKind = "default"
             UpdateMethod = ""
+            CoOwned = null
+            PreserveEmptyValues = false
             IndexField = ""
+            Format = ""
           }
         }
         Discoverable = true
         Extractable = true
         Portable = false
+        Parent = ""
+        ParentMappings {}
       }
       Properties {
         bucketName = "my-bucket-no-tags"
         Region = null
-        Tags {}
       }
     }
   }
@@ -319,6 +426,7 @@ examples {
       Group = null
       Target = null
       Stack = null
+      Alias = null
       Managed = true
       Type = "FakeAWS::S3::Resource"
       Schema {
@@ -338,75 +446,119 @@ examples {
             WriteOnly = false
             Required = true
             RequiredOnCreate = false
+            RequiredOnUpdate = false
             HasProviderDefault = false
+            Opaque = false
             AttachesTo = false
+            EdgeKind = "default"
             UpdateMethod = ""
+            CoOwned = null
+            PreserveEmptyValues = false
             IndexField = ""
+            Format = ""
           }
           ["nested"] {
             CreateOnly = false
             WriteOnly = false
             Required = true
             RequiredOnCreate = false
+            RequiredOnUpdate = false
             HasProviderDefault = false
+            Opaque = false
             AttachesTo = false
+            EdgeKind = "default"
             UpdateMethod = ""
+            CoOwned = null
+            PreserveEmptyValues = false
             IndexField = ""
+            Format = ""
           }
           ["nested.configName"] {
             CreateOnly = false
             WriteOnly = true
             Required = true
             RequiredOnCreate = false
+            RequiredOnUpdate = false
             HasProviderDefault = false
+            Opaque = false
             AttachesTo = false
+            EdgeKind = "default"
             UpdateMethod = ""
+            CoOwned = null
+            PreserveEmptyValues = false
             IndexField = ""
+            Format = ""
           }
           ["nested.TestConfigValue"] {
             CreateOnly = false
             WriteOnly = false
             Required = true
             RequiredOnCreate = false
+            RequiredOnUpdate = false
             HasProviderDefault = false
+            Opaque = false
             AttachesTo = false
+            EdgeKind = "default"
             UpdateMethod = ""
+            CoOwned = null
+            PreserveEmptyValues = false
             IndexField = ""
+            Format = ""
           }
           ["nested.setting"] {
             CreateOnly = false
             WriteOnly = false
             Required = true
             RequiredOnCreate = false
+            RequiredOnUpdate = false
             HasProviderDefault = false
+            Opaque = false
             AttachesTo = false
+            EdgeKind = "default"
             UpdateMethod = ""
+            CoOwned = null
+            PreserveEmptyValues = false
             IndexField = ""
+            Format = ""
           }
           ["nested.setting.setting1"] {
             CreateOnly = false
             WriteOnly = true
             Required = true
             RequiredOnCreate = false
+            RequiredOnUpdate = false
             HasProviderDefault = false
+            Opaque = false
             AttachesTo = false
+            EdgeKind = "default"
             UpdateMethod = ""
+            CoOwned = null
+            PreserveEmptyValues = false
             IndexField = ""
+            Format = ""
           }
           ["nested.setting.SettingTwo"] {
             CreateOnly = false
             WriteOnly = false
             Required = true
             RequiredOnCreate = false
+            RequiredOnUpdate = false
             HasProviderDefault = false
+            Opaque = false
             AttachesTo = false
+            EdgeKind = "default"
             UpdateMethod = ""
+            CoOwned = null
+            PreserveEmptyValues = false
             IndexField = ""
+            Format = ""
           }
         }
         Discoverable = true
         Extractable = true
         Portable = false
+        Parent = ""
+        ParentMappings {}
       }
       Properties {
         resourceName = "my-resource"
@@ -435,30 +587,120 @@ examples {
         WriteOnly = false
         Required = true
         RequiredOnCreate = false
+        RequiredOnUpdate = false
         HasProviderDefault = false
+        Opaque = false
         AttachesTo = false
+        EdgeKind = "default"
         UpdateMethod = ""
+        CoOwned = null
+        PreserveEmptyValues = false
         IndexField = ""
+        Format = ""
       }
       ["Region"] {
         CreateOnly = true
         WriteOnly = false
         Required = false
         RequiredOnCreate = false
+        RequiredOnUpdate = false
         HasProviderDefault = false
+        Opaque = false
         AttachesTo = false
+        EdgeKind = "default"
         UpdateMethod = ""
+        CoOwned = null
+        PreserveEmptyValues = false
         IndexField = ""
+        Format = ""
       }
       ["Tags"] {
         CreateOnly = false
         WriteOnly = false
         Required = false
         RequiredOnCreate = false
+        RequiredOnUpdate = false
         HasProviderDefault = false
+        Opaque = false
         AttachesTo = false
+        EdgeKind = "default"
         UpdateMethod = ""
+        CoOwned = null
+        PreserveEmptyValues = false
         IndexField = ""
+        Format = ""
+      }
+    }
+  }
+  ["Test Secret Resource - hints()"] {
+    new {
+      ["secretString"] {
+        CreateOnly = false
+        WriteOnly = false
+        Required = false
+        RequiredOnCreate = false
+        RequiredOnUpdate = false
+        HasProviderDefault = false
+        Opaque = true
+        AttachesTo = false
+        EdgeKind = "default"
+        UpdateMethod = ""
+        CoOwned = null
+        PreserveEmptyValues = false
+        IndexField = ""
+        Format = ""
+      }
+      ["plainString"] {
+        CreateOnly = false
+        WriteOnly = false
+        Required = true
+        RequiredOnCreate = false
+        RequiredOnUpdate = false
+        HasProviderDefault = false
+        Opaque = false
+        AttachesTo = false
+        EdgeKind = "default"
+        UpdateMethod = ""
+        CoOwned = null
+        PreserveEmptyValues = false
+        IndexField = ""
+        Format = ""
+      }
+    }
+  }
+  ["Test Secret Parent Resource - hints()"] {
+    new {
+      ["nested"] {
+        CreateOnly = false
+        WriteOnly = false
+        Required = true
+        RequiredOnCreate = false
+        RequiredOnUpdate = false
+        HasProviderDefault = false
+        Opaque = false
+        AttachesTo = false
+        EdgeKind = "default"
+        UpdateMethod = ""
+        CoOwned = null
+        PreserveEmptyValues = false
+        IndexField = ""
+        Format = ""
+      }
+      ["nested.secretNested"] {
+        CreateOnly = false
+        WriteOnly = false
+        Required = false
+        RequiredOnCreate = false
+        RequiredOnUpdate = false
+        HasProviderDefault = false
+        Opaque = true
+        AttachesTo = false
+        EdgeKind = "default"
+        UpdateMethod = ""
+        CoOwned = null
+        PreserveEmptyValues = false
+        IndexField = ""
+        Format = ""
       }
     }
   }
@@ -476,38 +718,112 @@ examples {
           WriteOnly = false
           Required = true
           RequiredOnCreate = false
+          RequiredOnUpdate = false
           HasProviderDefault = false
+          Opaque = false
           AttachesTo = false
+          EdgeKind = "default"
           UpdateMethod = ""
+          CoOwned = null
+          PreserveEmptyValues = false
           IndexField = ""
+          Format = ""
         }
         ["Region"] {
           CreateOnly = true
           WriteOnly = false
           Required = false
           RequiredOnCreate = false
+          RequiredOnUpdate = false
           HasProviderDefault = false
+          Opaque = false
           AttachesTo = false
+          EdgeKind = "default"
           UpdateMethod = ""
+          CoOwned = null
+          PreserveEmptyValues = false
           IndexField = ""
+          Format = ""
         }
         ["Tags"] {
           CreateOnly = false
           WriteOnly = false
           Required = false
           RequiredOnCreate = false
+          RequiredOnUpdate = false
           HasProviderDefault = false
+          Opaque = false
           AttachesTo = false
+          EdgeKind = "default"
           UpdateMethod = ""
+          CoOwned = null
+          PreserveEmptyValues = false
           IndexField = ""
+          Format = ""
         }
       }
       Discoverable = true
       Extractable = true
       Portable = false
+      Parent = ""
+      ParentMappings {}
     }
   }
   ["Fq - type"] {
     "AWS::S3::Bucket"
+  }
+  ["TTL policy with both ttl and expiresAt is rejected"] {
+    "TTLPolicy: set either ttl or expiresAt, not both"
+  }
+  ["TTL policy with neither ttl nor expiresAt is rejected"] {
+    "TTLPolicy: set either ttl or expiresAt"
+  }
+  ["Generator with rotation render()"] {
+    new {
+      Type = "password"
+      Label = "rotating-password"
+      Stack {
+        $label = "test-stack"
+        $property = null
+        $stack = null
+        $type = "Formae::Stack"
+        $res = true
+        $visibility = "Clear"
+      }
+      Alias = null
+      Rotation {
+        EverySeconds = 86400
+      }
+      Length = 32
+      Uppercase = true
+      Lowercase = true
+      Digits = true
+      Symbols = false
+      ExcludeCharacters = ""
+      RequireEachIncludedType = true
+    }
+  }
+  ["Generator without rotation render()"] {
+    new {
+      Type = "password"
+      Label = "steady-password"
+      Stack {
+        $label = "test-stack"
+        $property = null
+        $stack = null
+        $type = "Formae::Stack"
+        $res = true
+        $visibility = "Clear"
+      }
+      Alias = null
+      Rotation = null
+      Length = 32
+      Uppercase = true
+      Lowercase = true
+      Digits = true
+      Symbols = false
+      ExcludeCharacters = ""
+      RequireEachIncludedType = true
+    }
   }
 }

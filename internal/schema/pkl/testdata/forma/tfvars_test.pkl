@@ -1,0 +1,39 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+import "@formae/ext/terraform.pkl"
+import "@fakeaws/fakeaws.pkl"
+import "@fakeaws/sqs/queue.pkl"
+
+local tfvars = terraform.readTFVars("example.tfvars")
+
+properties {
+  name = new formae.Prop {
+    flag = "name"
+    default = "tfvars-demo"
+  }
+}
+
+forma {
+  new formae.Stack {
+    label = "pel-tfvars-demo"
+    description = "Stack demonstrating tfvars integration"
+  }
+
+  new formae.Target {
+    label = "default-aws-target"
+    config = new fakeaws.Config {
+      region = tfvars.region
+    }
+  }
+
+  new queue.Queue {
+    label = "demo-queue"
+    queueName = "demo-\(tfvars.region)-queue"
+  }
+}

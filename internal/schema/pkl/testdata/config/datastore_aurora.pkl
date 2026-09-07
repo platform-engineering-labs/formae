@@ -1,0 +1,21 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+amends "formae:/Config.pkl"
+
+agent {
+    datastore {
+        datastoreType = "auroradataapi"
+
+        auroraDataAPI {
+            clusterArn = "arn:aws:rds:us-east-1:123456789012:cluster:formae"
+            secretArn = "arn:aws:secretsmanager:us-east-1:123456789012:secret:formae"
+            database = "formae"
+            region = "us-east-1"
+            endpoint = "http://localhost:8080"
+        }
+    }
+}

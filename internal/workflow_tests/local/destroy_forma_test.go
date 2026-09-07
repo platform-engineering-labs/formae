@@ -66,7 +66,7 @@ func TestMetastructure_ApplyThenDestroyForma(t *testing.T) {
 		}
 		m.ApplyForma(f, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test")
+		}, "test", "", "")
 
 		assert.Eventually(t, func() bool {
 			fas, err := m.Datastore.LoadFormaCommands()
@@ -88,7 +88,7 @@ func TestMetastructure_ApplyThenDestroyForma(t *testing.T) {
 
 		m.DestroyForma(f, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test")
+		}, "test", "", "")
 
 		// Wait for destroy to complete
 		assert.Eventually(t, func() bool {
@@ -156,14 +156,13 @@ func TestMetastructure_ApplyThenDestroyForma(t *testing.T) {
 
 // TestMetastructure_DestroyPolicyOnlyForma tests that destroying a forma with only
 // standalone policies (no resources) completes successfully without hanging.
-// This is a regression test for a bug where policy-only destroy commands would hang
-// indefinitely because the policy updates were never processed/persisted.
+// It guards against policy-only destroy commands hanging indefinitely when the
+// policy updates are never processed/persisted.
 // TestMetastructure_DestroyReadThrottlingShouldRetryAndFail verifies that when a
 // recoverable error (Throttling) occurs during the Read/sync phase of a delete
 // operation, the error is properly retried and eventually causes the destroy to
-// fail. This is a regression test for a bug where TreatNotFoundAsSuccess=true
-// (set during delete reads) caused ALL error codes to be silently treated as
-// success, not just NotFound.
+// fail. It guards against TreatNotFoundAsSuccess=true (set during delete reads)
+// silently treating ALL error codes as success rather than only NotFound.
 func TestMetastructure_DestroyReadThrottlingShouldRetryAndFail(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		overrides := &plugin.ResourcePluginOverrides{
@@ -203,7 +202,7 @@ func TestMetastructure_DestroyReadThrottlingShouldRetryAndFail(t *testing.T) {
 
 		m.ApplyForma(f, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test")
+		}, "test", "", "")
 
 		// Wait for create to succeed
 		assert.Eventually(t, func() bool {
@@ -217,7 +216,7 @@ func TestMetastructure_DestroyReadThrottlingShouldRetryAndFail(t *testing.T) {
 		// Step 2: Destroy the resource — the Read (sync) phase should hit Throttling
 		m.DestroyForma(f, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test")
+		}, "test", "", "")
 
 		// Wait for destroy to complete — should FAIL because Read retries are exhausted
 		assert.Eventually(t, func() bool {
@@ -287,7 +286,7 @@ func TestMetastructure_DestroyPolicyOnlyForma(t *testing.T) {
 		// Apply the policy first
 		applyResp, err := m.ApplyForma(f, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModePatch,
-		}, "test")
+		}, "test", "", "")
 		assert.NoError(t, err)
 		assert.NotNil(t, applyResp)
 
@@ -308,7 +307,7 @@ func TestMetastructure_DestroyPolicyOnlyForma(t *testing.T) {
 		// Now destroy the policy-only forma
 		destroyResp, err := m.DestroyForma(f, &config.FormaCommandConfig{
 			Mode: pkgmodel.FormaApplyModeReconcile,
-		}, "test")
+		}, "test", "", "")
 		assert.NoError(t, err)
 		assert.NotNil(t, destroyResp)
 

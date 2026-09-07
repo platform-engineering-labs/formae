@@ -1,0 +1,31 @@
+  [1;38;2;232;232;232mformae[0m [1;38;2;255;133;51mapply[0m                                                                  [1;38;2;248;113;113mreconcile rejected[0m  
+[38;2;85;85;102m────────────────────────────────────────────────────────────────────────────────────────────────────[0m
+
+  [38;2;232;232;232mThis will revert ALL out-of-band changes by re-applying with --force:[0m
+
+    [38;2;181;181;91mrevert[0m[38;2;232;232;232m  web-config[0m[38;2;153;153;153m (AWS::SSM::Parameter)[0m            [38;2;153;153;153mValue → "/api/v1"[0m
+    [38;2;181;181;91mrevert[0m[38;2;232;232;232m  monitoring-bucket[0m[38;2;153;153;153m (AWS::S3::Bucket)[0m         [38;2;153;153;153mwill be removed[0m
+    [38;2;181;181;91mrevert[0m[38;2;232;232;232m  old-cache[0m[38;2;153;153;153m (AWS::ElastiCache::Cluster)[0m       [38;2;153;153;153mwill be re-created[0m
+    [38;2;181;181;91mrevert[0m[38;2;232;232;232m  api-gateway[0m[38;2;153;153;153m (AWS::ApiGateway::RestApi)[0m      [38;2;153;153;153mStageName → "v1"[0m
+
+  [38;2;232;232;232mAre you sure? This cannot be undone. [0m[38;2;181;181;91m(y/N)[0m
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

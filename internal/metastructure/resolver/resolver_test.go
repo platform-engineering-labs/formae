@@ -1119,7 +1119,7 @@ func TestLoadResolvablePropertiesFromStacks(t *testing.T) {
 			Resources: []pkgmodel.Resource{vpc, subnet},
 		}
 
-		resolvables, err := LoadResolvablePropertiesFromStacks(subnet, formaToResourcesMap(forma))
+		resolvables, err := LoadResolvablePropertiesFromStacks(subnet, formaToResourcesMap(forma), nil, nil)
 
 		require.NoError(t, err)
 		value, found := resolvables.Get(vpcKsuid, "VpcId")
@@ -1164,7 +1164,7 @@ func TestLoadResolvablePropertiesFromStacks(t *testing.T) {
 			Resources: []pkgmodel.Resource{compartment, vcn, subnet},
 		}
 
-		resolvables, err := LoadResolvablePropertiesFromStacks(subnet, formaToResourcesMap(forma))
+		resolvables, err := LoadResolvablePropertiesFromStacks(subnet, formaToResourcesMap(forma), nil, nil)
 
 		require.NoError(t, err)
 		value, found := resolvables.Get(vcnKsuid, "CompartmentId")
@@ -1196,7 +1196,7 @@ func TestLoadResolvablePropertiesFromStacks(t *testing.T) {
 			Resources: []pkgmodel.Resource{vpc, subnet},
 		}
 
-		resolvables, err := LoadResolvablePropertiesFromStacks(subnet, formaToResourcesMap(forma))
+		resolvables, err := LoadResolvablePropertiesFromStacks(subnet, formaToResourcesMap(forma), nil, nil)
 
 		require.NoError(t, err)
 		value, found := resolvables.Get(vpcKsuid, "CidrBlock")
@@ -1222,7 +1222,7 @@ func TestLoadResolvablePropertiesFromStacks(t *testing.T) {
 			Resources: []pkgmodel.Resource{subnet},
 		}
 
-		_, err := LoadResolvablePropertiesFromStacks(subnet, formaToResourcesMap(forma))
+		_, err := LoadResolvablePropertiesFromStacks(subnet, formaToResourcesMap(forma), nil, nil)
 
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "not found")
@@ -1252,7 +1252,7 @@ func TestLoadResolvablePropertiesFromStacks(t *testing.T) {
 			Resources: []pkgmodel.Resource{vpc, subnet},
 		}
 
-		props, err := LoadResolvablePropertiesFromStacks(subnet, formaToResourcesMap(forma))
+		props, err := LoadResolvablePropertiesFromStacks(subnet, formaToResourcesMap(forma), nil, nil)
 
 		assert.NoError(t, err)
 		// Property not resolved — will be resolved at execution time
@@ -1409,6 +1409,51 @@ func TestConvertToPluginFormat_TargetConfig(t *testing.T) {
 	})
 }
 
+func TestExtractResolvableRefs_EmbedField(t *testing.T) {
+	// Build a $embed field whose $template contains one framed span.
+	// The span envelope is a post-translation $ref (KSUID-based) so
+	// ExtractResolvableRefs can construct the URI exactly as for whole-value refs.
+	kvsKsuid := util.NewID()
+	envJSON := fmt.Sprintf(`{"$ref":"formae://%s#/id"}`, kvsKsuid)
+	tmpl := "cf.kvs('" + pkgmodel.FrameEnvelope(envJSON) + "')"
+	props, _ := json.Marshal(map[string]any{
+		"functionCode": map[string]any{"$embed": true, "$template": tmpl},
+	})
+	res := pkgmodel.Resource{Properties: props}
+
+	refs := ExtractResolvableRefs(res)
+
+	if len(refs) != 1 {
+		t.Fatalf("want 1 embedded ref, got %d", len(refs))
+	}
+	if refs[0].TargetPath != "functionCode" {
+		t.Errorf("TargetPath: got %q want functionCode", refs[0].TargetPath)
+	}
+
+	// Assert the Embedded flag and EmbedFieldPath are set on the internal Ref —
+	// these carry the embedded-resolvable metadata and must survive refactoring.
+	pr := newPropertyResolverFromResource(res)
+	var embedRef pkgmodel.Ref
+	found := false
+	for _, bucket := range pr.refs {
+		for _, r := range bucket {
+			if r.Embedded {
+				embedRef = r
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no Ref with Embedded==true found in propertyResolver.refs")
+	}
+	if !embedRef.Embedded {
+		t.Errorf("Ref.Embedded: got false, want true")
+	}
+	if embedRef.EmbedFieldPath != "functionCode" {
+		t.Errorf("Ref.EmbedFieldPath: got %q, want functionCode", embedRef.EmbedFieldPath)
+	}
+}
+
 // newTestRef creates a test reference with a real KSUID for the given property
 func newTestRef(property string) string {
 	ksuid := util.NewID()
@@ -1438,4 +1483,304 @@ func TestExtractPropertyValue_EscapedDotInKey(t *testing.T) {
 	result := gjson.GetBytes(properties, `config.host\.name`)
 	require.True(t, result.Exists())
 	assert.Equal(t, "example.com", result.String())
+}
+
+// embedProps is a helper that builds a JSON props object with a single $embed field.
+// It uses json.Marshal so the control characters in the template are properly
+// encoded as / (valid JSON escapes) rather than \x1e/\x1f (Go-only).
+func embedProps(fieldName, tmpl string) json.RawMessage {
+	tmplJSON, err := json.Marshal(tmpl)
+	if err != nil {
+		panic(fmt.Sprintf("embedProps: json.Marshal failed: %v", err))
+	}
+	fieldJSON, err := json.Marshal(fieldName)
+	if err != nil {
+		panic(fmt.Sprintf("embedProps: json.Marshal fieldName failed: %v", err))
+	}
+	return json.RawMessage(`{` + string(fieldJSON) + `:{"$embed":true,"$template":` + string(tmplJSON) + `}}`)
+}
+
+func TestEmbed_ResolveThenPluginFormat(t *testing.T) {
+	ksuid := "abc123"
+	refEnv := `{"$ref":"formae://` + ksuid + `#/id"}`
+	tmpl := "cf.kvs('" + pkgmodel.FrameEnvelope(refEnv) + "')"
+	props := embedProps("functionCode", tmpl)
+
+	resolver := newPropertyResolver(props)
+	require.NoError(t, resolver.setRefValue(pkgmodel.FormaeURI("formae://"+ksuid+"#/id"), "KV-7H9X"))
+
+	// Persisted form: still a $embed envelope, span now carries the value.
+	resolved, err := resolver.resolveReferences(props)
+	require.NoError(t, err)
+	assert.True(t, gjson.GetBytes(resolved, "functionCode.$embed").Bool())
+
+	// Plugin form: assembled plain string.
+	plugin, err := resolver.toPluginFormat(resolved)
+	require.NoError(t, err)
+	assert.Equal(t, "cf.kvs('KV-7H9X')", gjson.GetBytes(plugin, "functionCode").String())
+}
+
+func TestEmbed_MultiResolvable(t *testing.T) {
+	ksuid1 := util.NewID()
+	ksuid2 := util.NewID()
+	refEnv1 := fmt.Sprintf(`{"$ref":"formae://%s#/id"}`, ksuid1)
+	refEnv2 := fmt.Sprintf(`{"$ref":"formae://%s#/name"}`, ksuid2)
+	// Two distinct spans in one template.
+	tmpl := "cf.kvs('" + pkgmodel.FrameEnvelope(refEnv1) + "', '" + pkgmodel.FrameEnvelope(refEnv2) + "')"
+	props := embedProps("functionCode", tmpl)
+
+	resolver := newPropertyResolver(props)
+	require.NoError(t, resolver.setRefValue(pkgmodel.FormaeURI("formae://"+ksuid1+"#/id"), "KV-7H9X"))
+	require.NoError(t, resolver.setRefValue(pkgmodel.FormaeURI("formae://"+ksuid2+"#/name"), "my-store"))
+
+	resolved, err := resolver.resolveReferences(props)
+	require.NoError(t, err)
+	// Still structured after resolution.
+	assert.True(t, gjson.GetBytes(resolved, "functionCode.$embed").Bool())
+
+	// Assembled plain string in plugin format.
+	plugin, err := resolver.toPluginFormat(resolved)
+	require.NoError(t, err)
+	assert.Equal(t, "cf.kvs('KV-7H9X', 'my-store')", gjson.GetBytes(plugin, "functionCode").String())
+}
+
+func TestEmbed_DuplicateIdenticalSpans(t *testing.T) {
+	// Same envelope (same URI) appearing twice: both spans get the same resolved value.
+	ksuid := util.NewID()
+	refEnv := fmt.Sprintf(`{"$ref":"formae://%s#/id"}`, ksuid)
+	span := pkgmodel.FrameEnvelope(refEnv)
+	tmpl := "cf.fn('" + span + "', '" + span + "')"
+	props := embedProps("code", tmpl)
+
+	resolver := newPropertyResolver(props)
+	require.NoError(t, resolver.setRefValue(pkgmodel.FormaeURI("formae://"+ksuid+"#/id"), "VAL-42"))
+
+	resolved, err := resolver.resolveReferences(props)
+	require.NoError(t, err)
+	assert.True(t, gjson.GetBytes(resolved, "code.$embed").Bool())
+
+	// After resolve, BOTH span envelopes in the $template must carry $value="VAL-42".
+	// A regression that only updated one span would leave the other without $value.
+	resolvedTmpl := gjson.GetBytes(resolved, "code.$template").String()
+	resolvedSpans, scanErr := pkgmodel.ScanEmbedSpans(resolvedTmpl)
+	require.NoError(t, scanErr)
+	require.Len(t, resolvedSpans, 2, "expected two span sites in resolved $template")
+	resolvedCount := 0
+	for _, sp := range resolvedSpans {
+		if gjson.Get(sp.EnvelopeJSON, "$value").String() == "VAL-42" {
+			resolvedCount++
+		}
+	}
+	assert.Equal(t, 2, resolvedCount,
+		"expected $value='VAL-42' to appear in both span envelopes of the resolved $template")
+
+	plugin, err := resolver.toPluginFormat(resolved)
+	require.NoError(t, err)
+	assert.Equal(t, "cf.fn('VAL-42', 'VAL-42')", gjson.GetBytes(plugin, "code").String())
+}
+
+func TestToPluginFormat_ErrorsOnHashedValue(t *testing.T) {
+	props := json.RawMessage(`{"SecretString":{"$value":"deadbeef","$visibility":"Opaque","$hashed":true}}`)
+	_, err := ConvertToPluginFormat(props) // exported entry at resolver.go:33
+	require.Error(t, err)
+	// The message must be actionable, not just internally descriptive: name the
+	// offending field, explain why the value can't be written (stored hashed, no
+	// plaintext to recover), and tell the user what to do (re-supply or accept).
+	msg := err.Error()
+	assert.Contains(t, msg, "SecretString", "names the offending secret field")
+	assert.Contains(t, msg, "hashed", "explains the value is stored hashed")
+	assert.Contains(t, msg, "re-supply", "tells the user how to proceed")
+}
+
+// TestExtractSourceOpaqueResolvableURIsFromJSON covers deriving credential-ness
+// from the SOURCE property rather than the consumer envelope, including the
+// ReadOnlyProperties fallback (a plugin may expose a generated credential there).
+func TestExtractSourceOpaqueResolvableURIsFromJSON(t *testing.T) {
+	secretKsuid := util.NewID()
+	roKsuid := util.NewID()
+	plainKsuid := util.NewID()
+
+	secretURI := pkgmodel.NewFormaeURI(secretKsuid, "SecretString")
+	roURI := pkgmodel.NewFormaeURI(roKsuid, "Token")
+	plainURI := pkgmodel.NewFormaeURI(plainKsuid, "Arn")
+
+	sources := map[string]*pkgmodel.Resource{
+		secretKsuid: {Ksuid: secretKsuid, Properties: json.RawMessage(`{"SecretString":{"$value":"h","$visibility":"Opaque","$hashed":true}}`)},
+		roKsuid:     {Ksuid: roKsuid, ReadOnlyProperties: json.RawMessage(`{"Token":{"$value":"h","$visibility":"Opaque","$hashed":true}}`)},
+		plainKsuid:  {Ksuid: plainKsuid, ReadOnlyProperties: json.RawMessage(`{"Arn":"arn:aws:iam::123:role/r"}`)},
+	}
+	load := func(ksuid string) (*pkgmodel.Resource, error) { return sources[ksuid], nil }
+
+	// A Clear .json() cred whose opaque source lives in Properties is a credential.
+	got, err := ExtractSourceOpaqueResolvableURIsFromJSON(
+		json.RawMessage(`{"password":{"$ref":"`+string(secretURI)+`","$json":"password","$visibility":"Clear"}}`), load)
+	require.NoError(t, err)
+	assert.Equal(t, []pkgmodel.FormaeURI{secretURI}, got)
+
+	// A Clear cred whose opaque source lives in ReadOnlyProperties is a credential.
+	got, err = ExtractSourceOpaqueResolvableURIsFromJSON(
+		json.RawMessage(`{"token":{"$ref":"`+string(roURI)+`","$visibility":"Clear"}}`), load)
+	require.NoError(t, err)
+	assert.Equal(t, []pkgmodel.FormaeURI{roURI}, got)
+
+	// A Clear cross-resource ref to a plain (non-opaque) source is excluded.
+	got, err = ExtractSourceOpaqueResolvableURIsFromJSON(
+		json.RawMessage(`{"roleArn":{"$ref":"`+string(plainURI)+`","$visibility":"Clear"}}`), load)
+	require.NoError(t, err)
+	assert.Empty(t, got)
+
+	// A map-shaped secret (Kubernetes-style): the opaque value is a single field
+	// `decodedData` stored as one hashed envelope, and a ref selects a key with
+	// .at("password"), so its source property path is "decodedData.password".
+	// The ref is a credential by virtue of its opaque PARENT field, even though
+	// the leaf path has no envelope of its own.
+	mapKsuid := util.NewID()
+	mapURI := pkgmodel.NewFormaeURI(mapKsuid, "decodedData.password")
+	sources[mapKsuid] = &pkgmodel.Resource{
+		Ksuid:      mapKsuid,
+		Properties: json.RawMessage(`{"decodedData":{"$value":"h","$visibility":"Opaque","$hashed":true}}`),
+	}
+	got, err = ExtractSourceOpaqueResolvableURIsFromJSON(
+		json.RawMessage(`{"password":{"$ref":"`+string(mapURI)+`","$visibility":"Clear"}}`), load)
+	require.NoError(t, err)
+	assert.Equal(t, []pkgmodel.FormaeURI{mapURI}, got)
+
+	// An envelope-Opaque ref is a credential without ever loading the source.
+	loadFail := func(string) (*pkgmodel.Resource, error) {
+		return nil, fmt.Errorf("source must not be loaded for an envelope-opaque ref")
+	}
+	got, err = ExtractSourceOpaqueResolvableURIsFromJSON(
+		json.RawMessage(`{"auth":{"$ref":"`+string(secretURI)+`","$visibility":"Opaque"}}`), loadFail)
+	require.NoError(t, err)
+	assert.Equal(t, []pkgmodel.FormaeURI{secretURI}, got)
+
+	// An unloadable (missing) source is not classified as a credential.
+	missingURI := pkgmodel.NewFormaeURI(util.NewID(), "SecretString")
+	got, err = ExtractSourceOpaqueResolvableURIsFromJSON(
+		json.RawMessage(`{"password":{"$ref":"`+string(missingURI)+`","$visibility":"Clear"}}`), load)
+	require.NoError(t, err)
+	assert.Empty(t, got)
+
+	// A schema-opaque source (FieldHint.Opaque) whose persisted value is still
+	// plain — no $hashed, no $visibility, never yet transformed at rest — is a
+	// credential by virtue of the schema/known-opaque table fallback.
+	schemaOpaqueKsuid := util.NewID()
+	schemaOpaqueURI := pkgmodel.NewFormaeURI(schemaOpaqueKsuid, "ApiKey")
+	sources[schemaOpaqueKsuid] = &pkgmodel.Resource{
+		Ksuid: schemaOpaqueKsuid,
+		Type:  "Test::SchemaOpaqueSource",
+		Schema: pkgmodel.Schema{
+			Fields: []string{"ApiKey"},
+			Hints:  map[string]pkgmodel.FieldHint{"ApiKey": {Opaque: true}},
+		},
+		Properties: json.RawMessage(`{"ApiKey":"plain-not-yet-hashed"}`),
+	}
+	got, err = ExtractSourceOpaqueResolvableURIsFromJSON(
+		json.RawMessage(`{"key":{"$ref":"`+string(schemaOpaqueURI)+`","$visibility":"Clear"}}`), load)
+	require.NoError(t, err)
+	assert.Equal(t, []pkgmodel.FormaeURI{schemaOpaqueURI}, got,
+		"a schema-declared Opaque field classifies opaque even when persisted as a plain value")
+}
+
+// An envelope's resolution provenance survives the full parse -> resolve ->
+// rebuild round trip: the resolver rebuilds envelopes from typed fields, so a
+// field it does not carry would be silently dropped.
+func TestResolvePropertyReferences_PreservesResolvedFrom(t *testing.T) {
+	digest := "v1:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	props := json.RawMessage(`{"Password":{"$ref":"formae://2abcdefghijklmnopqrstuvwxyz#/S","$resolvedFrom":"` + digest + `"}}`)
+
+	resolved, err := ResolvePropertyReferences("formae://2abcdefghijklmnopqrstuvwxyz#/S", props, "live-value")
+	require.NoError(t, err)
+
+	out := gjson.GetBytes(resolved, "Password")
+	assert.Equal(t, "live-value", out.Get("$value").String())
+	assert.Equal(t, digest, out.Get("$resolvedFrom").String(),
+		"resolving a reference must not drop its provenance")
+}
+
+// Resolution restates the hashed marker from the value it resolved, rather than
+// inheriting whatever the target envelope happened to carry. Both directions
+// matter and they pull opposite ways: a stale true makes the terminal hashing
+// pass skip an envelope and persist plaintext labelled as a digest, while
+// clearing a true that is still accurate lets a digest past the plugin-boundary
+// guard and reach a provider as though it were the secret.
+func TestResolvePropertyReferences_HashedMarkerFollowsTheResolvedValue(t *testing.T) {
+	const uri = pkgmodel.FormaeURI("formae://2abcDEFghiJKLmnoPQRstuVWxyz#/SecretString")
+
+	// An envelope that was hashed at rest, now being re-resolved.
+	target := json.RawMessage(`{
+		"DbPassword": {
+			"$ref": "` + string(uri) + `",
+			"$value": "0000000000000000000000000000000000000000000000000000000000000000",
+			"$hashed": true,
+			"$visibility": "Opaque"
+		}
+	}`)
+
+	t.Run("live plaintext clears a stale marker", func(t *testing.T) {
+		out, err := ResolvePropertyReferences(uri, target, "live-plaintext")
+		require.NoError(t, err)
+		assert.Equal(t, "live-plaintext", gjson.GetBytes(out, "DbPassword.$value").String())
+		assert.False(t, gjson.GetBytes(out, "DbPassword.$hashed").Bool(),
+			"a live plaintext resolution must not stay marked hashed, or terminal hashing skips it")
+		assert.NoError(t, guardNoHashedValues(out),
+			"plaintext must be writable to a provider")
+	})
+
+	t.Run("a resolved digest keeps its marker so the write guard still fires", func(t *testing.T) {
+		digest := `{"$value":"1111111111111111111111111111111111111111111111111111111111111111","$hashed":true,"$visibility":"Opaque"}`
+		out, err := ResolvePropertyReferences(uri, target, digest)
+		require.NoError(t, err)
+		assert.True(t, gjson.GetBytes(out, "DbPassword.$hashed").Bool(),
+			"resolving from a stored digest must stay marked hashed")
+		assert.ErrorIs(t, guardNoHashedValues(out), ErrHashedValueNotWritable,
+			"a digest must never reach a provider as if it were the secret")
+	})
+}
+
+// A generator reference names a value to be drawn; the envelope is never that
+// value, so it must not be written to a provider. The rejection is typed and
+// names the offending path. Conversion leaves the envelope structurally
+// intact, so the guard sees the same shape whichever side of the conversion
+// it is applied on.
+func TestGuardNoUnresolvedGenerators_RejectsAnUnresolvedGeneratorReference(t *testing.T) {
+	props := json.RawMessage(`{
+		"Name": "db",
+		"SecretString": {
+			"$gen": true,
+			"$generator": "2abcDEFghiJKLmnoPQRstuVWxyz",
+			"$output": "value",
+			"$visibility": "Opaque"
+		}
+	}`)
+
+	err := GuardNoUnresolvedGenerators(props)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrUnresolvedGeneratorReferenceNotWritable,
+		"a generator reference must never be written to a provider in place of its value")
+	assert.Contains(t, err.Error(), "/SecretString",
+		"the rejection must name the property that is still unresolved")
+
+	converted, err := ConvertToPluginFormat(props)
+	require.NoError(t, err,
+		"planning converts the same document to diff it, and must not be refused")
+	assert.ErrorIs(t, GuardNoUnresolvedGenerators(converted), ErrUnresolvedGeneratorReferenceNotWritable,
+		"conversion leaves the envelope intact, so the guard still catches it after")
+}
+
+// The guard is scoped to generator references and must not fire on the
+// surrounding document: a plain property whose name or value merely resembles
+// the envelope's keys is still writable.
+func TestGuardNoUnresolvedGenerators_AcceptsPropertiesWithoutAGeneratorReference(t *testing.T) {
+	props := json.RawMessage(`{
+		"Name": "db",
+		"Description": "$gen",
+		"Tags": [{"Key": "gen", "Value": "true"}],
+		"SecretString": {"$value": "plaintext", "$visibility": "Opaque"}
+	}`)
+
+	out, err := ConvertToPluginFormat(props)
+	require.NoError(t, err)
+	assert.NoError(t, GuardNoUnresolvedGenerators(out))
+	assert.Equal(t, "plaintext", gjson.GetBytes(out, "SecretString").String())
 }

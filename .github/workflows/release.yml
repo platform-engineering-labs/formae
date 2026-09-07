@@ -73,11 +73,10 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           PLUGINS=(
-            "platform-engineering-labs/formae-plugin-azure"
             "platform-engineering-labs/formae-plugin-aws"
+            "platform-engineering-labs/formae-plugin-azure"
             "platform-engineering-labs/formae-plugin-gcp"
-            "platform-engineering-labs/formae-plugin-oci"
-            "platform-engineering-labs/formae-plugin-ovh"
+            "platform-engineering-labs/formae-plugin-kubernetes"
           )
           echo "Checking last nightly run for each plugin..."
           FAILED=""
@@ -124,6 +123,11 @@ jobs:
         run: echo "/opt/pel/bin" >> $GITHUB_PATH
 
       - name: Configure AWS Credentials
+        # Fail fast instead of hanging: a stalled STS AssumeRoleWithWebIdentity
+        # has been seen retrying for 40+ min on a flaky runner (no timeout), so
+        # cap it — a healthy creds exchange takes seconds, and a fast failure is
+        # re-runnable rather than holding the job to the 6h job ceiling.
+        timeout-minutes: 5
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-region: us-west-2
@@ -139,18 +143,22 @@ jobs:
       - name: Publish core PKL schema to S3
         run: make publish-pkl
 
-      - name: Package external plugin PKL schemas
-        run: make pkg-external-pkl
-
-      - name: Publish external plugin PKL schemas to S3
-        run: make publish-external-pkl
-
   pkg_opkg:
     uses: "./.github/workflows/package.yml"
     secrets: inherit
-    if: ${{ contains(fromJSON('["", "pkg_opkg", "all"]'), inputs.pkg_job) && github.actor != 'peldroid[bot]' }}
+    # pkg_opkg builds the formae opkg, which bundles the standard-bundle members'
+    # examples and resolve-gates them against formae@$(VERSION). That schema is
+    # published by pkg_pkl (make publish-pkl), so pkg_opkg must wait for it -
+    # otherwise the resolve gate races the schema publish. The `!cancelled()` +
+    # explicit pkg_job=='pkg_opkg' clause keeps the manual `pkg_job=pkg_opkg`
+    # dispatch working even though pkg_pkl is skipped there.
+    if: ${{ !cancelled()
+          && github.actor != 'peldroid[bot]'
+          && contains(fromJSON('["", "pkg_opkg", "all"]'), inputs.pkg_job)
+          && (inputs.pkg_job == 'pkg_opkg' || needs.pkg_pkl.result == 'success') }}
     needs:
       - verify
+      - pkg_pkl
 
   pkg_container:
     uses: "./.github/workflows/container.yml"

@@ -107,7 +107,7 @@ func TestApplyForma_ReconcileFormaContainingUnmanagedTaglessResource(t *testing.
 		_, err = m.ApplyForma(forma, &config.FormaCommandConfig{
 			Mode:     pkgmodel.FormaApplyModeReconcile,
 			Simulate: false,
-		}, "test-client-id")
+		}, "test-client-id", "", "")
 		require.NoError(t, err, "ApplyForma should not return an error")
 
 		// Wait for the command to complete successfully
@@ -226,7 +226,7 @@ func TestApplyForma_ReconcileFormaWithExistingStackAndUnmanagedTaglessResource(t
 		_, err = m.ApplyForma(initialForma, &config.FormaCommandConfig{
 			Mode:     pkgmodel.FormaApplyModeReconcile,
 			Simulate: false,
-		}, "test-client-id-1")
+		}, "test-client-id-1", "", "")
 		require.NoError(t, err, "Failed to apply initial forma")
 
 		// Wait for initial command to complete
@@ -290,7 +290,7 @@ func TestApplyForma_ReconcileFormaWithExistingStackAndUnmanagedTaglessResource(t
 		_, err = m.ApplyForma(formaWithUnmanagedResource, &config.FormaCommandConfig{
 			Mode:     pkgmodel.FormaApplyModeReconcile,
 			Simulate: false,
-		}, "test-client-id-2")
+		}, "test-client-id-2", "", "")
 		require.NoError(t, err, "ApplyForma should not return an error")
 
 		// Step 4: Wait for the command to complete successfully

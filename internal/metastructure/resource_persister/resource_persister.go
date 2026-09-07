@@ -13,10 +13,12 @@ import (
 	"ergo.services/ergo/act"
 	"ergo.services/ergo/gen"
 
+	"github.com/platform-engineering-labs/formae/internal/constants"
 	"github.com/platform-engineering-labs/formae/internal/datastore"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/discovery"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/generator_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/policy_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
@@ -67,35 +69,75 @@ func (rp *ResourcePersister) Init(args ...any) error {
 	return nil
 }
 
+// HandleCall answers every request with a typed result carrying its own
+// success/failure status. Returning an error here would terminate the actor
+// without a reply: the caller times out, every request queued in the mailbox
+// dies with it, and the supervisor respawns the actor only for the next bad
+// request to repeat the cycle. The error return keeps the meaning ergo
+// assigns to it — terminate — and is reserved for genuine faults: an unknown
+// request type is a protocol bug, and the persister crashes on it.
 func (rp *ResourcePersister) HandleCall(from gen.PID, ref gen.Ref, request any) (any, error) {
 	switch req := request.(type) {
 	case resource_update.PersistResourceUpdate:
 		hash, err := rp.storeResourceUpdate(req.CommandID, req.ResourceOperation, req.PluginOperation, &req.ResourceUpdate)
-		return hash, err
+		if err != nil {
+			rp.Log().Error("ResourcePersister: persist of %s failed: %s", req.ResourceUpdate.DesiredState.Label, err)
+			return resource_update.PersistResourceUpdateResult{Error: err.Error()}, nil
+		}
+		return resource_update.PersistResourceUpdateResult{Version: hash}, nil
 	case target_update.PersistTargetUpdates:
 		versions, err := rp.persistTargetUpdates(req.TargetUpdates, req.CommandID)
-		if err != nil {
-			return nil, err
-		}
-		return versions, nil
+		return persistVersionsResult(rp, "target updates", versions, err), nil
 	case stack_update.PersistStackUpdates:
 		versions, err := rp.persistStackUpdates(req.StackUpdates, req.CommandID)
-		if err != nil {
-			return nil, err
-		}
-		return versions, nil
+		return persistVersionsResult(rp, "stack updates", versions, err), nil
 	case policy_update.PersistPolicyUpdates:
 		versions, err := rp.persistPolicyUpdates(req.PolicyUpdates, req.CommandID, req.StackIDMap)
-		if err != nil {
-			return nil, err
-		}
-		return versions, nil
+		return persistVersionsResult(rp, "policy updates", versions, err), nil
+	case generator_update.PersistGeneratorUpdates:
+		versions, err := rp.persistGeneratorUpdates(req.GeneratorUpdates, req.CommandID, req.StackIDMap)
+		return persistVersionsResult(rp, "generator updates", versions, err), nil
 	case messages.LoadResource:
-		return rp.loadResource(req.ResourceURI)
+		result, err := rp.loadResource(req.ResourceURI)
+		if err != nil {
+			rp.Log().Error("ResourcePersister: load of %s failed: %s", req.ResourceURI, err)
+			return messages.LoadResourceResult{Error: err.Error()}, nil
+		}
+		return result, nil
+	case messages.PersistTargetReap:
+		reaped, reapedStacks, err := rp.datastore.PersistTargetReap(datastore.PersistTargetReapRequest{
+			Label:            req.Label,
+			IncarnationID:    req.IncarnationID,
+			LastSeenBefore:   req.LastSeenBefore,
+			LastSampleBefore: req.LastSampleBefore,
+			ReapedAt:         req.ReapedAt,
+		})
+		if err != nil {
+			rp.Log().Error("ResourcePersister: target reap of %s failed: %s", req.Label, err)
+			return messages.PersistTargetReapResult{Error: err.Error()}, nil
+		}
+		if reaped && len(reapedStacks) > 0 {
+			// The reap tombstoned the last live resource(s) of one or more
+			// stacks; clean up any that are now empty, exactly as a normal
+			// resource delete does. The reap bypasses the changeset executor, so
+			// there is no forma command to attribute the stack tombstone to — a
+			// synthetic id records the provenance on the deleted stack row.
+			rp.cleanupEmptyStacks(reapedStacks, "reap-"+util.NewID())
+		}
+		return messages.PersistTargetReapResult{Reaped: reaped, ReapedStackLabels: reapedStacks}, nil
 	default:
 		rp.Log().Error("ResourcePersister: unknown request type=%s", fmt.Sprintf("%T", request))
 		return nil, fmt.Errorf("resource persister: unknown request type %T", request)
 	}
+}
+
+// persistVersionsResult folds one bulk-persist outcome into its reply.
+func persistVersionsResult(rp *ResourcePersister, what string, versions []string, err error) messages.PersistVersionsResult {
+	if err != nil {
+		rp.Log().Error("ResourcePersister: persist of %s failed: %s", what, err)
+		return messages.PersistVersionsResult{Error: err.Error()}
+	}
+	return messages.PersistVersionsResult{Versions: versions}
 }
 
 // HandleMessage handles asynchronous messages (sent via proc.Send).
@@ -105,6 +147,20 @@ func (rp *ResourcePersister) HandleMessage(from gen.PID, message any) error {
 	switch msg := message.(type) {
 	case messages.CleanupEmptyStacks:
 		rp.cleanupEmptyStacks(msg.StackLabels, msg.CommandID)
+		return nil
+	case messages.UpdateTargetHealth:
+		_, err := rp.datastore.UpdateTargetHealth(msg.Observation)
+		if err != nil {
+			rp.Log().Error("ResourcePersister: failed to update target health",
+				"target", msg.Observation.TargetLabel, "error", err)
+		}
+		return nil
+	case messages.AdvanceTargetAccrual:
+		_, err := rp.datastore.AdvanceTargetAccrual(msg.TargetLabel, msg.IncarnationID, msg.LastSampleAt, msg.DeltaSeconds)
+		if err != nil {
+			rp.Log().Error("ResourcePersister: failed to advance target accrual",
+				"target", msg.TargetLabel, "error", err)
+		}
 		return nil
 	default:
 		rp.Log().Error("ResourcePersister: unknown message type=%s", fmt.Sprintf("%T", message))
@@ -119,6 +175,25 @@ func (rp *ResourcePersister) storeResourceUpdate(commandID string, resourceOpera
 	}
 
 	resourceUpdate.Operation = resourceOperationFromPluginOperation(resourceOperation, pluginOperation, relevantProgress)
+
+	// A NotFound Read is converted into a delete above so out-of-band deletions
+	// get absorbed. That conversion is only sound while the record still
+	// describes the object the Read probed. A sync cycle plans against a
+	// snapshot and can execute its reads minutes later, by which time an apply
+	// may have replaced the resource and moved the record onto a new identity;
+	// the Read then probes the old one, truthfully reports NotFound, and acting
+	// on it would tombstone a live resource's record. Dropping the update is the
+	// safe direction: the next sync cycle plans afresh, so a genuine deletion is
+	// still absorbed one cycle later.
+	if pluginOperation == pkgresource.OperationRead &&
+		resourceUpdate.Operation == resource_update.OperationDelete &&
+		rp.recordMovedSinceGenerated(resourceUpdate) {
+		slog.Debug("Skipping delete from a stale NotFound read; the record moved since the read was planned",
+			"resourceLabel", resourceUpdate.DesiredState.Label,
+			"stackLabel", resourceUpdate.StackLabel,
+			"probedNativeID", resourceUpdate.PriorState.NativeID)
+		return "", nil
+	}
 
 	// This can cause a validation error when the delete op is in fact valid.
 	// Subsequently no delete is persisted and the system doesn't work as expected.
@@ -144,6 +219,7 @@ func (rp *ResourcePersister) storeResourceUpdate(commandID string, resourceOpera
 				MostRecentProgressResult: *relevantProgress,
 				GroupID:                  resourceUpdate.GroupID,
 				StackLabel:               resourceUpdate.StackLabel,
+				MatchFilters:             resourceUpdate.MatchFilters,
 			},
 		},
 	}
@@ -156,9 +232,13 @@ func (rp *ResourcePersister) storeResourceUpdate(commandID string, resourceOpera
 	if err != nil {
 		slog.Error("Failed to persist resource updates",
 			"error", err,
-			"resource", resourceUpdate.DesiredState,
+			"resourceLabel", resourceUpdate.DesiredState.Label,
+			"stackLabel", resourceUpdate.DesiredState.Stack,
+			"resourceType", resourceUpdate.DesiredState.Type,
+			"resourceProperties", pkgmodel.RedactOpaqueJSONForLog(resourceUpdate.DesiredState.Properties),
 			"operation", pluginOperation)
-		return "", fmt.Errorf("failed to store stacks for resource update %v: %w", resourceUpdate.DesiredState, err)
+		return "", fmt.Errorf("failed to store stacks for resource update %s in stack %s: %w",
+			resourceUpdate.DesiredState.Label, resourceUpdate.DesiredState.Stack, err)
 	}
 	hash := forma.ResourceUpdates[0].Version
 
@@ -312,6 +392,74 @@ func formaCommandFromOperation(operation pkgresource.Operation) pkgmodel.Command
 	}
 }
 
+// recordMovedSinceGenerated reports whether the stored record has been written
+// by another command since this update was generated. PriorState is the
+// snapshot the generator captured (see NewResourceUpdateForSyncWithFilter) and
+// carries the row version it was loaded from, which is monotonic per URI, so an
+// inequality against the current row is exact: it catches a replace that keeps
+// the native id and the properties byte-identical just as readily as one that
+// changes them.
+//
+// Everything indeterminate reports moved, so the delete is dropped rather than
+// risked. That covers a lookup that failed and a snapshot with no version — the
+// latter is what a command resumed after a restart rebuilds, since the version
+// describes a row and is not serialized with the resource. The cost is bounded:
+// the resource keeps its record until a later cycle plans afresh against a
+// versioned snapshot, and a genuine deletion is absorbed then.
+func (rp *ResourcePersister) recordMovedSinceGenerated(resourceUpdate *resource_update.ResourceUpdate) bool {
+	generated := resourceUpdate.PriorState
+	if generated.Version == "" {
+		// Only a synchronize snapshot is planned off a loaded row and so is
+		// expected to carry a version; a missing one there means the command
+		// was rebuilt after a restart, which is indeterminate. Discovery builds
+		// its updates from the forma instead (see generateResourceUpdatesForSync),
+		// so its reads never carry a version and their NotFound is a real
+		// signal — including the sentinel-target path that cleans up rows whose
+		// target has been deleted. Reading that as staleness would strand those
+		// rows forever.
+		if resourceUpdate.Source != resource_update.FormaCommandSourceSynchronize {
+			return false
+		}
+		slog.Debug("Treating a NotFound read as stale: the snapshot carries no row version",
+			"resourceLabel", generated.Label)
+		return true
+	}
+
+	current, err := rp.datastore.LoadResource(generated.URI())
+	if err != nil {
+		// Fail closed. Reporting "not moved" here would hand the delete to a
+		// caller that performs its own load; if that one succeeds it finds the
+		// replacement row and tombstones it, which is the data loss this guard
+		// exists to prevent. A lookup we could not complete is no evidence that
+		// the record still matches, so treat it as moved and let the next sync
+		// cycle decide on fresh state.
+		slog.Warn("Treating a NotFound read as stale: the staleness lookup failed",
+			"resourceLabel", generated.Label,
+			"error", err)
+		return true
+	}
+	if current == nil {
+		// No live row to compare against, which is also what a row hidden by
+		// reaping looks like. The delete branch performs its own lookup, so
+		// reporting "not moved" here would let a row that reappears between the
+		// two calls be tombstoned, shadowing one that target recovery could
+		// otherwise restore. Nothing is lost by declining: with no live row the
+		// delete had nothing to remove anyway.
+		return true
+	}
+
+	if current.Version != generated.Version {
+		return true
+	}
+
+	// The version alone is not a complete witness: storeResource reuses it when
+	// only ReadOnlyProperties changed, rewriting that row in place. Compare
+	// those too, so a refresh confined to read-only state still counts as a
+	// rewrite. (Both sides are the stored representation, so they differ only
+	// if something actually wrote.)
+	return !util.JsonEqualRaw(current.ReadOnlyProperties, generated.ReadOnlyProperties)
+}
+
 func resourceOperationFromPluginOperation(resourceOperation resource_update.OperationType, pluginOperation pkgresource.Operation, progress *plugin.TrackedProgress) resource_update.OperationType {
 	switch pluginOperation {
 	case pkgresource.OperationCreate:
@@ -333,11 +481,21 @@ func resourceOperationFromPluginOperation(resourceOperation resource_update.Oper
 func (rp *ResourcePersister) processResourceUpdate(commandID string, rc resource_update.ResourceUpdate) (string, error) {
 	stackLabel := rc.DesiredState.Stack
 
+	// Expected target incarnation for the incarnation-carrying resource-write
+	// guard. The ResourcePersister holds the resource's target in memory, so it
+	// can pass the incarnation it believes is current. An empty incarnation
+	// (target health not populated) means "no incarnation check" at the
+	// datastore; the reaped-tombstone check still applies.
+	expectedIncarnation := ""
+	if rc.ResourceTarget.Health != nil {
+		expectedIncarnation = rc.ResourceTarget.Health.IncarnationID
+	}
+
 	var resourceVersion string
 	var storeResourceErr error
 
 	// Create secret-safe version of the resource for storage
-	secretSafeResource, err := rp.persistValueTransformer.ApplyToResource(&rc.DesiredState)
+	secretSafeResource, diagnostics, err := rp.persistValueTransformer.ApplyToResource(&rc.DesiredState)
 	if err != nil {
 		slog.Error("Failed to transform resource to secret-safe format",
 			"stackLabel", stackLabel,
@@ -345,14 +503,21 @@ func (rp *ResourcePersister) processResourceUpdate(commandID string, rc resource
 			"error", err)
 		return "", fmt.Errorf("failed to transform resource %s for secret-safe storage: %w", rc.DesiredState.Label, err)
 	}
+	for _, d := range diagnostics {
+		slog.Warn("Ambiguous opaque field hint while storing resource",
+			"stackLabel", stackLabel,
+			"resourceLabel", rc.DesiredState.Label,
+			"resourceType", rc.DesiredState.Type,
+			"diagnostic", d.String())
+	}
 
 	switch rc.Operation {
 	case resource_update.OperationCreate:
 		secretSafeResource.PatchDocument = nil
-		resourceVersion, storeResourceErr = rp.datastore.StoreResource(secretSafeResource, commandID)
+		resourceVersion, storeResourceErr = rp.datastore.StoreResource(secretSafeResource, commandID, expectedIncarnation)
 	case resource_update.OperationUpdate:
 		secretSafeResource.PatchDocument = nil
-		resourceVersion, storeResourceErr = rp.datastore.StoreResource(secretSafeResource, commandID)
+		resourceVersion, storeResourceErr = rp.datastore.StoreResource(secretSafeResource, commandID, expectedIncarnation)
 	case resource_update.OperationDelete:
 		r, err := rp.datastore.LoadResource(rc.DesiredState.URI())
 		if err == nil && r != nil {
@@ -378,18 +543,79 @@ func (rp *ResourcePersister) processResourceUpdate(commandID string, rc resource
 			}
 
 			if currentResource == nil {
+				// A successful Read with no current row would (re)create the resource.
+				// Guard against resurrecting a resource whose target has since been
+				// deleted: a target delete tombstones the target's unmanaged resources
+				// (see forgetUnmanagedResourcesOnTarget), but a sync/discovery Read
+				// snapshotted before that delete can land here afterwards with live
+				// properties. Storing it would orphan an $unmanaged row pointing at a
+				// target that no longer exists. If the target is gone, the absent row is
+				// the intended end state — leave it tombstoned. When the target still
+				// exists this is a legitimate newly-discovered resource, so store it.
+				// (LoadTarget and any DeleteTarget are serialized through this actor's
+				// mailbox, so there is no check-then-act race here.)
+				target, targetErr := rp.datastore.LoadTarget(rc.DesiredState.Target)
+				if targetErr != nil {
+					slog.Error("Failed to load target while persisting read resource",
+						"resourceLabel", rc.DesiredState.Label,
+						"target", rc.DesiredState.Target,
+						"error", targetErr)
+					return "", fmt.Errorf("failed to load target %s for resource %s: %w", rc.DesiredState.Target, rc.DesiredState.Label, targetErr)
+				}
+				if target == nil {
+					slog.Debug("Skipping read persist for resource whose target no longer exists",
+						"resourceLabel", rc.DesiredState.Label,
+						"target", rc.DesiredState.Target,
+						"stackLabel", stackLabel)
+					return "", nil
+				}
+
 				slog.Debug("Resource not found, creating new one",
 					"resourceLabel", rc.DesiredState.Label,
 					"stackLabel", stackLabel)
 
-				resourceVersion, storeResourceErr = rp.datastore.StoreResource(secretSafeResource, commandID)
+				resourceVersion, storeResourceErr = rp.datastore.StoreResource(secretSafeResource, commandID, expectedIncarnation)
 
 				return resourceVersion, storeResourceErr
 			}
 
-			// Only persist if Properties or ReadOnlyProperties have changed
-			if !util.JsonEqualRaw(currentResource.Properties, rc.DesiredState.Properties) ||
-				!util.JsonEqualRaw(currentResource.ReadOnlyProperties, rc.DesiredState.ReadOnlyProperties) {
+			// Evict unmanaged rows whose freshly-read cloud state matches a discovery
+			// filter. Discovery filters are forward-only: they prevent newly-found
+			// resources from entering inventory, but a resource discovered before a
+			// filter was added stays in inventory until a sync Read checks it here.
+			// This check must run before the JsonEqualRaw early-return below so that
+			// a wedged unmanaged row with unchanged properties is still removed when
+			// it begins to match a filter.
+			if !currentResource.Managed && len(rc.MatchFilters) > 0 {
+				// Merge Properties and ReadOnlyProperties to get the complete cloud
+				// state to evaluate against — mirrors the merge Discovery uses.
+				completeProperties, mergeErr := util.MergeJSON(
+					rc.DesiredState.Properties,
+					rc.DesiredState.ReadOnlyProperties,
+				)
+				if mergeErr != nil {
+					completeProperties = rc.DesiredState.Properties
+				}
+
+				for i := range rc.MatchFilters {
+					if resource_update.ShouldFilterByMatchFilter(&rc.MatchFilters[i], completeProperties) {
+						slog.Info("Evicting unmanaged inventory row that matches a discovery filter",
+							"namespace", rc.ResourceTarget.Namespace,
+							"resourceType", rc.DesiredState.Type,
+							"nativeID", rc.DesiredState.NativeID,
+							"filterResourceTypes", rc.MatchFilters[i].ResourceTypes,
+						)
+						return rp.datastore.DeleteResource(&rc.DesiredState, commandID)
+					}
+				}
+			}
+
+			// Only persist if Properties or ReadOnlyProperties have changed.
+			// Compare against the hashed copy (secretSafeResource) — the same
+			// representation we store — so read-back secrets converge hash-vs-hash
+			// instead of showing perpetual drift against the stored hash.
+			if !util.JsonEqualRaw(currentResource.Properties, secretSafeResource.Properties) ||
+				!util.JsonEqualRaw(currentResource.ReadOnlyProperties, secretSafeResource.ReadOnlyProperties) {
 
 				// Preserve the current stack and managed state during sync READ operations
 				// to prevent stale sync data from overwriting recent stack changes
@@ -398,6 +624,20 @@ func (rp *ResourcePersister) processResourceUpdate(commandID string, rc resource
 				secretSafeResource.Schema.Discoverable = currentResource.Schema.Discoverable
 				secretSafeResource.Schema.Extractable = currentResource.Schema.Extractable
 
+				// Sync must never rename. The label is part of formae's
+				// internal identity, not the cloud's; sync reads cloud state and
+				// must not mutate the managed row's label. If a sync-origin update
+				// ever arrives with a label diff against the current row, it
+				// indicates a generator bug — log loudly and force the current
+				// label so the rename does not slip through.
+				if secretSafeResource.Label != currentResource.Label {
+					slog.Warn("Sync produced a label diff; preserving current label (sync must never rename)",
+						"resourceKsuid", currentResource.Ksuid,
+						"currentLabel", currentResource.Label,
+						"syncLabel", secretSafeResource.Label)
+					secretSafeResource.Label = currentResource.Label
+				}
+
 				currentResource.Properties = secretSafeResource.Properties
 				currentResource.ReadOnlyProperties = secretSafeResource.ReadOnlyProperties
 
@@ -405,7 +645,7 @@ func (rp *ResourcePersister) processResourceUpdate(commandID string, rc resource
 					"resourceLabel", rc.DesiredState.Label,
 					"stackLabel", stackLabel)
 
-				resourceVersion, storeResourceErr = rp.datastore.StoreResource(secretSafeResource, commandID)
+				resourceVersion, storeResourceErr = rp.datastore.StoreResource(secretSafeResource, commandID, expectedIncarnation)
 				if storeResourceErr != nil {
 					return "", fmt.Errorf("failed to persist updated resource %s: %w", rc.DesiredState.Label, storeResourceErr)
 				}
@@ -453,7 +693,7 @@ func (rp *ResourcePersister) persistTargetUpdates(updates []target_update.Target
 	versions := make([]string, 0, len(updates))
 	for i := range updates {
 		rp.Log().Debug("Persisting target update index=%d label=%s", i, updates[i].Target.Label)
-		if err := rp.persistTargetUpdate(&updates[i]); err != nil {
+		if err := rp.persistTargetUpdate(&updates[i], commandID); err != nil {
 			rp.Log().Error("Failed to persist target update index=%d label=%s: %v", i, updates[i].Target.Label, err)
 			return nil, fmt.Errorf("failed to persist target update for %s: %w", updates[i].Target.Label, err)
 		}
@@ -465,7 +705,7 @@ func (rp *ResourcePersister) persistTargetUpdates(updates []target_update.Target
 	return versions, nil
 }
 
-func (rp *ResourcePersister) persistTargetUpdate(update *target_update.TargetUpdate) error {
+func (rp *ResourcePersister) persistTargetUpdate(update *target_update.TargetUpdate, commandID string) error {
 	var version string
 	var err error
 
@@ -488,7 +728,32 @@ func (rp *ResourcePersister) persistTargetUpdate(update *target_update.TargetUpd
 	case target_update.TargetOperationUpdate:
 		version, err = rp.datastore.UpdateTarget(&update.Target)
 	case target_update.TargetOperationDelete:
-		version, err = rp.datastore.DeleteTarget(update.Target.Label)
+		// Managed resources on this target are removed through the changeset
+		// cascade (ordered resource deletes that call the plugin). Unmanaged
+		// (discovered) resources are never part of a changeset, so deleting the
+		// target row would orphan them in the DB until a later sync tick tombstones
+		// them — and permanently if synchronization is disabled. Forget them here,
+		// before the target row is gone, so cleanup is immediate and independent of
+		// sync.
+		//
+		// Cleanup is not atomic with the target delete: a failure partway through
+		// leaves some unmanaged rows already tombstoned and the target still present
+		// (DeleteTarget only runs once cleanup returns nil). The error propagates so
+		// the target update is marked failed and retried, and the retry is safe —
+		// tombstoning is idempotent and the re-query only returns rows not yet
+		// tombstoned — so a retry converges rather than double-deleting.
+		//
+		// A reaped target's managed resources were tombstoned as 'reaped' by
+		// PersistTargetReap and never entered the changeset cascade (they're
+		// invisible to every live-resource query, so the destroy generator never
+		// saw them). Convert them to a definitive delete tombstone here — DB-only,
+		// same reasoning as forgetUnmanagedResourcesOnTarget: the target is
+		// confirmed gone, so there is nothing for a plugin to delete.
+		if err = rp.forgetUnmanagedResourcesOnTarget(update.Target.Label, commandID); err == nil {
+			if err = rp.purgeReapedResourcesOnTarget(update.Target.Label, commandID); err == nil {
+				version, err = rp.datastore.DeleteTarget(update.Target.Label)
+			}
+		}
 	default:
 		err = fmt.Errorf("unknown target operation: %s", update.Operation)
 	}
@@ -518,7 +783,7 @@ func (rp *ResourcePersister) persistTargetUpdate(update *target_update.TargetUpd
 			Name: actornames.Discovery,
 			Node: rp.Node().Name(),
 		}
-		if err := rp.Send(discoveryPID, discovery.Discover{Once: true}); err != nil {
+		if err := rp.Send(discoveryPID, discovery.Discover{}); err != nil {
 			rp.Log().Error("Failed to trigger discovery for newly discoverable target label=%s: %v",
 				update.Target.Label, err)
 		} else {
@@ -527,6 +792,55 @@ func (rp *ResourcePersister) persistTargetUpdate(update *target_update.TargetUpd
 		}
 	}
 
+	return nil
+}
+
+// forgetUnmanagedResourcesOnTarget tombstones the unmanaged (discovered)
+// resources that belong to targetLabel. It is a DB-only forget: unmanaged
+// resources were only ever discovered, never managed by formae, so removing the
+// record never touches the cloud (mirroring the sync "NotFound" path). The query
+// is scoped strictly to the $unmanaged stack AND managed=false so a managed
+// resource is never DB-deleted here (managed resources go through the proper
+// cloud-delete cascade). DeleteResource appends a tombstone version, so a double
+// tombstone (e.g. if sync already ran) is a harmless no-op at the visible level.
+func (rp *ResourcePersister) forgetUnmanagedResourcesOnTarget(targetLabel, commandID string) error {
+	unmanaged, err := rp.datastore.QueryResources(&datastore.ResourceQuery{
+		Stack:   &datastore.QueryItem[string]{Item: constants.UnmanagedStack, Constraint: datastore.Required},
+		Managed: &datastore.QueryItem[bool]{Item: false, Constraint: datastore.Required},
+		Target:  &datastore.QueryItem[string]{Item: targetLabel, Constraint: datastore.Required},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to query unmanaged resources for deleted target %s: %w", targetLabel, err)
+	}
+
+	for _, res := range unmanaged {
+		if _, err := rp.datastore.DeleteResource(res, commandID); err != nil {
+			return fmt.Errorf("failed to forget unmanaged resource %s on deleted target %s: %w", res.Ksuid, targetLabel, err)
+		}
+	}
+	return nil
+}
+
+// purgeReapedResourcesOnTarget converts every reaped-tombstoned resource on
+// targetLabel into a definitive delete tombstone. DeleteResource is exempt
+// from the reaped-write guard (see storeResource) precisely so this
+// conversion can happen; it is a DB-only forget — reaped resources were
+// already presumed gone when the target was reaped, so this never calls the
+// plugin, mirroring forgetUnmanagedResourcesOnTarget.
+func (rp *ResourcePersister) purgeReapedResourcesOnTarget(targetLabel, commandID string) error {
+	reaped, err := rp.datastore.LoadReapedResources()
+	if err != nil {
+		return fmt.Errorf("failed to load reaped resources for deleted target %s: %w", targetLabel, err)
+	}
+
+	for _, res := range reaped {
+		if res.Target != targetLabel {
+			continue
+		}
+		if _, err := rp.datastore.DeleteResource(res, commandID); err != nil {
+			return fmt.Errorf("failed to clean up reaped resource %s on deleted target %s: %w", res.Ksuid, targetLabel, err)
+		}
+	}
 	return nil
 }
 
@@ -717,14 +1031,16 @@ func (rp *ResourcePersister) persistPolicyUpdate(update *policy_update.PolicyUpd
 			}
 		}
 		if policyType == "auto-reconcile" {
-			if err := rp.Send(
-				gen.ProcessID{Name: actornames.AutoReconciler, Node: rp.Node().Name()},
-				messages.PolicyRemoved{StackLabel: update.StackLabel},
-			); err != nil {
-				slog.Error("Failed to notify AutoReconciler of policy removal",
+			stack, lookupErr := rp.datastore.GetStackByLabel(update.StackLabel)
+			if lookupErr != nil {
+				slog.Error("Failed to look up stack for AutoReconciler notification",
 					"stackLabel", update.StackLabel,
-					"error", err)
-				// Don't fail the operation - just log the error
+					"error", lookupErr)
+			} else if stack == nil {
+				slog.Warn("Stack not found for AutoReconciler notification",
+					"stackLabel", update.StackLabel)
+			} else {
+				rp.notifyAutoReconcilerOfPolicyRemoval(update.StackLabel, stack.ID)
 			}
 		}
 
@@ -768,7 +1084,14 @@ func (rp *ResourcePersister) persistPolicyUpdate(update *policy_update.PolicyUpd
 	case policy_update.PolicyOperationUpdate:
 		version, err = rp.datastore.UpdatePolicy(update.Policy, commandID)
 	case policy_update.PolicyOperationDelete:
-		version, err = rp.datastore.DeletePolicy(update.Policy.GetLabel())
+		// A stack label marks the policy as inline on that stack; the stack ID was
+		// resolved onto the policy above. Without one the policy is standalone, and
+		// DeletePolicy is scoped to standalone rows.
+		if update.StackLabel != "" {
+			version, err = rp.datastore.DeleteInlinePolicy(update.Policy.GetStackID(), update.Policy.GetLabel(), commandID)
+		} else {
+			version, err = rp.datastore.DeletePolicy(update.Policy.GetLabel())
+		}
 	case policy_update.PolicyOperationAttach:
 		// Attach standalone policy to stack via junction table
 		// We need to get the stack ID from the stack label
@@ -834,7 +1157,129 @@ func (rp *ResourcePersister) persistPolicyUpdate(update *policy_update.PolicyUpd
 		}
 	}
 
+	// Notify the AutoReconciler if an inline auto-reconcile policy was deleted. The
+	// deletion is already persisted at this point, so the remaining-policy check does
+	// not see the policy that just went away.
+	if update.Operation == policy_update.PolicyOperationDelete && update.StackLabel != "" &&
+		update.Policy != nil && update.Policy.GetType() == "auto-reconcile" {
+		rp.notifyAutoReconcilerOfPolicyRemoval(update.StackLabel, update.Policy.GetStackID())
+	}
+
 	return nil
+}
+
+func (rp *ResourcePersister) persistGeneratorUpdates(updates []generator_update.GeneratorUpdate, commandID string, stackIDMap map[string]string) ([]string, error) {
+	versions := make([]string, 0, len(updates))
+	for i := range updates {
+		label := ""
+		if updates[i].Generator != nil {
+			label = updates[i].Generator.GetLabel()
+		}
+		if err := rp.persistGeneratorUpdate(&updates[i], commandID, stackIDMap); err != nil {
+			return nil, fmt.Errorf("failed to persist generator update for %s: %w", label, err)
+		}
+		versions = append(versions, updates[i].Version)
+	}
+
+	return versions, nil
+}
+
+// persistGeneratorUpdate writes a single generator change to the datastore.
+// A generator has no standalone form and no attach/detach, so — unlike a
+// policy — every operation is stack-scoped: the stack label is resolved to
+// its KSUID from stackIDMap and set on the generator with SetStackID before
+// the write, exactly as the policy path does for an inline policy.
+func (rp *ResourcePersister) persistGeneratorUpdate(update *generator_update.GeneratorUpdate, commandID string, stackIDMap map[string]string) error {
+	if update.Operation == generator_update.GeneratorOperationDelete {
+		label := ""
+		if update.Generator != nil {
+			label = update.Generator.GetLabel()
+		}
+		version, err := rp.datastore.DeleteGenerator(label, update.StackLabel)
+		if err != nil {
+			update.State = generator_update.GeneratorUpdateStateFailed
+			update.ErrorMessage = err.Error()
+			update.ModifiedTs = util.TimeNow()
+			slog.Error("Failed to delete generator",
+				"label", label, "stackLabel", update.StackLabel, "error", err)
+			return err
+		}
+		update.Version = version
+		update.State = generator_update.GeneratorUpdateStateSuccess
+		update.ModifiedTs = util.TimeNow()
+		return nil
+	}
+
+	if update.Generator == nil {
+		return fmt.Errorf("generator is nil for operation %s", update.Operation)
+	}
+
+	stackID, ok := stackIDMap[update.StackLabel]
+	if !ok {
+		return fmt.Errorf("stack ID not found for stack label %s", update.StackLabel)
+	}
+	update.Generator.SetStackID(stackID)
+
+	var version string
+	var err error
+	switch update.Operation {
+	case generator_update.GeneratorOperationCreate:
+		version, err = rp.datastore.CreateGenerator(update.Generator, commandID)
+	case generator_update.GeneratorOperationUpdate:
+		version, err = rp.datastore.UpdateGenerator(update.Generator, commandID)
+	default:
+		err = fmt.Errorf("unknown generator operation: %s", update.Operation)
+	}
+
+	if err != nil {
+		update.State = generator_update.GeneratorUpdateStateFailed
+		update.ErrorMessage = err.Error()
+		update.ModifiedTs = util.TimeNow()
+		slog.Error("Failed to persist generator",
+			"label", update.Generator.GetLabel(), "operation", update.Operation, "error", err)
+		return err
+	}
+
+	update.Version = version
+	update.State = generator_update.GeneratorUpdateStateSuccess
+	update.ModifiedTs = util.TimeNow()
+	return nil
+}
+
+// notifyAutoReconcilerOfPolicyRemoval tells the AutoReconciler that a stack lost an
+// auto-reconcile policy, but only once no auto-reconcile policy is left effective for
+// the stack - neither inline nor attached standalone. A stack that still has one keeps
+// its schedule, because the AutoReconciler drops a stack outright when it is notified.
+// A failed check suppresses the notification: the AutoReconciler re-reads the datastore
+// on every beat and drops a schedule whose policy is gone, so a missing message only
+// delays that, while a wrong one stops the stack from being reconciled at all.
+func (rp *ResourcePersister) notifyAutoReconcilerOfPolicyRemoval(stackLabel, stackID string) {
+	policies, err := rp.datastore.GetPoliciesForStack(stackID)
+	if err != nil {
+		slog.Error("Failed to check remaining policies for AutoReconciler notification",
+			"stackLabel", stackLabel,
+			"stackID", stackID,
+			"error", err)
+		return
+	}
+	for _, policy := range policies {
+		if policy.GetType() == "auto-reconcile" {
+			slog.Debug("Auto-reconcile policy still effective for stack, keeping its schedule",
+				"stackLabel", stackLabel,
+				"policyLabel", policy.GetLabel())
+			return
+		}
+	}
+
+	if err := rp.Send(
+		gen.ProcessID{Name: actornames.AutoReconciler, Node: rp.Node().Name()},
+		messages.PolicyRemoved{StackLabel: stackLabel},
+	); err != nil {
+		slog.Error("Failed to notify AutoReconciler of policy removal",
+			"stackLabel", stackLabel,
+			"error", err)
+		// Don't fail the operation - just log the error
+	}
 }
 
 // cleanupEmptyStacks checks each stack and deletes it if it has no remaining resources.

@@ -7,10 +7,14 @@
 package pkl
 
 import (
+	"encoding/json"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
 	"github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -29,6 +33,27 @@ func TestPkl_Evaluate(t *testing.T) {
 	assert.Equal(t, props["name"], gjson.Get(jsonString, "Properties.name.Value").String())
 	assert.Equal(t, "FakeAWS::Route53::HostedZone", gjson.Get(jsonString, "Resources.0.Type").String())
 	assert.Equal(t, "A", gjson.Get(jsonString, "Resources.1.Properties.Type").String())
+}
+
+// TestPkl_Evaluate_AutoResolvesUnresolvedProject verifies that applying a forma
+// whose directory has a PklProject but no resolved PklProject.deps.json succeeds:
+// Evaluate auto-resolves via pklrun instead of failing with a NoSuchFileException
+// that would force a manual `pkl project resolve`. The deps file is gitignored
+// and regenerated, so removing it needs no cleanup.
+func TestPkl_Evaluate_AutoResolvesUnresolvedProject(t *testing.T) {
+	depsPath := "./testdata/forma/PklProject.deps.json"
+	if err := os.Remove(depsPath); err != nil && !os.IsNotExist(err) {
+		t.Fatalf("removing deps.json to simulate unresolved project: %v", err)
+	}
+
+	props := map[string]string{"name": "bacon.platform.engineering"}
+	p := PKL{}
+	_, err := p.Evaluate("./testdata/forma/test.pkl", model.CommandApply, model.FormaApplyModeReconcile, props)
+	require.NoError(t, err, "Evaluate must auto-run `pkl project resolve` when PklProject.deps.json is missing")
+
+	if _, statErr := os.Stat(depsPath); statErr != nil {
+		t.Fatalf("auto-resolve should have recreated PklProject.deps.json: %v", statErr)
+	}
 }
 
 func TestPkl_EvaluateCommandAndMode(t *testing.T) {
@@ -100,6 +125,83 @@ func TestPkl_FormaeValue(t *testing.T) {
 	assert.Equal(t, props["secret"], gjson.Get(jsonString, "Resources.0.Properties.SecretString.$value").String())
 }
 
+func TestPkl_FormaeValue_Hashed(t *testing.T) {
+	props := map[string]string{
+		"name":        "test-secret",
+		"secret":      "l33ts3cr3t",
+		"description": "the test secret",
+	}
+
+	p := PKL{}
+	forma, err := p.Evaluate("./testdata/forma/value_test.pkl", model.CommandEval, model.FormaApplyModePatch, props)
+	require.NoError(t, err)
+
+	jsonString := forma.ToJSON()
+
+	// Resource index 2 uses .opaque.hashed — $hashed must be true.
+	hashedField := gjson.Get(jsonString, "Resources.2.Properties.SecretString.$hashed")
+	assert.True(t, hashedField.Bool(), "expected $hashed == true for .opaque.hashed value")
+
+	// A plain .opaque value (resource 0) must NOT carry $hashed at all.
+	plainHashedField := gjson.Get(jsonString, "Resources.0.Properties.SecretString.$hashed")
+	assert.False(t, plainHashedField.Exists(), "expected no $hashed key for plain .opaque value")
+
+	// A clear (non-opaque) value (resource 3) must never carry $hashed.
+	clearHashedField := gjson.Get(jsonString, "Resources.3.Properties.SecretString.$hashed")
+	assert.False(t, clearHashedField.Exists(), "expected no $hashed key for clear value")
+
+	// Round-trip guard: Properties of the hashed resource must be rejected by
+	// ConvertToPluginFormat, which refuses to write hashed values to the cloud.
+	hashedProps := gjson.Get(jsonString, "Resources.2.Properties").Raw
+	_, err = resolver.ConvertToPluginFormat(json.RawMessage(hashedProps))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "hashed")
+}
+
+func TestPkl_TFVarsIntegration(t *testing.T) {
+	p := PKL{}
+	forma, err := p.Evaluate("./testdata/forma/tfvars_test.pkl", model.CommandApply, model.FormaApplyModeReconcile, nil)
+	assert.NoError(t, err)
+
+	jsonString := forma.ToJSON()
+
+	// The target config region should come from example.tfvars
+	assert.Equal(t, "us-west-2", gjson.Get(jsonString, "Targets.0.Config.Region").String())
+	// The queue name should interpolate the region from tfvars
+	assert.Equal(t, "demo-us-west-2-queue", gjson.Get(jsonString, "Resources.0.Properties.QueueName").String())
+}
+
+func TestPkl_TFVarsIntegration_AbsolutePathOutsidePklFolder(t *testing.T) {
+	// Place a .tfvars file at an absolute path OUTSIDE the testdata/forma
+	// directory (where the .pkl lives) and outside the internal/schema/pkl
+	// tree entirely. This verifies that tfvarsReader.Read accepts absolute
+	// paths and does not reject them or re-anchor them on baseDir.
+	tmpDir := t.TempDir()
+	absTfvars := filepath.Join(tmpDir, "external.tfvars")
+	content := []byte(`region         = "eu-west-1"
+instance_count = 2
+enable_logging = false
+instance_type  = "t3.small"
+
+tags = {
+  Name        = "abs-path"
+  Environment = "test"
+}
+
+availability_zones = ["eu-west-1a"]
+`)
+	require.NoError(t, os.WriteFile(absTfvars, content, 0644))
+
+	p := PKL{}
+	props := map[string]string{"tfvarsAbsPath": absTfvars}
+	forma, err := p.Evaluate("./testdata/forma/tfvars_absolute_test.pkl", model.CommandApply, model.FormaApplyModeReconcile, props)
+	require.NoError(t, err)
+
+	jsonString := forma.ToJSON()
+	assert.Equal(t, "eu-west-1", gjson.Get(jsonString, "Targets.0.Config.Region").String())
+	assert.Equal(t, "demo-eu-west-1-queue", gjson.Get(jsonString, "Resources.0.Properties.QueueName").String())
+}
+
 func TestPkl_FormaeConfig(t *testing.T) {
 	p := PKL{}
 	config, err := p.FormaeConfig("./testdata/config/test_config.pkl")
@@ -131,7 +233,6 @@ func TestPkl_FormaeConfig(t *testing.T) {
 
 	assert.True(t, config.Agent.Discovery.Enabled)
 	assert.Equal(t, 20*time.Minute, config.Agent.Discovery.Interval)
-	assert.Equal(t, []string{"Name", "Environment"}, config.Agent.Discovery.LabelTagKeys)
 
 	assert.Equal(t, "/var/log/formae.log", config.Agent.Logging.FilePath)
 	assert.Equal(t, slog.LevelDebug, config.Agent.Logging.FileLogLevel)
@@ -145,6 +246,192 @@ func TestPkl_FormaeConfig(t *testing.T) {
 	assert.NotNil(t, config.Network.Tailscale)
 	assert.False(t, config.Network.Tailscale.TLS)
 	assert.Equal(t, "someAuthKey", config.Network.Tailscale.AuthKey)
+
+	// cli.theme / cli.appearance are plumbed pkl → pkl model → pkgmodel; with no
+	// cli block in the fixture they carry their Config.pkl defaults. A missing
+	// field or a dropped translation would surface here as an empty string.
+	assert.Equal(t, "quiet", config.Cli.Theme)
+	assert.Equal(t, "auto", config.Cli.Appearance)
+}
+
+func TestPkl_SecretShapeMisuse_AtOnScalarFailsEval(t *testing.T) {
+	p := PKL{}
+	_, err := p.Evaluate("./testdata/forma/secret_at_on_scalar_test.pkl", model.CommandApply, model.FormaApplyModeReconcile, nil)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "Cannot find method `at`")
+}
+
+func TestPkl_SecretShapeMisuse_BareMapSecretValueFailsEval(t *testing.T) {
+	p := PKL{}
+	_, err := p.Evaluate("./testdata/forma/secret_bare_map_value_test.pkl", model.CommandApply, model.FormaApplyModeReconcile, nil)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "SecretMapAccessor")
+}
+
+// TestPkl_Generator_Evaluate verifies that a forma declaring a
+// PasswordGenerator evaluates and renders a Generators listing carrying the
+// fields PasswordGenerator.render() produces.
+func TestPkl_Generator_Evaluate(t *testing.T) {
+	p := PKL{}
+	forma, err := p.Evaluate("./testdata/forma/generator_test.pkl", model.CommandApply, model.FormaApplyModeReconcile, nil)
+	require.NoError(t, err)
+
+	jsonString := forma.ToJSON()
+
+	assert.Equal(t, "password", gjson.Get(jsonString, "Generators.0.Type").String())
+	assert.Equal(t, "db-password", gjson.Get(jsonString, "Generators.0.Label").String())
+	assert.Equal(t, "generator-test-stack", gjson.Get(jsonString, "Generators.0.Stack").String())
+	assert.Equal(t, int64(24), gjson.Get(jsonString, "Generators.0.Length").Int())
+	assert.True(t, gjson.Get(jsonString, "Generators.0.Uppercase").Bool())
+	assert.True(t, gjson.Get(jsonString, "Generators.0.Lowercase").Bool())
+	assert.True(t, gjson.Get(jsonString, "Generators.0.Digits").Bool())
+	assert.False(t, gjson.Get(jsonString, "Generators.0.Symbols").Bool())
+	assert.Equal(t, "oO0", gjson.Get(jsonString, "Generators.0.ExcludeCharacters").String())
+	assert.True(t, gjson.Get(jsonString, "Generators.0.RequireEachIncludedType").Bool())
+}
+
+// TestPkl_Generator_Alias_Evaluate verifies that a PasswordGenerator's alias
+// field — the previous label, used to preserve identity across a rename —
+// flows through eval into the rendered Generators listing.
+func TestPkl_Generator_Alias_Evaluate(t *testing.T) {
+	p := PKL{}
+	forma, err := p.Evaluate("./testdata/forma/generator_alias_test.pkl", model.CommandApply, model.FormaApplyModeReconcile, nil)
+	require.NoError(t, err)
+
+	jsonString := forma.ToJSON()
+
+	assert.Equal(t, "new-password", gjson.Get(jsonString, "Generators.0.Label").String())
+	assert.Equal(t, "old-password", gjson.Get(jsonString, "Generators.0.Alias").String())
+}
+
+// TestPkl_Generator_NoStackFailsEval verifies that a Generator with no stack
+// set fails at PKL eval — stack is required, not defaulted.
+func TestPkl_Generator_NoStackFailsEval(t *testing.T) {
+	p := PKL{}
+	_, err := p.Evaluate("./testdata/forma/generator_no_stack_test.pkl", model.CommandApply, model.FormaApplyModeReconcile, nil)
+	require.Error(t, err)
+}
+
+// TestPkl_Generator_AllClassFlagsFalseFailsEval verifies that a
+// PasswordGenerator with every character-class flag false fails at PKL eval,
+// not at runtime — the spec has no alphabet to draw from.
+func TestPkl_Generator_AllClassFlagsFalseFailsEval(t *testing.T) {
+	p := PKL{}
+	_, err := p.Evaluate("./testdata/forma/generator_all_flags_false_test.pkl", model.CommandApply, model.FormaApplyModeReconcile, nil)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "at least one of uppercase, lowercase, digits, symbols must be true")
+}
+
+// TestPkl_GeneratorReference_RendersGenEnvelope verifies that a resource
+// property bound to a generator's named output (`pw.gen.value`) evaluates and
+// renders a $gen envelope carrying the generator's label, its stack, and the
+// named output.
+func TestPkl_GeneratorReference_RendersGenEnvelope(t *testing.T) {
+	p := PKL{}
+	forma, err := p.Evaluate("./testdata/forma/generator_reference_test.pkl", model.CommandEval, model.FormaApplyModePatch, nil)
+	require.NoError(t, err)
+
+	jsonString := forma.ToJSON()
+
+	assert.True(t, gjson.Get(jsonString, "Resources.0.Properties.value.$gen").Bool())
+	assert.Equal(t, "db-password", gjson.Get(jsonString, "Resources.0.Properties.value.$label").String())
+	assert.Equal(t, "durable", gjson.Get(jsonString, "Resources.0.Properties.value.$stack").String())
+	assert.Equal(t, "value", gjson.Get(jsonString, "Resources.0.Properties.value.$output").String())
+	assert.Equal(t, "Opaque", gjson.Get(jsonString, "Resources.0.Properties.value.$visibility").String())
+}
+
+// TestPkl_GeneratorBinding_PluginResourceFieldRendersGenEnvelope verifies that
+// a plugin resource's secret-bearing property, whose declared union admits
+// formae.GeneratorOutput, can be bound to `pw.gen.value` from PKL and renders
+// the $gen envelope. The field keeps its Opaque schema hint, so the union that
+// admits a generator output still marks the property a secret.
+func TestPkl_GeneratorBinding_PluginResourceFieldRendersGenEnvelope(t *testing.T) {
+	p := PKL{}
+	forma, err := p.Evaluate("./testdata/forma/generator_binding_test.pkl", model.CommandApply, model.FormaApplyModeReconcile, nil)
+	require.NoError(t, err)
+
+	jsonString := forma.ToJSON()
+
+	assert.Equal(t, "FakeAWS::SecretsManager::Secret", gjson.Get(jsonString, "Resources.0.Type").String())
+	assert.True(t, gjson.Get(jsonString, "Resources.0.Properties.SecretString.$gen").Bool())
+	assert.Equal(t, "db-password", gjson.Get(jsonString, "Resources.0.Properties.SecretString.$label").String())
+	assert.Equal(t, "generator-binding-stack", gjson.Get(jsonString, "Resources.0.Properties.SecretString.$stack").String())
+	assert.Equal(t, "value", gjson.Get(jsonString, "Resources.0.Properties.SecretString.$output").String())
+	assert.Equal(t, "Opaque", gjson.Get(jsonString, "Resources.0.Properties.SecretString.$visibility").String())
+	assert.True(t, gjson.Get(jsonString, "Resources.0.Schema.Hints.SecretString.Opaque").Bool())
+
+	assert.Equal(t, "db-password", gjson.Get(jsonString, "Generators.0.Label").String())
+	assert.Equal(t, "generator-binding-stack", gjson.Get(jsonString, "Generators.0.Stack").String())
+}
+
+// TestPkl_GeneratorOutput_EnvelopeFieldsAreImmutable verifies that the $gen
+// envelope's fields cannot be amended — a plan cannot rewrite $visibility
+// away from Opaque (or forge $gen, $label, $stack, $output) once a
+// GeneratorOutput is constructed.
+func TestPkl_GeneratorOutput_EnvelopeFieldsAreImmutable(t *testing.T) {
+	p := PKL{}
+	_, err := p.Evaluate("./testdata/forma/generator_output_envelope_immutable_test.pkl", model.CommandEval, model.FormaApplyModePatch, nil)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "Cannot assign to fixed property")
+}
+
+// TestPkl_GeneratorReference_NoStackFailsEval verifies that a stackless
+// PasswordGenerator kept as a bare local — never collected into `forma`, so
+// render() never runs — still fails eval when referenced only via
+// `pw.gen.value`. The gen access path must force the same validation
+// render() forces.
+func TestPkl_GeneratorReference_NoStackFailsEval(t *testing.T) {
+	p := PKL{}
+	_, err := p.Evaluate("./testdata/forma/generator_reference_no_stack_test.pkl", model.CommandEval, model.FormaApplyModePatch, nil)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "stack is required")
+}
+
+// TestPkl_GeneratorReference_AllClassFlagsFalseFailsEval verifies that a
+// PasswordGenerator with every character-class flag false, kept as a bare
+// local and referenced only via `pw.gen.value`, still fails eval.
+func TestPkl_GeneratorReference_AllClassFlagsFalseFailsEval(t *testing.T) {
+	p := PKL{}
+	_, err := p.Evaluate("./testdata/forma/generator_reference_all_flags_false_test.pkl", model.CommandEval, model.FormaApplyModePatch, nil)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "at least one of uppercase, lowercase, digits, symbols must be true")
+}
+
+// TestPkl_GeneratorExcludeCharacters_MatchesGoAlphabets verifies that the
+// character-class alphabets declared in formae.pkl still match the Go value
+// drawer's alphabets (pkg/model.UppercaseChars etc). A spec excluding exactly
+// one enabled class's full alphabet must fail eval; if the two ever drift,
+// this fails.
+func TestPkl_GeneratorExcludeCharacters_MatchesGoAlphabets(t *testing.T) {
+	cases := []struct {
+		name     string
+		alphabet string
+	}{
+		{"uppercase", model.UppercaseChars},
+		{"lowercase", model.LowercaseChars},
+		{"digits", model.DigitChars},
+		{"symbols", model.SymbolChars},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := PKL{}
+			props := map[string]string{"excludeCharacters": c.alphabet}
+			_, err := p.Evaluate("./testdata/forma/generator_exclude_matches_go_alphabet_test.pkl", model.CommandApply, model.FormaApplyModeReconcile, props)
+			require.Error(t, err)
+			assert.ErrorContains(t, err, "removes every")
+		})
+	}
+}
+
+// TestPkl_Generator_ExcludeCharactersEmptiesClassFailsEval verifies that
+// excludeCharacters removing every character of an enabled class fails at
+// PKL eval, not at runtime.
+func TestPkl_Generator_ExcludeCharactersEmptiesClassFailsEval(t *testing.T) {
+	p := PKL{}
+	_, err := p.Evaluate("./testdata/forma/generator_exclude_empties_class_test.pkl", model.CommandApply, model.FormaApplyModeReconcile, nil)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "excludeCharacters removes every digit")
 }
 
 func TestTranslateResourcePluginConfig(t *testing.T) {
@@ -206,6 +493,29 @@ func TestTranslateResourcePluginConfig_CustomFields(t *testing.T) {
 	assert.Contains(t, string(rpc.PluginConfig), "0755")
 }
 
+func TestTranslateOidcCredentialPluginConfig_CustomFieldsAndDisabled(t *testing.T) {
+	p := PKL{}
+	config, err := p.FormaeConfig("./testdata/config/test_oidc_credential_plugin_custom.pkl")
+	require.NoError(t, err)
+	require.NotNil(t, config)
+
+	require.Len(t, config.Agent.OidcCredentialPlugins, 2)
+
+	fai := config.Agent.OidcCredentialPlugins[0]
+	assert.Equal(t, "fai", fai.Type)
+	assert.True(t, fai.Enabled)
+	require.NotNil(t, fai.PluginConfig)
+	assert.Contains(t, string(fai.PluginConfig), "issuer")
+	assert.Contains(t, string(fai.PluginConfig), "https://issuer.example.com")
+	assert.Contains(t, string(fai.PluginConfig), "audience")
+	assert.NotContains(t, string(fai.PluginConfig), "enabled")
+
+	other := config.Agent.OidcCredentialPlugins[1]
+	assert.Equal(t, "other", other.Type)
+	assert.False(t, other.Enabled)
+	assert.Empty(t, other.PluginConfig)
+}
+
 func TestDeprecationWarning_GlobalRetryWithPerPlugin(t *testing.T) {
 	p := PKL{}
 	config, err := p.FormaeConfig("./testdata/config/test_deprecation_retry.pkl")
@@ -214,4 +524,46 @@ func TestDeprecationWarning_GlobalRetryWithPerPlugin(t *testing.T) {
 	require.Len(t, config.Warnings, 1)
 	assert.Contains(t, config.Warnings[0], "agent.retry")
 	assert.Contains(t, config.Warnings[0], "deprecated")
+}
+
+func TestDeprecationWarning_LegacyArtifactsURL(t *testing.T) {
+	p := PKL{}
+	config, err := p.FormaeConfig("./testdata/config/test_deprecation_artifacts.pkl")
+	require.NoError(t, err)
+
+	// Expect three warnings: url, username, password
+	require.Len(t, config.Warnings, 3)
+	assert.Contains(t, config.Warnings[0], "artifacts.url")
+	assert.Contains(t, config.Warnings[0], "deprecated")
+	assert.Contains(t, config.Warnings[1], "artifacts.username")
+	assert.Contains(t, config.Warnings[1], "deprecated")
+	assert.Contains(t, config.Warnings[2], "artifacts.password")
+	assert.Contains(t, config.Warnings[2], "deprecated")
+
+	// The URL should have been synthesized into Repositories as a binary entry
+	require.Len(t, config.Artifacts.Repositories, 1)
+	assert.Equal(t, "example.org", config.Artifacts.Repositories[0].URI.Host)
+	assert.Equal(t, model.RepositoryTypeBinary, config.Artifacts.Repositories[0].Type)
+}
+
+// TestPkl_TypedPropsFlagAnnotation covers @formae.Flag on a typed Props member:
+// the statically-typed member `certArn` is fed by the CLI flag / prop key
+// `cert-arn`, the injected value reaches resources via late binding, and the
+// manifest Prop reports the overridden flag name.
+func TestPkl_TypedPropsFlagAnnotation(t *testing.T) {
+	const arn = "arn:aws:acm:us-east-1:123456789012:certificate/abc"
+	props := map[string]string{"cert-arn": arn}
+
+	p := PKL{}
+	forma, err := p.Evaluate("./testdata/forma/extends_props_test.pkl", model.CommandApply, model.FormaApplyModeReconcile, props)
+	require.NoError(t, err)
+
+	jsonString := forma.ToJSON()
+
+	// Manifest: member key stays `certArn`, flag carries the override.
+	assert.Equal(t, "cert-arn", gjson.Get(jsonString, "Properties.certArn.Flag").String())
+	assert.Equal(t, arn, gjson.Get(jsonString, "Properties.certArn.Value").String())
+
+	// Injected value carried into the resource via typed access.
+	assert.Equal(t, "pel-8080-"+arn+"-queue", gjson.Get(jsonString, "Resources.0.Properties.QueueName").String())
 }

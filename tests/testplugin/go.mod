@@ -2,11 +2,21 @@ module github.com/platform-engineering-labs/formae/tests/testplugin
 
 go 1.26
 
+replace github.com/platform-engineering-labs/formae/pkg/credential => ../../pkg/credential
+
 replace github.com/platform-engineering-labs/formae/pkg/plugin => ../../pkg/plugin
 
 replace github.com/platform-engineering-labs/formae/pkg/model => ../../pkg/model
 
 replace github.com/platform-engineering-labs/formae/tests/testcontrol => ../testcontrol
+
+// Match the SDK (pkg/plugin) and agent: the test plugin must run the forked
+// ergo/statemachine, otherwise its targetManager holds the node-global lock
+// across remote Link/Monitor and the operator->requester link starves the
+// plugin node under load.
+replace ergo.services/ergo => github.com/JeroenSoeters/ergo v1.999.320-pel.6
+
+replace ergo.services/actor/statemachine => github.com/JeroenSoeters/actor/statemachine v0.0.0-20260205190926-8b1b2eaf30f4
 
 require (
 	ergo.services/ergo v1.999.320
@@ -31,6 +41,7 @@ require (
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.7 // indirect
 	github.com/klauspost/compress v1.18.5 // indirect
 	github.com/lufia/plan9stats v0.0.0-20251013123823-9fd1530e3ec3 // indirect
+	github.com/platform-engineering-labs/formae/pkg/credential v0.0.0-20260821213704-ba68bacf6dd6 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 // indirect
 	github.com/shirou/gopsutil/v4 v4.26.1 // indirect

@@ -110,7 +110,7 @@ func TestAuthBasic(t *testing.T) {
 	})
 
 	t.Run("CLI command with auth succeeds", func(t *testing.T) {
-		// The agent config includes cli.auth with the correct credentials.
+		// The agent config includes cli.connection.auth with the correct credentials.
 		// The CLI reads this config, spawns the auth-basic plugin to obtain
 		// an Authorization header, and sends an authenticated request.
 		cli := NewFormaeCLI(bin, agent.ConfigPath(), agent.Port())
@@ -122,19 +122,19 @@ func TestAuthBasic(t *testing.T) {
 	})
 
 	t.Run("CLI command without auth config fails against auth-protected agent", func(t *testing.T) {
-		// Create a config that points at the same agent but has NO cli.auth.
+		// Create a config that points at the same agent but has NO cli.connection.auth.
 		// The CLI will not send credentials, so the agent must reject the request.
 		noAuthConfigDir := t.TempDir()
 		noAuthConfigPath := filepath.Join(noAuthConfigDir, "formae-no-auth.conf.pkl")
 
 		noAuthConfig := fmt.Sprintf(`/*
- * e2e test config — NO cli.auth
+ * e2e test config — NO cli.connection.auth
  */
 
 amends "formae:/Config.pkl"
 
 cli {
-    api {
+    connection = new Classic {
         port = %d
     }
     disableUsageReporting = true

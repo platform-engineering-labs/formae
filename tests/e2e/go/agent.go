@@ -8,13 +8,14 @@ package e2e_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
-	"strings"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -27,30 +28,43 @@ type AgentConfig struct {
 	DataDir    string
 	Port       int
 	LogFile    string
+	PluginDir  string // cfg.PluginDir override, empty when none was set
 }
 
 // Agent represents a running formae agent process.
 type Agent struct {
-	config  AgentConfig
-	cmd     *exec.Cmd
-	cancel  context.CancelFunc
-	logFile *os.File
+	config       AgentConfig
+	cmd          *exec.Cmd
+	cancel       context.CancelFunc
+	logFile      *os.File
+	authUsername string // empty when auth is disabled
+	authPassword string
 }
 
 // AgentOption configures agent behavior.
 type AgentOption func(*agentOptions)
 
 type agentOptions struct {
-	discoveryEnabled        bool
-	discoveryInterval       string   // PKL duration, e.g. "30.s"
-	discoveryResourceTypes  []string // resource types to discover (empty = all)
-	extraEnv                []string // additional KEY=VALUE env vars for the agent process
-	authEnabled             bool
-	authUsername            string
-	authPassword            string
+	discoveryEnabled       bool
+	discoveryInterval      string   // PKL duration, e.g. "30.s"
+	discoveryResourceTypes []string // resource types to discover (empty = all)
+	extraEnv               []string // additional KEY=VALUE env vars for the agent process
+	authEnabled            bool
+	authUsername           string
+	authPassword           string
 	authBcryptHash         string
-	resourcePluginsBlock    string   // raw PKL block for agent.resourcePlugins
-	pklImports              string   // raw PKL import statements (top-level)
+	resourcePluginsBlock   string // raw PKL block for agent.resourcePlugins
+	pklImports             string // raw PKL import statements (top-level)
+	pluginDir              string // cfg.PluginDir override; empty leaves the default
+}
+
+// WithPluginDir points the agent's cfg.PluginDir at dir, so plugins staged
+// there are discovered on top of the binary's system plugin dir. Used by
+// tests that stage their own fixture plugins.
+func WithPluginDir(dir string) AgentOption {
+	return func(o *agentOptions) {
+		o.pluginDir = dir
+	}
 }
 
 // WithDiscovery enables discovery with the given interval (PKL duration format, e.g. "30.s").
@@ -139,11 +153,24 @@ func StartAgent(t *testing.T, binaryPath string, opts ...AgentOption) *Agent {
         }
     }`, options.authUsername, options.authBcryptHash)
 		cliAuthBlock = fmt.Sprintf(`
-    auth {
-        type = "auth-basic"
-        username = %q
-        password = %q
-    }`, options.authUsername, options.authPassword)
+        auth = new Dynamic {
+            type = "auth-basic"
+            username = %q
+            password = %q
+        }`, options.authUsername, options.authPassword)
+	}
+
+	// No pluginDir override by default. cfg.PluginDir defaults to
+	// ~/.pel/formae/plugins (empty in CI) and the multi-source plugin
+	// discovery added in the discovery refactor finds orbital-installed
+	// plugins via SystemPluginDir(binPath) without help. The CLI's
+	// extract / project init paths now query the agent for installed
+	// plugin versions instead of scanning local dirs, so a single
+	// pluginDir on the CLI box no longer matters. WithPluginDir sets one
+	// for tests that stage fixture plugins of their own.
+	pluginDirBlock := ""
+	if options.pluginDir != "" {
+		pluginDirBlock = fmt.Sprintf("\npluginDir = %q", options.pluginDir)
 	}
 
 	configContent := fmt.Sprintf(`/*
@@ -151,7 +178,7 @@ func StartAgent(t *testing.T, binaryPath string, opts ...AgentOption) *Agent {
  */
 
 amends "formae:/Config.pkl"
-%s
+%s%s
 agent {
     server {
         port = %d
@@ -177,12 +204,12 @@ agent {
 }
 
 cli {
-    api {
-        port = %d
+    connection = new Classic {
+        port = %d%s
     }
-    disableUsageReporting = true%s
+    disableUsageReporting = true
 }
-`, options.pklImports, port, dbPath, discoveryEnabled, options.discoveryInterval, resourceTypesBlock, logPath, agentAuthBlock, options.resourcePluginsBlock, port, cliAuthBlock)
+`, options.pklImports, pluginDirBlock, port, dbPath, discoveryEnabled, options.discoveryInterval, resourceTypesBlock, logPath, agentAuthBlock, options.resourcePluginsBlock, port, cliAuthBlock)
 
 	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
 		t.Fatalf("failed to write agent config: %v", err)
@@ -222,15 +249,19 @@ cli {
 			DataDir:    dataDir,
 			Port:       port,
 			LogFile:    logPath,
+			PluginDir:  options.pluginDir,
 		},
-		cmd:     cmd,
-		cancel:  cancel,
-		logFile: logFile,
+		cmd:          cmd,
+		cancel:       cancel,
+		logFile:      logFile,
+		authUsername: options.authUsername,
+		authPassword: options.authPassword,
 	}
 
 	t.Cleanup(func() { agent.Stop(t) })
 
 	agent.HealthCheck(t, 30*time.Second)
+	agent.waitForExpectedPlugins(t, 30*time.Second)
 
 	return agent
 }
@@ -303,6 +334,168 @@ func (a *Agent) HealthCheck(t *testing.T, timeout time.Duration) {
 	t.Fatalf("agent health check failed after %v (url: %s)", timeout, healthURL)
 }
 
+// waitForExpectedPlugins blocks until every resource/schema plugin the test
+// expects the agent to have installed appears in /api/v1/plugins. The agent's
+// health endpoint flips green as soon as the HTTP server is up, but plugin
+// discovery (the multi-source scan over SystemPluginDir + cfg.PluginDir)
+// runs concurrently and isn't gated by health. Any CLI command that resolves
+// plugin metadata through the agent immediately after StartAgent returns is
+// racing the first discovery scan.
+//
+// The expected set is derived from FORMAE_PLUGIN_DIR — the CI workflow points
+// this at whichever directory was populated for the test's matrix entry
+// (system_plugins or user_plugins) — plus the WithPluginDir override, which a
+// test that stages its own fixture plugins sets. Each top-level subdirectory
+// there is one plugin (orbital and `make install` both use this layout). Only directories
+// that look like resource/schema plugins (containing v*/schema/pkl/PklProject)
+// are waited on; auth plugins live in the same tree but are loaded via the
+// agent's separate auth-plugin discovery path and never appear in
+// /api/v1/plugins — tests that need them have their own readiness poll
+// (see waitForAuthReady in auth_basic_test.go).
+//
+// When the agent was started with WithAuth, requests carry the configured
+// basic-auth credentials. Non-2xx responses (e.g. 503 while the auth plugin
+// is still initializing) are treated as transient and retried.
+func (a *Agent) waitForExpectedPlugins(t *testing.T, timeout time.Duration) {
+	t.Helper()
+
+	pluginDirs := []string{os.Getenv("FORMAE_PLUGIN_DIR"), a.config.PluginDir}
+	var expected []string
+	for _, pluginDir := range pluginDirs {
+		if pluginDir == "" {
+			continue
+		}
+		entries, err := os.ReadDir(pluginDir)
+		if err != nil {
+			// Path doesn't exist or isn't readable — nothing reliably expected.
+			continue
+		}
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			if !hasResourcePluginSchema(filepath.Join(pluginDir, e.Name())) {
+				// Auth plugin, credential broker, or other non-resource
+				// layout — agent won't list it via /api/v1/plugins. Skip.
+				continue
+			}
+			expected = append(expected, e.Name())
+		}
+	}
+	if len(expected) == 0 {
+		return
+	}
+
+	url := fmt.Sprintf("http://localhost:%d/api/v1/plugins", a.config.Port)
+	deadline := time.Now().Add(timeout)
+
+	// Track the most recent state so the timeout error names whatever was
+	// actually still missing — not a misleading "[]" if we never got a
+	// successful parse (e.g. the agent returned 401/503 every time).
+	missing := append([]string(nil), expected...)
+	var lastStatus int
+	var lastErr error
+
+	for time.Now().Before(deadline) {
+		req, _ := http.NewRequest(http.MethodGet, url, nil)
+		if a.authUsername != "" {
+			req.SetBasicAuth(a.authUsername, a.authPassword)
+		}
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			lastErr = err
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+		lastStatus = resp.StatusCode
+
+		if resp.StatusCode != http.StatusOK {
+			_ = resp.Body.Close()
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+
+		var body struct {
+			Plugins []struct {
+				Name string `json:"name"`
+			} `json:"plugins"`
+		}
+		decodeErr := json.NewDecoder(resp.Body).Decode(&body)
+		_ = resp.Body.Close()
+		if decodeErr != nil {
+			lastErr = decodeErr
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+
+		installed := make(map[string]struct{}, len(body.Plugins))
+		for _, p := range body.Plugins {
+			installed[p.Name] = struct{}{}
+		}
+		missing = missing[:0]
+		for _, name := range expected {
+			if _, ok := installed[name]; !ok {
+				missing = append(missing, name)
+			}
+		}
+		if len(missing) == 0 {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	t.Fatalf("expected plugins not all discovered within %v: missing=%v expected=%v dirs=%v lastStatus=%d lastErr=%v",
+		timeout, missing, expected, pluginDirs, lastStatus, lastErr)
+}
+
+// WaitForOidcBroker blocks until the agent log shows the PluginCoordinator
+// pairing an oidc-credential broker with the given namespace. Broker spawn and
+// announcement are asynchronous to agent health and to resource-plugin
+// registration, and the pairing is read when a PluginOperator is spawned — so
+// an apply submitted before this line lands would run unpaired.
+func (a *Agent) WaitForOidcBroker(t *testing.T, namespace string, timeout time.Duration) {
+	t.Helper()
+
+	want := fmt.Sprintf("Oidc credential broker registered: namespace=%s", namespace)
+	deadline := time.Now().Add(timeout)
+
+	for time.Now().Before(deadline) {
+		for _, path := range []string{a.LogFile(), a.StdoutLogFile()} {
+			data, err := os.ReadFile(path)
+			if err == nil && strings.Contains(string(data), want) {
+				return
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	t.Fatalf("oidc-credential broker for namespace %s not registered within %v (looked for %q in %s and %s)",
+		namespace, timeout, want, a.LogFile(), a.StdoutLogFile())
+}
+
+// hasResourcePluginSchema reports whether nameDir (a top-level entry under
+// FORMAE_PLUGIN_DIR) contains a v<version>/schema/pkl/PklProject — the marker
+// the agent itself uses to identify a resource/schema plugin (see
+// plugin_manager.DiscoverLocalPaths). Auth-only plugin layouts ship a binary
+// without a PklProject and are filtered out by this check.
+func hasResourcePluginSchema(nameDir string) bool {
+	versions, err := os.ReadDir(nameDir)
+	if err != nil {
+		return false
+	}
+	for _, v := range versions {
+		if !v.IsDir() || !strings.HasPrefix(v.Name(), "v") {
+			continue
+		}
+		pkl := filepath.Join(nameDir, v.Name(), "schema", "pkl", "PklProject")
+		if _, err := os.Stat(pkl); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
 // Port returns the HTTP port the agent is listening on.
 func (a *Agent) Port() int {
 	return a.config.Port
@@ -336,4 +529,3 @@ func pickFreePort(t *testing.T) int {
 	_ = listener.Close()
 	return port
 }
-

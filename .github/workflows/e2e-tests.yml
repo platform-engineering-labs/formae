@@ -2,13 +2,6 @@ name: formae-e2e-tests
 
 on:
   workflow_dispatch:
-    inputs:
-      plugin_refs:
-        description: >-
-          Plugin ref overrides as comma-separated name=ref pairs
-          (e.g., aws=feat/msgpack,azure=feat/msgpack). Leave empty for main.
-        required: false
-        default: ''
   pull_request:
     branches: [ "main" ]
 
@@ -38,6 +31,10 @@ jobs:
           aws-nuke version
 
       - name: Configure AWS Credentials
+        # Fail fast instead of hanging: a stalled STS AssumeRoleWithWebIdentity
+        # has been seen retrying for tens of minutes on a flaky runner with no
+        # timeout — cap it so the job fails quickly and is re-runnable.
+        timeout-minutes: 5
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-region: us-west-2
@@ -47,6 +44,34 @@ jobs:
       - name: Nuke Discovery
         run: |
           aws-nuke nuke -c tests/e2e/config/nuke-config.yaml --no-prompt --prompt-delay 3
+
+      - name: Purge leftover formae-e2e IAM roles
+        # aws-nuke's conformance-protect allowlist keys on the Name property,
+        # which inline IAMRolePolicy resources lack, so it protects them and
+        # then cannot delete the owning role (DeleteConflict). Remove any
+        # formae-e2e-* roles and their inline/attached policies first so the
+        # nuke does not wedge on a role left behind by a failed test run.
+        run: |
+          set -euo pipefail
+          for role in $(aws iam list-roles \
+            --query "Roles[?starts_with(RoleName, 'formae-e2e-')].RoleName" \
+            --output text); do
+            echo "Purging leftover role: $role"
+            for pol in $(aws iam list-role-policies --role-name "$role" \
+              --query "PolicyNames" --output text); do
+              aws iam delete-role-policy --role-name "$role" --policy-name "$pol"
+            done
+            for arn in $(aws iam list-attached-role-policies --role-name "$role" \
+              --query "AttachedPolicies[].PolicyArn" --output text); do
+              aws iam detach-role-policy --role-name "$role" --policy-arn "$arn"
+            done
+            for ip in $(aws iam list-instance-profiles-for-role --role-name "$role" \
+              --query "InstanceProfiles[].InstanceProfileName" --output text); do
+              aws iam remove-role-from-instance-profile \
+                --instance-profile-name "$ip" --role-name "$role"
+            done
+            aws iam delete-role --role-name "$role"
+          done
 
       - name: Nuke AWS
         run: |
@@ -79,29 +104,92 @@ jobs:
           done
 
   e2e:
+    # Pin the check-context name to the test only, so adding plugin dimensions
+    # to the matrix below does not rename the GitHub status check. The ruleset's
+    # required checks match contexts as "e2e (<test>)".
+    name: e2e (${{ matrix.test }}${{ matrix.user_plugins && ' [user-install]' || '' }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
     needs: [pre-cleanup]
     strategy:
       fail-fast: false
       matrix:
-        test:
-          - TestReconcileApply
-          - TestPatchApply
-          - TestDiscovery
-          - TestSoftReconcile
-          - TestHardReconcile
-          - TestReplace
-          - TestAutoReconcile
-          - TestTTL
-          - TestCancelCommand
-          - TestCascadeDelete
-          - TestTargetResolvable
-          - TestProjectInit
-          - TestSimulateApply
-          - TestExtractAndReapply
-          - TestAuthBasic
-          - TestPluginConfig
+        # Each matrix entry installs plugins via one or both of:
+        #   system_plugins: orbital install (`formae plugin install`) — lands
+        #                   in the binary's SystemPluginDir.
+        #   user_plugins:   make install from the plugin repo — lands in
+        #                   ~/.pel/formae/plugins (cfg.PluginDir).
+        # The agent's multi-source discovery finds plugins from both dirs.
+        include:
+          - test: TestReconcileApply
+            system_plugins: aws azure
+          - test: TestPatchApply
+            system_plugins: aws azure
+          - test: TestDiscovery
+            system_plugins: aws azure
+          - test: TestSoftReconcile
+            system_plugins: aws azure
+          - test: TestHardReconcile
+            system_plugins: aws azure
+          - test: TestReplace
+            system_plugins: aws azure
+          - test: TestAutoReconcile
+            system_plugins: aws
+          - test: TestTTL
+            system_plugins: aws
+          - test: TestCancelCommand
+            system_plugins: aws
+          - test: TestCascadeDelete
+            system_plugins: aws
+          - test: TestTargetResolvable
+            system_plugins: compose grafana
+          - test: TestProjectInit
+            system_plugins: aws azure
+          - test: TestProfileRouting_E2E
+            system_plugins: aws
+          - test: TestSimulateApply
+            system_plugins: aws
+          - test: TestExtractAndReapply
+            system_plugins: aws
+          # Embedded resolvable inside a String field (CloudFront
+          # Function.functionCode). Builds the AWS plugin from its main branch
+          # (user-install) so it carries the widened functionCode
+          # (String|formae.Embedded) without depending on a published release.
+          # TEMPORARY: move back to `system_plugins: aws` (stable channel) once
+          # an AWS plugin release ships embed support.
+          - test: TestEmbedResolvable
+            user_plugins: aws
+          - test: TestEvalDefault
+            system_plugins: aws
+          - test: TestEvalSchemaLocationLocal
+            system_plugins: aws
+          - test: TestExtractSchemaLocationLocal
+            system_plugins: aws
+          # User-install variant: aws is `make install`'d from its repo
+          # (not in orbital's tree) so the merge code path in
+          # listPluginsHandler is the only thing that can surface its
+          # LocalPath for --schema-location local. Catches regressions in
+          # the orbital-vs-registered union.
+          - test: TestExtractSchemaLocationLocal
+            user_plugins: aws
+          - test: TestAuthBasic
+            system_plugins: auth-basic
+          - test: TestPluginConfig
+            system_plugins: sftp
+          # The oidc-credential fixtures (a stub broker, a probe plugin that
+          # reports the token it is handed, and a stub hosted auth plugin) are
+          # built from this repo and staged by `make test-e2e` itself. The real
+          # aws and gcp plugins come from the dev channel, because the
+          # `OidcAuth` target config they are driven through ships in
+          # aws 0.1.17 / gcp 0.1.13, whose only builds so far are pre-releases.
+          #
+          # It needs AWS credentials and the `e2e-test` shared-config profile
+          # written above — `formae connect` provisions the role with it, and
+          # the broker reads its signing key from Secrets Manager — plus the
+          # GCP credentials configured below.
+          - test: TestOidcCredential
+            system_plugins: aws gcp
+            plugin_channel: dev
 
     steps:
       - uses: actions/checkout@v4
@@ -127,6 +215,8 @@ jobs:
           go-version: '1.26.2'
 
       - name: Configure AWS Credentials
+        # Fail fast instead of hanging on a stalled STS call (see above).
+        timeout-minutes: 5
         id: creds
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -136,10 +226,19 @@ jobs:
           output-credentials: true
 
       - name: Add profile credentials to ~/.aws/credentials
+        # The session token is not optional: these are temporary credentials
+        # from an assumed role, and the key pair alone is refused with
+        # InvalidClientTokenId. It went unnoticed while nothing read the
+        # profile as a profile — the action also exports the three values as
+        # job env vars, the SDK's default chain prefers those over shared
+        # config, and the access test below passes no --profile. `formae
+        # connect --profile-aws` forces the shared profile, so it is the first
+        # thing here that authenticates through this file.
         run: |
           mkdir -p ~/.aws
           aws configure set aws_access_key_id ${{ steps.creds.outputs.aws-access-key-id }} --profile e2e-test
           aws configure set aws_secret_access_key ${{ steps.creds.outputs.aws-secret-access-key }} --profile e2e-test
+          aws configure set aws_session_token ${{ steps.creds.outputs.aws-session-token }} --profile e2e-test
           aws configure set region us-west-2 --profile e2e-test
 
       - name: Test AWS Access
@@ -155,33 +254,131 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Build plugin repo list with ref overrides
-        run: |
-          # Start with default repos from Makefile
-          REPOS="$(grep -A 20 '^EXTERNAL_PLUGIN_REPOS' Makefile | grep '\.git' | sed 's/\\$//' | xargs)"
+      # Only the oidc-credential entry federates into GCP, and only it pays
+      # for the sign-in. Gated on the secret as well as the test, so a fork
+      # without credentials reports the GCP half as skipped rather than red.
+      - name: Configure GCP Credentials
+        if: ${{ matrix.test == 'TestOidcCredential' && env.GCP_WORKLOAD_IDENTITY_PROVIDER != '' }}
+        env:
+          GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
-          # Apply ref overrides from input (e.g., "aws=feat/msgpack,azure=feat/msgpack")
-          REFS="${{ github.event.inputs.plugin_refs }}"
-          if [ -n "$REFS" ]; then
-            IFS=',' read -ra PAIRS <<< "$REFS"
-            for pair in "${PAIRS[@]}"; do
-              name="${pair%%=*}"
-              ref="${pair##*=}"
-              REPOS=$(echo "$REPOS" | sed "s|formae-plugin-${name}.git\(@[^ ]*\)\{0,1\}|formae-plugin-${name}.git@${ref}|g")
-              echo "Pinning ${name} to ref: ${ref}"
-            done
+      - name: Install system plugins via orbital
+        if: ${{ matrix.system_plugins }}
+        run: |
+          set -euo pipefail
+
+          # Build the formae binary and stage it in an installer-shaped tree
+          # so orbital (in Embedded mode, derives treeRoot from binary path)
+          # uses dist/e2e/ as the install root. The bootstrap agent below
+          # installs plugins through the same orbital tree the test agents
+          # will later read from (via the SystemPluginDir scan added in
+          # the multi-source plugin discovery refactor).
+          make build
+          mkdir -p dist/e2e/bin dist/e2e/.ops
+          cp formae dist/e2e/bin/formae
+
+          # Minimal bootstrap config — uses the default artifacts.repositories
+          # (pel#stable + community#stable), no auth, no discovery, no sync.
+          cat > /tmp/bootstrap.conf.pkl <<'EOF'
+          amends "formae:/Config.pkl"
+
+          agent {
+              server { port = 49684 }
+              datastore {
+                  datastoreType = "sqlite"
+                  sqlite { filePath = "/tmp/bootstrap.db" }
+              }
+              synchronization { enabled = false }
+              discovery { enabled = false }
+              logging { consoleLogLevel = "info" }
+          }
+
+          cli {
+              api { port = 49684 }
+              disableUsageReporting = true
+          }
+          EOF
+
+          # Start the bootstrap agent in the background.
+          FORMAE_PID_FILE=/tmp/bootstrap.pid \
+            dist/e2e/bin/formae agent start --config /tmp/bootstrap.conf.pkl \
+            > /tmp/bootstrap-agent.log 2>&1 &
+          AGENT_PID=$!
+
+          # Wait up to 30s for the agent to come up.
+          for i in $(seq 1 30); do
+              if curl -sf http://localhost:49684/api/v1/health >/dev/null 2>&1; then
+                  echo "Bootstrap agent ready after ${i}s"
+                  break
+              fi
+              sleep 1
+          done
+          if ! curl -sf http://localhost:49684/api/v1/health >/dev/null 2>&1; then
+              echo "::error::Bootstrap agent did not become healthy"
+              cat /tmp/bootstrap-agent.log || true
+              exit 1
           fi
 
-          echo "EXTERNAL_PLUGIN_REPOS=${REPOS}" >> "$GITHUB_ENV"
+          # Install only the plugins this test needs. The agent refreshes
+          # orbital's repository cache at startup, so the install candidate
+          # solver has fresh metadata to work with.
+          dist/e2e/bin/formae plugin install ${{ matrix.system_plugins }} \
+            --channel ${{ matrix.plugin_channel || 'stable' }}
+
+          # Stop the bootstrap agent so the test harness can spawn its own.
+          kill -TERM "$AGENT_PID" || true
+          wait "$AGENT_PID" 2>/dev/null || true
+          rm -f /tmp/bootstrap.pid /tmp/bootstrap.db /tmp/bootstrap.conf.pkl
+
+      - name: Install user plugins via make install
+        if: ${{ matrix.user_plugins }}
+        run: |
+          set -euo pipefail
+
+          # Mirror the dev workflow: clone the plugin repo, run `make install`.
+          # Lands in ~/.pel/formae/plugins/<name>/v<version>/, which is
+          # cfg.PluginDir's default — the test agent's multi-source discovery
+          # finds it without any config override. Crucially, orbital has no
+          # record of these plugins, so the agent surfaces them only via the
+          # PluginCoordinator-registered merge path in listPluginsHandler.
+          for plugin in ${{ matrix.user_plugins }}; do
+            git clone --depth=1 \
+              "https://github.com/platform-engineering-labs/formae-plugin-${plugin}.git" \
+              "/tmp/formae-plugin-${plugin}"
+            (cd "/tmp/formae-plugin-${plugin}" && make install)
+          done
 
       - name: Running ${{ matrix.test }}
         env:
           AWS_PROFILE: e2e-test
           AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+          # The project the oidc-credential suite federates into. Its own
+          # project, not the one the GCP plugin's suites use: provx fixes the
+          # workload identity pool and provider ids per project and refuses to
+          # converge a provider trusting a different issuer, so a project
+          # already carrying the production-issuer connection cannot carry the
+          # e2e's as well. Absent, the GCP half skips.
+          E2E_GCP_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
+          # Unique per run+attempt so fixtures can name globally-scoped cloud
+          # resources (e.g. CloudFront KeyValueStore/Function, which aws-nuke
+          # does not clean) without colliding across reruns or concurrent jobs.
+          FORMAE_TEST_RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+          # Point setup_pkl.sh at whichever tree has plugins. system_plugins
+          # land in dist/e2e/formae/plugins (orbital's SystemPluginDir);
+          # user_plugins land in /home/runner/.pel/formae/plugins (make
+          # install default on ubuntu-latest). Hardcoded paths because
+          # GHA expressions can't read $HOME, and the empty-string
+          # alternative is falsy in `&& ''`/`|| ...` chains.
+          FORMAE_PLUGIN_DIR: >-
+            ${{ matrix.user_plugins && '/home/runner/.pel/formae/plugins'
+                || format('{0}/dist/e2e/formae/plugins', github.workspace) }}
         run: >-
           make test-e2e
           E2E_RUN_FLAGS="-run ${{ matrix.test }}"
-          EXTERNAL_PLUGIN_REPOS="${EXTERNAL_PLUGIN_REPOS}"
 
   cleanup:
     runs-on: ubuntu-latest
@@ -201,6 +398,10 @@ jobs:
           aws-nuke version
 
       - name: Configure AWS Credentials
+        # Fail fast instead of hanging: a stalled STS AssumeRoleWithWebIdentity
+        # has been seen retrying for tens of minutes on a flaky runner with no
+        # timeout — cap it so the job fails quickly and is re-runnable.
+        timeout-minutes: 5
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-region: us-west-2
@@ -210,6 +411,34 @@ jobs:
       - name: Nuke Discovery
         run: |
           aws-nuke nuke -c tests/e2e/config/nuke-config.yaml --no-prompt --prompt-delay 3
+
+      - name: Purge leftover formae-e2e IAM roles
+        # aws-nuke's conformance-protect allowlist keys on the Name property,
+        # which inline IAMRolePolicy resources lack, so it protects them and
+        # then cannot delete the owning role (DeleteConflict). Remove any
+        # formae-e2e-* roles and their inline/attached policies first so the
+        # nuke does not wedge on a role left behind by a failed test run.
+        run: |
+          set -euo pipefail
+          for role in $(aws iam list-roles \
+            --query "Roles[?starts_with(RoleName, 'formae-e2e-')].RoleName" \
+            --output text); do
+            echo "Purging leftover role: $role"
+            for pol in $(aws iam list-role-policies --role-name "$role" \
+              --query "PolicyNames" --output text); do
+              aws iam delete-role-policy --role-name "$role" --policy-name "$pol"
+            done
+            for arn in $(aws iam list-attached-role-policies --role-name "$role" \
+              --query "AttachedPolicies[].PolicyArn" --output text); do
+              aws iam detach-role-policy --role-name "$role" --policy-arn "$arn"
+            done
+            for ip in $(aws iam list-instance-profiles-for-role --role-name "$role" \
+              --query "InstanceProfiles[].InstanceProfileName" --output text); do
+              aws iam remove-role-from-instance-profile \
+                --instance-profile-name "$ip" --role-name "$role"
+            done
+            aws iam delete-role --role-name "$role"
+          done
 
       - name: Nuke AWS
         run: |

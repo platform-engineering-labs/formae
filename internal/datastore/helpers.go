@@ -5,13 +5,31 @@
 package datastore
 
 import (
+	"errors"
+
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
+// ErrResourceWriteRejected is returned by resource-version writes
+// (StoreResource and the bulk variants that fan out to it) when the write is
+// refused by the reaped/incarnation guard: the resource's current (max-version)
+// row is a reaped tombstone, or an expected target incarnation was supplied and
+// does not match the incarnation stamped on the current row. It lets callers
+// distinguish an intentional guard rejection from an infrastructure error via
+// errors.Is.
+var ErrResourceWriteRejected = errors.New("resource write rejected by reaped/incarnation guard")
+
 // ResourcesAreEqual compares two resources and returns two booleans: the first
 // one indicating whether the non-readonly properties of the resources are equal,
 // and the second one indicating whether the readonly properties are equal.
+//
+// OwnedMembers is compared as part of the first boolean: it is declared state
+// alongside Properties, not provider-observed metadata, so a resource whose
+// ownership record alone changed must not be reported identical — a
+// record-only update (see resource_update.ResourceUpdate.RecordOnly) carries
+// byte-identical Properties/ReadOnlyProperties by construction, and this is
+// the only signal that distinguishes it from a genuine no-op write.
 func ResourcesAreEqual(resource1, resource2 *pkgmodel.Resource) (bool, bool) {
 	readWriteEqual, readOnlyEqual := true, true
 
@@ -23,6 +41,10 @@ func ResourcesAreEqual(resource1, resource2 *pkgmodel.Resource) (bool, bool) {
 	}
 
 	if !util.JsonEqualRaw(resource1.Properties, resource2.Properties) {
+		readWriteEqual = false
+	}
+
+	if !pkgmodel.OwnedMembersEqual(resource1.OwnedMembers, resource2.OwnedMembers) {
 		readWriteEqual = false
 	}
 

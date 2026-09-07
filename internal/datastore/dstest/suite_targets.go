@@ -250,6 +250,48 @@ func RunCountResourcesInTarget(t *testing.T, newDS func(t *testing.T) TestDatast
 	})
 }
 
+// RunCountResourcesInTargetUsesByteOrderForVersionComparison pins that
+// CountResourcesInTarget's "latest version" subquery compares version strings
+// in byte order, not under a case-insensitive collation. Two rows with the
+// same uri but versions differing only in case ('MMM...' vs 'mmm...') compare
+// equal under CI collation, so a faulty implementation would treat both as
+// "latest" and miss the delete tombstone on the byte-greater one.
+func RunCountResourcesInTargetUsesByteOrderForVersionComparison(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("CountResourcesInTarget_UsesByteOrderForVersionComparison", func(t *testing.T) {
+		td := newDS(t)
+		defer td.CleanUpFn() //nolint:errcheck
+
+		if td.RawInsertResource == nil {
+			t.Skip("backend does not expose RawInsertResource")
+		}
+
+		target := &pkgmodel.Target{
+			Label:     "target-collation",
+			Namespace: "test",
+			Config:    json.RawMessage(`{}`),
+		}
+		if _, err := td.CreateTarget(target); err != nil {
+			t.Fatalf("CreateTarget: %v", err)
+		}
+
+		// Same uri, two versions differing only in case. The byte-greater
+		// (lowercase) row is the delete tombstone — so the correct count is 0.
+		uri := "test://collation"
+		if err := td.RawInsertResource(uri, "MMMMMMMMMMMMMMMMMMMMMMMMMMMM", "target-collation", "create"); err != nil {
+			t.Fatalf("seed create: %v", err)
+		}
+		if err := td.RawInsertResource(uri, "mmmmmmmmmmmmmmmmmmmmmmmmmmmm", "target-collation", "delete"); err != nil {
+			t.Fatalf("seed delete: %v", err)
+		}
+
+		count, err := td.CountResourcesInTarget("target-collation")
+		assert.NoError(t, err)
+		assert.Equal(t, 0, count,
+			"latest version is the delete tombstone (byte order: lowercase > uppercase); "+
+				"a case-insensitive comparison would treat the rows as equal and miss the delete")
+	})
+}
+
 func RunDeleteTargetSuccess(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	t.Run("DeleteTarget_Success", func(t *testing.T) {
 		td := newDS(t)

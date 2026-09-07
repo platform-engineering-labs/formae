@@ -74,17 +74,19 @@ func (j JSON) SerializeForma(forma *model.Forma, options *schema.SerializeOption
 
 		data = simplifiedResources
 	} else {
-		// Full structure with Stacks, Targets, Resources, and Policies
+		// Full structure with Stacks, Targets, Resources, Policies, and Generators
 		data = struct {
-			Stacks    []model.Stack     `json:"Stacks,omitempty"`
-			Targets   []model.Target    `json:"Targets,omitempty"`
-			Policies  []json.RawMessage `json:"Policies,omitempty"`
-			Resources []model.Resource  `json:"Resources,omitempty"`
+			Stacks     []model.Stack     `json:"Stacks,omitempty"`
+			Targets    []model.Target    `json:"Targets,omitempty"`
+			Policies   []json.RawMessage `json:"Policies,omitempty"`
+			Generators []json.RawMessage `json:"Generators,omitempty"`
+			Resources  []model.Resource  `json:"Resources,omitempty"`
 		}{
-			Stacks:    forma.Stacks,
-			Targets:   forma.Targets,
-			Policies:  forma.Policies,
-			Resources: forma.Resources,
+			Stacks:     forma.Stacks,
+			Targets:    forma.Targets,
+			Policies:   forma.Policies,
+			Generators: forma.Generators,
+			Resources:  forma.Resources,
 		}
 	}
 
@@ -127,7 +129,7 @@ func highlight(code []byte) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (j JSON) GenerateSourceCode(forma *model.Forma, targetPath string, includes []string, schemaLocation schema.SchemaLocation) (schema.GenerateSourcesResult, error) {
+func (j JSON) GenerateSourceCode(forma *model.Forma, targetPath string, includes []string, options *schema.SerializeOptions) (schema.GenerateSourcesResult, error) {
 	return schema.GenerateSourcesResult{}, errors.ErrUnsupported
 }
 

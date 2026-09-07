@@ -12,7 +12,6 @@ import (
 	"sort"
 	"strings"
 
-	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
@@ -29,6 +28,16 @@ type ExpectedResource struct {
 	Index      int
 	Properties string
 	State      ResourceState
+	// CurrentLabel overrides the default index-derived label for this slot.
+	// Set when an OpRename has renamed the slot's resource. Empty means the
+	// slot uses the default label produced by resourceLabelForStack().
+	// (RFC-0041 follow-up: enables OpRename in the rapid generators.)
+	CurrentLabel string
+	// PreviousLabel is the label this slot carried before the most recent
+	// rename. Used by OpRename invariants and by executeRename to build the
+	// `alias` field on the next forma. Cleared once a subsequent rename
+	// records its own previous label.
+	PreviousLabel string
 }
 
 // ExpectedUnmanagedResource tracks the expected state of a discovered
@@ -40,22 +49,6 @@ type ExpectedUnmanagedResource struct {
 	InventoryProperties string
 	PresentInCloud      bool
 	PresentInInventory  bool
-}
-
-// ExpectedManagedDrift tracks the cloud-side state of a managed resource after
-// out-of-band changes and the inventory state observed after sync.
-type ExpectedManagedDrift struct {
-	StackLabel          string
-	ResourceLabel       string
-	ResourceType        string
-	NativeID            string
-	CloudProperties     string
-	InventoryProperties string
-	SnapshotProperties  string
-	SnapshotState       ResourceState
-	PresentInCloud      bool
-	PresentInInventory  bool
-	PendingSync         bool
 }
 
 // StackState holds the per-stack state: resources.
@@ -86,14 +79,32 @@ type StateModel struct {
 	// UnmanagedResources tracks out-of-band cloud resources and whether they are
 	// expected to have been ingested into the unmanaged inventory.
 	UnmanagedResources map[string]*ExpectedUnmanagedResource
-	// ManagedDriftedResources tracks managed resources that have been mutated or
-	// deleted out-of-band so sync behavior can be asserted explicitly.
-	ManagedDriftedResources map[string]*ExpectedManagedDrift
 	AuthoritativeSlots map[string]bool
+	// DeletedNativeIDs maps "stackIdx:slotIdx" → the NativeID of the
+	// incarnation whose folded delete RU made the slot authoritative. A
+	// create RU carrying the same NativeID predates that delete (a delete
+	// can only succeed on an incarnation that already existed), so it must
+	// not resurrect the slot however late its command drains. Cleared with
+	// the slot's authoritative mark.
+	DeletedNativeIDs map[string]string
 	// NativeIDs maps "stackIdx:slotIdx" → cloud native ID (e.g. "test-42").
 	// Populated from command response ResourceUpdate.NativeID on successful
 	// creates/updates. Cleared on successful deletes.
 	NativeIDs map[string]string
+	// Ksuids maps "stackIdx:slotIdx" → the resource's KSUID, populated from
+	// command response ResourceUpdate.ResourceID the same way as NativeIDs.
+	// A rename must keep both stable; the correction path checks that.
+	Ksuids map[string]string
+	// PendingViolations collects violations detected while correcting the
+	// model from command outcomes (e.g. an update RU that changed a
+	// resource's identity). Drained and asserted by AssertAllInvariants.
+	PendingViolations []Violation
+	// DriftExcludedStacks marks stacks whose resources are no longer valid
+	// drift targets this iteration: a canceled changeset can leave its
+	// resources registered as in-progress with the synchronizer for an
+	// unobservable time, during which sync skips them and drift on them
+	// cannot absorb deterministically.
+	DriftExcludedStacks map[int]bool
 }
 
 // NewStateModel creates a state model with the given number of stacks,
@@ -142,15 +153,23 @@ func NewStateModel(stackCount, resourcesPerStack int) *StateModel {
 		providerLabel = stacks[0].Label
 	}
 	return &StateModel{
-		Stacks:                  stacks,
-		ResourcesPerStack:       resourcesPerStack,
-		Pool:                    pool,
-		ProviderStackLabel:      providerLabel,
-		UnmanagedResources:      make(map[string]*ExpectedUnmanagedResource),
-		ManagedDriftedResources: make(map[string]*ExpectedManagedDrift),
-		AuthoritativeSlots:      make(map[string]bool),
-		NativeIDs:               make(map[string]string),
+		Stacks:              stacks,
+		ResourcesPerStack:   resourcesPerStack,
+		Pool:                pool,
+		ProviderStackLabel:  providerLabel,
+		UnmanagedResources:  make(map[string]*ExpectedUnmanagedResource),
+		AuthoritativeSlots:  make(map[string]bool),
+		DeletedNativeIDs:    make(map[string]string),
+		NativeIDs:           make(map[string]string),
+		Ksuids:              make(map[string]string),
+		DriftExcludedStacks: make(map[int]bool),
 	}
+}
+
+// MarkDriftExcludedStack removes a stack's resources from drift targeting for
+// the rest of the iteration. See DriftExcludedStacks.
+func (m *StateModel) MarkDriftExcludedStack(stackIdx int) {
+	m.DriftExcludedStacks[stackIdx] = true
 }
 
 func slotKeyString(stackIdx, slotIdx int) string {
@@ -175,18 +194,86 @@ func (m *StateModel) ClearNativeID(stackIdx, slotIdx int) {
 	delete(m.NativeIDs, nativeIDKey(stackIdx, slotIdx))
 }
 
-// FindExistingResourceWithNativeID finds a managed resource that exists in the
-// model and has a tracked NativeID. Used for selecting OOB drift targets.
-// The sequenceNum is used for deterministic selection (modulo eligible count).
-func (m *StateModel) FindExistingResourceWithNativeID(sequenceNum int) (stackIdx, slotIdx int, stackLabel, resourceLabel, resourceType, nativeID string, ok bool) {
+// SupersedeSlots marks the given slots as superseded on every currently
+// accepted command. Called when a TTL destroy is observed: every command
+// still in AcceptedCommands was accepted before that destroy, so whatever
+// those commands report for these slots is stale and corrections must not
+// apply it.
+func (m *StateModel) SupersedeSlots(refs []ResourceSlotRef) {
+	if len(refs) == 0 {
+		return
+	}
+	for i := range m.AcceptedCommands {
+		if m.AcceptedCommands[i].SupersededSlots == nil {
+			m.AcceptedCommands[i].SupersededSlots = make(map[ResourceSlotRef]bool, len(refs))
+		}
+		for _, ref := range refs {
+			m.AcceptedCommands[i].SupersededSlots[ref] = true
+		}
+	}
+}
+
+func (m *StateModel) SetKsuid(stackIdx, slotIdx int, ksuid string) {
+	if ksuid != "" {
+		m.Ksuids[nativeIDKey(stackIdx, slotIdx)] = ksuid
+	}
+}
+
+func (m *StateModel) GetKsuid(stackIdx, slotIdx int) string {
+	return m.Ksuids[nativeIDKey(stackIdx, slotIdx)]
+}
+
+func (m *StateModel) ClearKsuid(stackIdx, slotIdx int) {
+	delete(m.Ksuids, nativeIDKey(stackIdx, slotIdx))
+}
+
+// AddPendingViolation records a violation detected outside the invariant
+// checks (e.g. during command-outcome correction). Asserted and cleared by
+// AssertAllInvariants.
+func (m *StateModel) AddPendingViolation(v Violation) {
+	m.PendingViolations = append(m.PendingViolations, v)
+}
+
+// FindDriftEligibleResource finds a managed resource that exists in the model,
+// has a tracked NativeID, and is untouched by in-flight commands. Used for
+// selecting OOB drift targets: drift is absorbed synchronously via a forced
+// sync, which only converges deterministically for resources no in-flight
+// command can create, update, or (via the reconcile guarantee) delete.
+//
+// A slot is excluded when its stack has an accepted command, and a cross-stack
+// slot is additionally excluded while the provider stack (stack 0) has one,
+// because provider-stack cascades reach cross-stack dependents.
+//
+// The sequenceNum selects deterministically (modulo eligible count) from a
+// stably ordered candidate list.
+func (m *StateModel) FindDriftEligibleResource(sequenceNum int) (stackIdx, slotIdx int, stackLabel, resourceLabel, resourceType, nativeID string, ok bool) {
+	busyStacks := make(map[int]bool)
+	for _, ac := range m.AcceptedCommands {
+		for _, ref := range ac.RequestedSlots {
+			busyStacks[ref.StackIndex] = true
+		}
+	}
+	for stackIdx := range m.DriftExcludedStacks {
+		busyStacks[stackIdx] = true
+	}
+
 	type candidate struct {
-		stackIdx, slotIdx         int
-		stackLabel, label, rType  string
-		nativeID                  string
+		stackIdx, slotIdx        int
+		stackLabel, label, rType string
+		nativeID                 string
 	}
 	var eligible []candidate
 	for si, stack := range m.Stacks {
-		for idx, res := range stack.Resources {
+		if busyStacks[si] {
+			continue
+		}
+		slots := make([]int, 0, len(stack.Resources))
+		for idx := range stack.Resources {
+			slots = append(slots, idx)
+		}
+		sort.Ints(slots)
+		for _, idx := range slots {
+			res := stack.Resources[idx]
 			if res == nil || res.State != StateExists {
 				continue
 			}
@@ -194,12 +281,10 @@ func (m *StateModel) FindExistingResourceWithNativeID(sequenceNum int) (stackIdx
 			if nid == "" {
 				continue
 			}
-			var label string
-			if m.Pool != nil {
-				label = m.Pool.LabelForStack(stack.Label, idx)
-			} else {
-				label = resourceLabelForStack(stack.Label, idx)
+			if m.Pool != nil && m.Pool.IsCrossStack(idx) && busyStacks[0] {
+				continue
 			}
+			label := m.LabelForResource(si, idx)
 			var rType string
 			if m.Pool != nil {
 				rType = m.Pool.Slots[idx].Type
@@ -216,32 +301,24 @@ func (m *StateModel) FindExistingResourceWithNativeID(sequenceNum int) (stackIdx
 	return c.stackIdx, c.slotIdx, c.stackLabel, c.label, c.rType, c.nativeID, true
 }
 
-// NativeIDsByLabel returns a map of "stackLabel:resourceLabel" → NativeID for
-// all tracked native IDs. This matches the format expected by
-// buildPluginOpSequences and resolveReadMatchKey.
-func (m *StateModel) NativeIDsByLabel() map[string]string {
-	result := make(map[string]string, len(m.NativeIDs))
-	for key, nativeID := range m.NativeIDs {
-		var stackIdx, slotIdx int
-		fmt.Sscanf(key, "%d:%d", &stackIdx, &slotIdx)
-		stackLabel := m.Stacks[stackIdx].Label
-		var label string
-		if m.Pool != nil {
-			label = m.Pool.LabelForStack(stackLabel, slotIdx)
-		} else {
-			label = resourceLabelForStack(stackLabel, slotIdx)
-		}
-		result[stackLabel+":"+label] = nativeID
-	}
-	return result
-}
-
 func (m *StateModel) MarkAuthoritativeSlot(stackIdx, slotIdx int) {
 	m.AuthoritativeSlots[slotKeyString(stackIdx, slotIdx)] = true
 }
 
 func (m *StateModel) ClearAuthoritativeSlot(stackIdx, slotIdx int) {
 	delete(m.AuthoritativeSlots, slotKeyString(stackIdx, slotIdx))
+	delete(m.DeletedNativeIDs, slotKeyString(stackIdx, slotIdx))
+}
+
+func (m *StateModel) SetDeletedNativeID(stackIdx, slotIdx int, nativeID string) {
+	if nativeID == "" {
+		return
+	}
+	m.DeletedNativeIDs[slotKeyString(stackIdx, slotIdx)] = nativeID
+}
+
+func (m *StateModel) DeletedNativeID(stackIdx, slotIdx int) string {
+	return m.DeletedNativeIDs[slotKeyString(stackIdx, slotIdx)]
 }
 
 func (m *StateModel) IsAuthoritativeSlot(stackIdx, slotIdx int) bool {
@@ -260,208 +337,20 @@ func (m *StateModel) ClearAuthorityForStack(stackIdx int) {
 	}
 }
 
-func (m *StateModel) ApplyManagedCloudModify(stackLabel, resourceLabel, resourceType, nativeID, properties string) {
-	if nativeID == "" {
-		return
-	}
-	res := m.ManagedDriftedResources[nativeID]
-	if res == nil {
-		res = &ExpectedManagedDrift{NativeID: nativeID}
-		if stackIdx, slotIdx, ok := m.findResourceSlot(stackLabel, resourceLabel); ok {
-			if existing := m.Resource(stackIdx, slotIdx); existing != nil {
-				res.SnapshotProperties = existing.Properties
-				res.SnapshotState = existing.State
-			}
-		}
-		m.ManagedDriftedResources[nativeID] = res
-	}
-	res.StackLabel = stackLabel
-	res.ResourceLabel = resourceLabel
-	res.ResourceType = resourceType
-	res.CloudProperties = properties
-	res.PresentInCloud = true
-	res.PendingSync = true
-}
-
-func (m *StateModel) ApplyManagedCloudDelete(stackLabel, resourceLabel, resourceType, nativeID string) {
-	if nativeID == "" {
-		return
-	}
-	res := m.ManagedDriftedResources[nativeID]
-	if res == nil {
-		res = &ExpectedManagedDrift{NativeID: nativeID}
-		if stackIdx, slotIdx, ok := m.findResourceSlot(stackLabel, resourceLabel); ok {
-			if existing := m.Resource(stackIdx, slotIdx); existing != nil {
-				res.SnapshotProperties = existing.Properties
-				res.SnapshotState = existing.State
-			}
-		}
-		m.ManagedDriftedResources[nativeID] = res
-	}
-	res.StackLabel = stackLabel
-	res.ResourceLabel = resourceLabel
-	res.ResourceType = resourceType
-	res.CloudProperties = ""
-	res.PresentInCloud = false
-	res.PendingSync = true
-}
-
-func (m *StateModel) ApplySyncToManagedDrift() {
-	for nativeID, expected := range m.ManagedDriftedResources {
-		expected.PendingSync = false
-		if expected.PresentInCloud {
-			actual := pkgmodel.Resource{
-				Stack:      expected.StackLabel,
-				Label:      expected.ResourceLabel,
-				Type:       expected.ResourceType,
-				NativeID:   expected.NativeID,
-				Managed:    true,
-				Properties: []byte(expected.CloudProperties),
-			}
-			m.applyManagedDriftToResource(expected, &actual)
-		} else {
-			m.applyManagedDriftToResource(expected, nil)
-		}
-		delete(m.ManagedDriftedResources, nativeID)
-	}
-}
-
-func (m *StateModel) ApplySyncCommand(cmd *apimodel.Command) {
-	if cmd == nil {
-		return
-	}
-	for _, ru := range cmd.ResourceUpdates {
-		if ru.State != "Success" {
-			continue
-		}
-		if driftNativeID, drift, ok := m.managedDriftForResource(ru.StackName, ru.ResourceLabel); ok {
-			if ru.Operation == "delete" {
-				drift.PresentInCloud = false
-				m.applyManagedDriftToResource(drift, nil)
-			} else if ru.Properties != nil {
-				drift.PresentInCloud = true
-				drift.CloudProperties = string(ru.Properties)
-				actual := pkgmodel.Resource{Stack: ru.StackName, Label: ru.ResourceLabel, Type: ru.ResourceType, Managed: true, Properties: ru.Properties}
-				m.applyManagedDriftToResource(drift, &actual)
-			}
-			drift.PendingSync = false
-			delete(m.ManagedDriftedResources, driftNativeID)
-		}
-	}
-}
-
-func (m *StateModel) ApplyDiscoveryCommand(cmd *apimodel.Command) {
-	m.ApplyDiscoveryToUnmanaged()
-}
-
-func (m *StateModel) managedDriftForResource(stackLabel, resourceLabel string) (string, *ExpectedManagedDrift, bool) {
-	for nativeID, drift := range m.ManagedDriftedResources {
-		if drift.StackLabel == stackLabel && drift.ResourceLabel == resourceLabel {
-			return nativeID, drift, true
-		}
-	}
-	return "", nil, false
-}
-
-func (m *StateModel) PendingManagedDriftNativeIDs() map[string]bool {
-	ignore := make(map[string]bool)
-	for nativeID, res := range m.ManagedDriftedResources {
-		if res.PendingSync {
-			ignore[nativeID] = true
-		}
-	}
-	return ignore
-}
-
-func (m *StateModel) ManagedDriftNativeIDs() map[string]bool {
-	ignore := make(map[string]bool)
-	for nativeID := range m.ManagedDriftedResources {
-		ignore[nativeID] = true
-	}
-	return ignore
-}
-
-func (m *StateModel) PendingManagedDriftCloudState() (map[string]string, map[string]bool) {
-	propsByNativeID := make(map[string]string)
-	deleted := make(map[string]bool)
-	for nativeID, res := range m.ManagedDriftedResources {
-		if !res.PendingSync {
-			continue
-		}
-		if res.PresentInCloud {
-			propsByNativeID[nativeID] = res.CloudProperties
-		} else {
-			deleted[nativeID] = true
-		}
-	}
-	return propsByNativeID, deleted
-}
-
-func (m *StateModel) HasPendingManagedDriftForResource(stackLabel, resourceLabel string) bool {
-	for _, res := range m.ManagedDriftedResources {
-		if res.PendingSync && res.StackLabel == stackLabel && res.ResourceLabel == resourceLabel {
-			return true
-		}
-	}
-	return false
-}
-
-func (m *StateModel) HasPendingManagedDriftAffectingSlot(stackIdx, slotIdx int) bool {
-	stack := m.Stack(stackIdx)
-	if stack == nil {
-		return false
-	}
-	label := m.LabelForResource(stackIdx, slotIdx)
-	if m.HasPendingManagedDriftForResource(stack.Label, label) {
-		return true
-	}
-	if m.Pool == nil {
-		return false
-	}
-	current := slotIdx
-	for current >= 0 {
-		slot := m.Pool.Slots[current]
-		if slot.ParentIndex >= 0 {
-			parentLabel := m.LabelForResource(stackIdx, slot.ParentIndex)
-			if m.HasPendingManagedDriftForResource(stack.Label, parentLabel) {
-				return true
-			}
-		}
-		current = slot.ParentIndex
-	}
-	if m.Pool.IsCrossStack(slotIdx) && m.ProviderStackLabel != "" {
-		parentSlot := m.Pool.Slots[slotIdx].CrossStackParentSlot
-		if parentSlot >= 0 && m.HasPendingManagedDriftForResource(m.ProviderStackLabel, m.LabelForResource(0, parentSlot)) {
-			return true
-		}
-	}
-	return false
-}
-
-func (m *StateModel) ClearManagedDriftForResource(stackLabel, resourceLabel string) {
-	for nativeID, res := range m.ManagedDriftedResources {
-		if res.StackLabel == stackLabel && res.ResourceLabel == resourceLabel {
-			delete(m.ManagedDriftedResources, nativeID)
-		}
-	}
-}
-
-func (m *StateModel) applyManagedDriftToResource(expected *ExpectedManagedDrift, actual *pkgmodel.Resource) {
-	stackIdx, slotIdx, ok := m.findResourceSlot(expected.StackLabel, expected.ResourceLabel)
-	if !ok {
-		return
-	}
-
-	if actual == nil {
-		m.ApplyDestroyed(stackIdx, []int{slotIdx})
-		m.MarkAuthoritativeSlot(stackIdx, slotIdx)
-		m.refreshDependentParentReferences(stackIdx, slotIdx)
-		return
-	}
-	props := m.NormalizePropertiesForResource(stackIdx, slotIdx, string(actual.Properties))
+// ApplyManagedCloudModify records the deterministic end state of an
+// out-of-band modify on a managed resource: the agent's sync absorbs the
+// drift, so inventory converges on the cloud properties.
+func (m *StateModel) ApplyManagedCloudModify(stackIdx, slotIdx int, properties string) {
+	props := m.NormalizePropertiesForResource(stackIdx, slotIdx, properties)
 	m.ApplyCreated(stackIdx, []int{slotIdx}, props)
-	m.MarkAuthoritativeSlot(stackIdx, slotIdx)
-	m.refreshDependentParentReferences(stackIdx, slotIdx)
+}
+
+// ApplyManagedCloudDelete records the deterministic end state of an
+// out-of-band delete of a managed resource: the agent's sync observes the
+// deletion and drops the resource from inventory.
+func (m *StateModel) ApplyManagedCloudDelete(stackIdx, slotIdx int) {
+	m.ApplyDestroyed(stackIdx, []int{slotIdx})
+	m.ClearNativeID(stackIdx, slotIdx)
 }
 
 func (m *StateModel) findResourceSlot(stackLabel, resourceLabel string) (int, int, bool) {
@@ -481,49 +370,6 @@ func (m *StateModel) findResourceSlot(stackLabel, resourceLabel string) (int, in
 		}
 	}
 	return -1, -1, false
-}
-
-func (m *StateModel) refreshDependentParentReferences(stackIdx, slotIdx int) {
-	if m.Pool == nil {
-		return
-	}
-	for dependent := range m.Stack(stackIdx).Resources {
-		if dependent == slotIdx {
-			continue
-		}
-		if m.Pool.Slots[dependent].ParentIndex != slotIdx {
-			continue
-		}
-		res := m.Resource(stackIdx, dependent)
-		if res == nil || res.State != StateExists || res.Properties == "" {
-			continue
-		}
-		updated := m.NormalizePropertiesForResource(stackIdx, dependent, res.Properties)
-		res.Properties = updated
-		m.refreshDependentParentReferences(stackIdx, dependent)
-	}
-
-	if m.ProviderStackLabel == "" || m.Stack(stackIdx).Label != m.ProviderStackLabel {
-		return
-	}
-	for consumerStackIdx := range m.Stacks {
-		if consumerStackIdx == stackIdx {
-			continue
-		}
-		for dependent := range m.Stack(consumerStackIdx).Resources {
-			if !m.Pool.IsCrossStack(dependent) {
-				continue
-			}
-			if m.Pool.Slots[dependent].CrossStackParentSlot != slotIdx {
-				continue
-			}
-			res := m.Resource(consumerStackIdx, dependent)
-			if res == nil || res.State != StateExists || res.Properties == "" {
-				continue
-			}
-			res.Properties = m.NormalizePropertiesForResource(consumerStackIdx, dependent, res.Properties)
-		}
-	}
 }
 
 func (m *StateModel) EnsureUnmanagedResource(nativeID, resourceType, properties string) *ExpectedUnmanagedResource {
@@ -566,9 +412,65 @@ func (m *StateModel) ApplyUnmanagedCloudDelete(nativeID string) {
 	res.CloudProperties = ""
 }
 
-func (m *StateModel) ApplyDiscoveryToUnmanaged() {
+// unmanagedParentTypeOf mirrors the test plugin's parent-child list mapping:
+// child resources are listed by filtering their ParentId against a parent
+// row's current Name.
+var unmanagedParentTypeOf = map[string]string{
+	"Test::Generic::ChildResource":      "Test::Generic::Resource",
+	"Test::Generic::GrandchildResource": "Test::Generic::ChildResource",
+}
+
+// discoverableUnmanaged returns the native ids discovery can actually reach.
+// Top-level resources are always listable. A child or grandchild is listable
+// only while some already-ingested or reachable resource of its parent type
+// still carries the Name its ParentId references: the plugin lists children
+// by ParentId == parent.Name, so a parent renamed out-of-band before its
+// children were ingested orphans them (and their descendants, transitively).
+func (m *StateModel) discoverableUnmanaged() map[string]bool {
+	// Names offered per resource type by rows discovery can consult as parents.
+	availableNames := make(map[string]map[string]bool)
+	addName := func(resType, properties string) {
+		var p struct{ Name string }
+		if properties == "" || json.Unmarshal([]byte(properties), &p) != nil || p.Name == "" {
+			return
+		}
+		if availableNames[resType] == nil {
+			availableNames[resType] = make(map[string]bool)
+		}
+		availableNames[resType][p.Name] = true
+	}
 	for _, res := range m.UnmanagedResources {
-		if !res.PresentInCloud {
+		if res.PresentInInventory {
+			addName(res.ResourceType, res.InventoryProperties)
+		}
+	}
+
+	reachable := make(map[string]bool)
+	for changed := true; changed; {
+		changed = false
+		for nativeID, res := range m.UnmanagedResources {
+			if reachable[nativeID] || !res.PresentInCloud {
+				continue
+			}
+			if parentType, isChild := unmanagedParentTypeOf[res.ResourceType]; isChild {
+				var p struct{ ParentId string }
+				if json.Unmarshal([]byte(res.CloudProperties), &p) != nil ||
+					!availableNames[parentType][p.ParentId] {
+					continue
+				}
+			}
+			reachable[nativeID] = true
+			addName(res.ResourceType, res.CloudProperties)
+			changed = true
+		}
+	}
+	return reachable
+}
+
+func (m *StateModel) ApplyDiscoveryToUnmanaged() {
+	discoverable := m.discoverableUnmanaged()
+	for nativeID, res := range m.UnmanagedResources {
+		if !res.PresentInCloud || !discoverable[nativeID] {
 			continue
 		}
 		res.PresentInInventory = true
@@ -611,13 +513,75 @@ func (m *StateModel) Resource(stackIndex, idx int) *ExpectedResource {
 	return m.Stacks[stackIndex].Resources[idx]
 }
 
-// LabelForResource returns the expected label for the resource slot on the stack.
+// LabelForResource returns the expected label for the resource slot on the
+// stack. RFC-0041: after a RecordRename, the slot's CurrentLabel overrides
+// the index-derived default; invariant checks and findResourceSlot rely on
+// this to match a renamed slot against its inventory row by the new label.
 func (m *StateModel) LabelForResource(stackIndex, idx int) string {
+	if stackIndex >= 0 && stackIndex < len(m.Stacks) {
+		if res, ok := m.Stacks[stackIndex].Resources[idx]; ok && res != nil && res.CurrentLabel != "" {
+			return res.CurrentLabel
+		}
+	}
 	stackLabel := m.Stacks[stackIndex].Label
 	if m.Pool != nil {
 		return m.Pool.LabelForStack(stackLabel, idx)
 	}
 	return resourceLabelForStack(stackLabel, idx)
+}
+
+// DefaultLabelForResource returns the index-derived label for the slot,
+// ignoring any rename overlay. This is the label a slot gets on (re)create.
+func (m *StateModel) DefaultLabelForResource(stackIndex, idx int) string {
+	stackLabel := m.Stacks[stackIndex].Label
+	if m.Pool != nil {
+		return m.Pool.LabelForStack(stackLabel, idx)
+	}
+	return resourceLabelForStack(stackLabel, idx)
+}
+
+// RecordRename updates the model after a rename was accepted. After this
+// call, LabelForResource returns newLabel and the slot remembers the label
+// it carried immediately before.
+func (m *StateModel) RecordRename(stackIdx, slotIdx int, newLabel string) {
+	res, ok := m.Stack(stackIdx).Resources[slotIdx]
+	if !ok || res == nil {
+		return
+	}
+	res.PreviousLabel = m.LabelForResource(stackIdx, slotIdx)
+	res.CurrentLabel = newLabel
+}
+
+// StackIndexByLabel returns the stack index for the given stack label, or -1
+// if no stack with that label exists.
+func (m *StateModel) StackIndexByLabel(label string) int {
+	for i := range m.Stacks {
+		if m.Stacks[i].Label == label {
+			return i
+		}
+	}
+	return -1
+}
+
+// LabelOverrides returns a map of slot index -> current label for slots that
+// have been renamed. Callers that build a forma for a stack pass this map to
+// FormaFromPoolResources / FormaFromStackResources so the constructed forma
+// carries and references resources by their post-rename labels. A nil map
+// means every slot uses its default index-derived label.
+func (m *StateModel) LabelOverrides(stackIdx int) map[int]string {
+	if stackIdx < 0 || stackIdx >= len(m.Stacks) {
+		return nil
+	}
+	var overrides map[int]string
+	for idx, res := range m.Stack(stackIdx).Resources {
+		if res != nil && res.CurrentLabel != "" {
+			if overrides == nil {
+				overrides = make(map[int]string)
+			}
+			overrides[idx] = res.CurrentLabel
+		}
+	}
+	return overrides
 }
 
 // TypeForResource returns the expected type for the resource slot.
@@ -657,6 +621,11 @@ func (m *StateModel) ApplyCreatedResolved(stackIndex int, propertiesByID map[int
 }
 
 // ApplyDestroyed marks the given resources on the given stack as not existing.
+// The rename overlay is deliberately kept: a destroyed slot's label stays at
+// its renamed value, so a later recreate targets the same label the engine
+// last knew the slot by. Clearing it would make a recreate after a FAILED
+// destroy (real resource still alive under the renamed label) declare a
+// second resource under the default label.
 func (m *StateModel) ApplyDestroyed(stackIndex int, resourceIDs []int) {
 	stack := &m.Stacks[stackIndex]
 	for _, id := range resourceIDs {
@@ -736,10 +705,12 @@ func (m *StateModel) SnapshotResources(stackIndex int, resourceIDs []int) []Reso
 		res := m.Resource(stackIndex, id)
 		if res != nil {
 			snapshots = append(snapshots, ResourceSnapshot{
-				StackIndex: stackIndex,
-				SlotIndex:  id,
-				State:      res.State,
-				Properties: res.Properties,
+				StackIndex:    stackIndex,
+				SlotIndex:     id,
+				State:         res.State,
+				Properties:    res.Properties,
+				CurrentLabel:  res.CurrentLabel,
+				PreviousLabel: res.PreviousLabel,
 			})
 		}
 	}
@@ -753,6 +724,8 @@ func (m *StateModel) RevertResources(snapshots []ResourceSnapshot) {
 		if res != nil {
 			res.State = snap.State
 			res.Properties = snap.Properties
+			res.CurrentLabel = snap.CurrentLabel
+			res.PreviousLabel = snap.PreviousLabel
 		}
 	}
 }
@@ -807,6 +780,137 @@ func (m *StateModel) ResolvePropertiesForResource(stackIndex, id int, properties
 	resolved := strings.Replace(childProperties, `"NAME"`, `"`+label+`"`, 1)
 	parentLabel := m.parentIdentifierForResource(stackIndex, id)
 	return strings.Replace(resolved, `"PARENT_ID"`, `"`+parentLabel+`"`, 1)
+}
+
+// ResolvePatchPropertiesForResources expands per-operation property templates
+// into the exact expected post-patch properties for the given resource IDs.
+// A patch is a per-field diff against the current resource, not a declaration
+// of complete state, so for slots that already exist the drawn properties are
+// merged with the current ones under the agent's field semantics: an empty
+// array means "not specified" (the agent strips empty arrays), set-typed
+// fields are additive, entity-set fields upsert by their key field,
+// array-typed fields replace wholesale, and scalars replace. A patch whose
+// fields are all no-ops therefore predicts the current properties exactly,
+// matching the empty diff for which the agent issues no resource update.
+// Slots that do not exist yet are created with the drawn properties verbatim.
+func (m *StateModel) ResolvePatchPropertiesForResources(stackIndex int, resourceIDs []int, properties, childProperties string) map[int]string {
+	propertiesByID := make(map[int]string, len(resourceIDs))
+	for _, id := range resourceIDs {
+		resolved := m.ResolvePropertiesForResource(stackIndex, id, properties, childProperties)
+		if res := m.Resource(stackIndex, id); res != nil && res.State == StateExists && res.Properties != "" {
+			resolved = mergePatchProperties(res.Properties, resolved, testResourceSchema.Hints)
+		}
+		propertiesByID[id] = resolved
+	}
+	return propertiesByID
+}
+
+func mergePatchProperties(currentJSON, patchJSON string, hints map[string]pkgmodel.FieldHint) string {
+	var current, patch map[string]any
+	if err := json.Unmarshal([]byte(currentJSON), &current); err != nil {
+		return patchJSON
+	}
+	if err := json.Unmarshal([]byte(patchJSON), &patch); err != nil {
+		return patchJSON
+	}
+	merged := make(map[string]any, len(current)+len(patch))
+	for k, v := range current {
+		merged[k] = v
+	}
+	for k, v := range patch {
+		arr, isArr := v.([]any)
+		if !isArr {
+			merged[k] = v
+			continue
+		}
+		if len(arr) == 0 {
+			continue
+		}
+		cur, _ := merged[k].([]any)
+		switch hints[k].UpdateMethod {
+		case pkgmodel.FieldUpdateMethodArray:
+			// EnsureExists never removes array elements: a desired array no
+			// shorter than the current one converges element-wise onto the
+			// desired value, while a shorter one leaves the current elements
+			// in place and appends only the elements not already present.
+			if len(arr) >= len(cur) {
+				merged[k] = arr
+			} else {
+				merged[k] = unionByValue(cur, arr)
+			}
+		case pkgmodel.FieldUpdateMethodEntitySet:
+			merged[k] = upsertByEntityKey(cur, arr, hints[k].IndexField)
+		default:
+			merged[k] = unionByValue(cur, arr)
+		}
+	}
+	b, err := json.Marshal(merged)
+	if err != nil {
+		return patchJSON
+	}
+	return string(b)
+}
+
+// unionByValue keeps the current elements in order and appends patch elements
+// not already present (JSON equality).
+func unionByValue(current, patch []any) []any {
+	out := append([]any(nil), current...)
+	for _, p := range patch {
+		if !containsJSONValue(out, p) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func containsJSONValue(arr []any, target any) bool {
+	tb, err := json.Marshal(target)
+	if err != nil {
+		return false
+	}
+	for _, e := range arr {
+		eb, err := json.Marshal(e)
+		if err != nil {
+			continue
+		}
+		if string(eb) == string(tb) {
+			return true
+		}
+	}
+	return false
+}
+
+// upsertByEntityKey replaces current elements whose key field matches a patch
+// element in place and appends patch elements with new keys.
+func upsertByEntityKey(current, patch []any, keyField string) []any {
+	keyOf := func(e any) (string, bool) {
+		m, ok := e.(map[string]any)
+		if !ok {
+			return "", false
+		}
+		k, ok := m[keyField].(string)
+		return k, ok
+	}
+	out := append([]any(nil), current...)
+	usedKeys := make(map[string]bool)
+	for i, e := range out {
+		ek, ok := keyOf(e)
+		if !ok {
+			continue
+		}
+		for _, p := range patch {
+			if pk, ok := keyOf(p); ok && pk == ek {
+				out[i] = p
+				usedKeys[pk] = true
+			}
+		}
+	}
+	for _, p := range patch {
+		if pk, ok := keyOf(p); ok && !usedKeys[pk] {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // NormalizePropertiesForResource rewrites a resource properties blob into the

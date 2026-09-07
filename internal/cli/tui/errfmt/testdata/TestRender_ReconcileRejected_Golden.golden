@@ -1,0 +1,15 @@
+[38;2;248;113;113mforma rejected because the stacks it references have been modified since the last reconcile command.[0m
+[38;2;248;113;113m[0m                                                                                                    
+[38;2;248;113;113m[0m                                                                                                    [38;2;181;181;91mThere are two options to resolve this issue:[0m                                                                             
+[38;2;181;181;91m  1) use the '--force' flag to apply the forma anyway (this will overwrite any changes made since the last reconcile), or[0m
+[38;2;181;181;91m  2) manually adjust your own code:[0m                                                                                      
+[38;2;181;181;91m[0m                                                                                                                              - extract the changes made since the last reconcile and incorporate them in your forma before applying it again.
+
+       Here is the list of extract commands to use (use different target file names):
+
+       formae extract --query='stack:production type:AWS::S3::Bucket label:my-bucket' <target forma file>
+
+    - manually delete these resources that are no longer present in your infrastructure: 
+
+       manually delete this resource from your code: 'stack: production, type: AWS::EC2::Instance, label: web-1'
+

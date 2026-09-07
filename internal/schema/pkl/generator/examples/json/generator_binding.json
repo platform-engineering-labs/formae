@@ -1,0 +1,70 @@
+{
+  "Targets": [
+    {
+      "Label": "testprovider-target",
+      "Namespace": "TestProvider",
+      "Config": {
+        "Type": "TestProvider",
+        "Region": "us-east-1"
+      }
+    }
+  ],
+  "Stacks": [
+    {
+      "Label": "shared-secrets",
+      "Description": "Stack owning the generator"
+    },
+    {
+      "Label": "app-stack",
+      "Description": "Stack holding the bound resource"
+    }
+  ],
+  "Generators": [
+    {
+      "Type": "password",
+      "Label": "db-password-gen",
+      "Stack": "shared-secrets",
+      "Length": 24,
+      "Uppercase": true,
+      "Lowercase": true,
+      "Digits": true,
+      "Symbols": false,
+      "ExcludeCharacters": "oO0",
+      "RequireEachIncludedType": true
+    }
+  ],
+  "Resources": [
+    {
+      "Label": "own-stack-secret",
+      "Type": "TestProvider::SecretsManager::Secret",
+      "Stack": "shared-secrets",
+      "Target": "testprovider-target",
+      "Properties": {
+        "Name": "app/own-stack-secret",
+        "SecretString": {
+          "$gen": true,
+          "$label": "db-password-gen",
+          "$stack": "shared-secrets",
+          "$output": "value",
+          "$visibility": "Opaque"
+        }
+      }
+    },
+    {
+      "Label": "cross-stack-secret",
+      "Type": "TestProvider::SecretsManager::Secret",
+      "Stack": "app-stack",
+      "Target": "testprovider-target",
+      "Properties": {
+        "Name": "app/cross-stack-secret",
+        "SecretString": {
+          "$gen": true,
+          "$label": "db-password-gen",
+          "$stack": "shared-secrets",
+          "$output": "value",
+          "$visibility": "Opaque"
+        }
+      }
+    }
+  ]
+}

@@ -53,6 +53,15 @@ func JsonEqualRaw(a, b json.RawMessage) bool {
 // JsonEqualIgnoreArrayOrder compares two JSON objects treating all arrays as sets (order agnostic).
 // Null, empty arrays, empty maps, and absent keys are treated as semantically equivalent.
 func JsonEqualIgnoreArrayOrder(a, b json.RawMessage) (bool, error) {
+	return JsonEqualIgnoreArrayOrderStrictRoots(a, b, nil)
+}
+
+// JsonEqualIgnoreArrayOrderStrictRoots is JsonEqualIgnoreArrayOrder with an
+// exemption set: for top-level fields named in strictRoots, empties are
+// VALUES - an empty collection differs from an absent key and from a
+// non-empty value (the preserveEmptyValues field hint). Arrays stay
+// order-agnostic in both modes.
+func JsonEqualIgnoreArrayOrderStrictRoots(a, b json.RawMessage, strictRoots map[string]bool) (bool, error) {
 	aEmpty := len(a) == 0
 	bEmpty := len(b) == 0
 	if aEmpty && bEmpty {
@@ -71,7 +80,69 @@ func JsonEqualIgnoreArrayOrder(a, b json.RawMessage) (bool, error) {
 		}
 	}
 
+	if len(strictRoots) > 0 {
+		mapA, okA := objA.(map[string]any)
+		mapB, okB := objB.(map[string]any)
+		if okA && okB {
+			for root := range strictRoots {
+				va, aHas := mapA[root]
+				vb, bHas := mapB[root]
+				if aHas != bHas {
+					return false, nil
+				}
+				if aHas && !deepEqualArraysAsSets(va, vb) {
+					return false, nil
+				}
+				delete(mapA, root)
+				delete(mapB, root)
+			}
+		}
+	}
+
 	return deepEqualIgnoreArrayOrder(objA, objB), nil
+}
+
+// deepEqualArraysAsSets compares values with arrays as sets but with empties
+// significant: an empty collection equals only an empty collection of the
+// same kind, and a key present on one side only is a difference regardless
+// of its value.
+func deepEqualArraysAsSets(a, b any) bool {
+	switch valA := a.(type) {
+	case map[string]any:
+		valB, ok := b.(map[string]any)
+		if !ok || len(valA) != len(valB) {
+			return false
+		}
+		for k, va := range valA {
+			vb, has := valB[k]
+			if !has || !deepEqualArraysAsSets(va, vb) {
+				return false
+			}
+		}
+		return true
+	case []any:
+		valB, ok := b.([]any)
+		if !ok || len(valA) != len(valB) {
+			return false
+		}
+		matched := make([]bool, len(valB))
+		for _, elemA := range valA {
+			found := false
+			for j, elemB := range valB {
+				if !matched[j] && deepEqualArraysAsSets(elemA, elemB) {
+					matched[j] = true
+					found = true
+					break
+				}
+			}
+			if !found {
+				return false
+			}
+		}
+		return true
+	default:
+		return reflect.DeepEqual(a, b)
+	}
 }
 
 // isEmptyValue returns true for values that are semantically empty:

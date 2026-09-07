@@ -93,7 +93,7 @@ func TestApplyForma_TargetWithResolvables(t *testing.T) {
 		_, err = m.ApplyForma(
 			forma,
 			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: false},
-			"test-client-id")
+			"test-client-id", "", "")
 		require.NoError(t, err)
 
 		// Wait for the command to complete
@@ -202,7 +202,7 @@ func TestApplyForma_TargetWithResolvables_FromTripletURI(t *testing.T) {
 		_, err = m.ApplyForma(
 			forma,
 			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: false},
-			"test-client-id")
+			"test-client-id", "", "")
 		require.NoError(t, err)
 
 		// Wait for the command to complete
@@ -287,7 +287,7 @@ func TestApplyForma_DestroyThenReapplyTargetWithResolvables(t *testing.T) {
 		// Step 1: Apply
 		_, err = m.ApplyForma(makeForma(),
 			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: false},
-			"test-client-id")
+			"test-client-id", "", "")
 		require.NoError(t, err)
 		assert.Eventually(t, func() bool {
 			incomplete, _ := m.Datastore.LoadIncompleteFormaCommands()
@@ -302,7 +302,7 @@ func TestApplyForma_DestroyThenReapplyTargetWithResolvables(t *testing.T) {
 		// Step 2: Destroy — both the resource and the targets are deleted.
 		_, err = m.DestroyForma(makeForma(),
 			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
-			"test-client-id")
+			"test-client-id", "", "")
 		require.NoError(t, err)
 		assert.Eventually(t, func() bool {
 			cmds, _ := m.Datastore.LoadFormaCommands()
@@ -322,7 +322,7 @@ func TestApplyForma_DestroyThenReapplyTargetWithResolvables(t *testing.T) {
 		// Step 3: Re-apply — both targets are re-created from scratch.
 		_, err = m.ApplyForma(makeForma(),
 			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: false},
-			"test-client-id")
+			"test-client-id", "", "")
 		require.NoError(t, err)
 		assert.Eventually(t, func() bool {
 			cmds, _ := m.Datastore.LoadFormaCommands()
@@ -481,7 +481,7 @@ func TestApplyForma_DestroyOrder_TargetReachabilityComposesWithAttachesTo(t *tes
 		// Apply
 		_, err = m.ApplyForma(forma,
 			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: false},
-			"test-client-id")
+			"test-client-id", "", "")
 		require.NoError(t, err)
 		assert.Eventually(t, func() bool {
 			incomplete, _ := m.Datastore.LoadIncompleteFormaCommands()
@@ -495,7 +495,7 @@ func TestApplyForma_DestroyOrder_TargetReachabilityComposesWithAttachesTo(t *tes
 		// Destroy
 		_, err = m.DestroyForma(forma,
 			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
-			"test-client-id")
+			"test-client-id", "", "")
 		require.NoError(t, err)
 		assert.Eventually(t, func() bool {
 			cmds, _ := m.Datastore.LoadFormaCommands()
@@ -598,7 +598,7 @@ func TestApplyForma_ReapplyTargetResolvablesSameValue_NoReplace(t *testing.T) {
 		// First apply
 		_, err = m.ApplyForma(makeForma(),
 			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: false},
-			"test-client-id")
+			"test-client-id", "", "")
 		require.NoError(t, err)
 
 		assert.Eventually(t, func() bool {
@@ -611,7 +611,7 @@ func TestApplyForma_ReapplyTargetResolvablesSameValue_NoReplace(t *testing.T) {
 		// Second apply — same forma, same resolved values
 		resp, err := m.ApplyForma(makeForma(),
 			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: false},
-			"test-client-id")
+			"test-client-id", "", "")
 		require.NoError(t, err)
 
 		// A target update IS expected: the raw config format changed (existing has

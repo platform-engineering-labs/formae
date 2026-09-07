@@ -1,0 +1,36 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+/*
+ * FakeVer::Helm::Release — deliberately version-independent: no field on it
+ * depends on the apiserver minor, so it is declared ONCE in a root-level
+ * subdirectory rather than copied into every version subtree.
+ *
+ * This is the module the narrowed import glob used to miss: the root glob
+ * matches root-level FILES only, and the version glob only the pinned
+ * subtree, so without an explicit glob for this directory its type never
+ * lands in the extract typeMap and extract fails with
+ * `Cannot find key "FakeVer::Helm::Release"`.
+ */
+module fakever.helm.release
+
+import "@formae/formae.pkl"
+import "../fakever.pkl"
+
+const type = "FakeVer::Helm::Release"
+
+@fakever.ResourceHint {
+    type = module.type
+    identifier = "Name"
+    portable = true
+}
+open class Release extends formae.Resource {
+    @fakever.FieldHint
+    name: String?
+
+    @fakever.FieldHint
+    chart: String?
+}

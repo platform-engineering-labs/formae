@@ -79,7 +79,7 @@ func TestApplyForma_TargetReplace_HappyPath(t *testing.T) {
 		_, err = m.ApplyForma(
 			initialForma,
 			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: false},
-			"test-client-id")
+			"test-client-id", "", "")
 		require.NoError(t, err)
 
 		// Wait for the first command to complete
@@ -118,7 +118,7 @@ func TestApplyForma_TargetReplace_HappyPath(t *testing.T) {
 		_, err = m.ApplyForma(
 			replaceForma,
 			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: false},
-			"test-client-id")
+			"test-client-id", "", "")
 		require.NoError(t, err)
 
 		// Step 3: Wait for the second command to complete
@@ -211,7 +211,7 @@ func TestApplyForma_TargetReplace_SimulateWarnsAboutUnmanagedResources(t *testin
 		_, err = m.ApplyForma(
 			initialForma,
 			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: false},
-			"test-client-id")
+			"test-client-id", "", "")
 		require.NoError(t, err)
 
 		// Wait for the first command to complete
@@ -262,7 +262,7 @@ func TestApplyForma_TargetReplace_SimulateWarnsAboutUnmanagedResources(t *testin
 		resp, err := m.ApplyForma(
 			simulateForma,
 			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: true},
-			"test-client-id")
+			"test-client-id", "", "")
 		require.NoError(t, err)
 
 		// Step 4: Verify the simulation response
@@ -326,7 +326,7 @@ func TestApplyForma_TargetMutableConfigChange_UpdatesInPlace(t *testing.T) {
 		_, err = m.ApplyForma(
 			initialForma,
 			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: false},
-			"test-client-id")
+			"test-client-id", "", "")
 		require.NoError(t, err)
 
 		assert.Eventually(t, func() bool {
@@ -364,7 +364,7 @@ func TestApplyForma_TargetMutableConfigChange_UpdatesInPlace(t *testing.T) {
 		_, err = m.ApplyForma(
 			updateForma,
 			&config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: false},
-			"test-client-id")
+			"test-client-id", "", "")
 		require.NoError(t, err)
 
 		// Step 3: Wait for the second command to complete

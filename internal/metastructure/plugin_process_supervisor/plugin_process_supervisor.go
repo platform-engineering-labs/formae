@@ -40,6 +40,12 @@ type PluginProcessSupervisor struct {
 	authPlugin    *authPluginEntry
 	shuttingDown  bool
 	pluginConfigs map[string]json.RawMessage // plugin-specific config keyed by type (lowercase)
+
+	// oidcBrokers holds the credential broker subprocesses, keyed by plugin
+	// name. oidcCredentialConfigs is their opaque config keyed by type
+	// (lowercase).
+	oidcBrokers           map[string]*oidcBrokerEntry
+	oidcCredentialConfigs map[string]json.RawMessage
 }
 
 // authPluginEntry wraps an AuthPluginHandle with supervisor-specific tracking state.
@@ -71,6 +77,7 @@ func NewPluginProcessSupervisor() gen.ProcessBehavior {
 
 func (p *PluginProcessSupervisor) Init(args ...any) error {
 	p.plugins = make(map[string]*PluginInfo)
+	p.oidcBrokers = make(map[string]*oidcBrokerEntry)
 	p.Log().Debug("PluginProcessSupervisor started")
 
 	// Read per-plugin custom configs before spawning plugins so the env vars are available
@@ -140,9 +147,11 @@ func (p *PluginProcessSupervisor) Init(args ...any) error {
 		}
 	}
 
+	p.initOidcCredentialBrokers()
+
 	authConfigured := p.authPlugin != nil
-	p.Log().Debug("PluginProcessSupervisor initialized with %d resource plugins, auth=%v",
-		len(p.plugins), authConfigured)
+	p.Log().Debug("PluginProcessSupervisor initialized with %d resource plugins, %d oidc-credential brokers, auth=%v",
+		len(p.plugins), len(p.oidcBrokers), authConfigured)
 	return nil
 }
 
@@ -155,40 +164,76 @@ func (p *PluginProcessSupervisor) getPluginName(namespace string) string {
 	return namespace
 }
 
-// logPluginOutput parses Ergo's log format and logs with appropriate level
-// Format: "timestamp [level] rest_of_message" e.g. "1764458575429677244 [info] <79F4473F.0.1004>: message"
-var pluginLogRegex = regexp.MustCompile(`^\d+\s+\[(trace|debug|info|warning|error)\]\s+(.*)$`)
+// Plugins do not agree on a log format, so two are recognised.
+//
+// Ergo's runtime writes "timestamp [level] rest_of_message", e.g.
+// "1764458575429677244 [info] <79F4473F.0.1004>: message". Anything built on
+// log/slog writes logfmt with an uppercase level, e.g.
+// `time=... level=WARN msg="rejected credential"`, which is what the auth
+// plugins emit. Reading only the first left every slog line unclassified.
+var (
+	pluginLogRegex = regexp.MustCompile(`^\d+\s+\[(trace|debug|info|warning|error)\]\s+(.*)$`)
+	// The level must start a token, so one quoted inside a message is not
+	// mistaken for the line's own.
+	pluginLogfmtLevelRegex = regexp.MustCompile(`(?:^|\s)level=([A-Za-z]+)`)
+)
+
+// pluginLevel reports the level a plugin gave one of its own log lines,
+// normalised to the names Log() uses, or "" when the line names none.
+func pluginLevel(output string) string {
+	if matches := pluginLogRegex.FindStringSubmatch(output); matches != nil {
+		return matches[1]
+	}
+	if matches := pluginLogfmtLevelRegex.FindStringSubmatch(output); matches != nil {
+		switch strings.ToLower(matches[1]) {
+		case "trace":
+			return "trace"
+		case "debug":
+			return "debug"
+		case "info":
+			return "info"
+		case "warn", "warning":
+			return "warning"
+		case "error":
+			return "error"
+		}
+	}
+	return ""
+}
+
+// logAtPluginLevel reports a plugin's line at the level the plugin chose,
+// deferring to fallback when it named none.
+//
+// The message travels as an argument, never as the format string: it is text
+// the plugin wrote, and a stray verb in it would garble the line.
+func (p *PluginProcessSupervisor) logAtPluginLevel(level, message string, fallback func(string, ...any)) {
+	switch level {
+	case "trace":
+		p.Log().Trace("%s", message)
+	case "debug":
+		p.Log().Debug("%s", message)
+	case "info":
+		p.Log().Info("%s", message)
+	case "warning":
+		p.Log().Warning("%s", message)
+	case "error":
+		p.Log().Error("%s", message)
+	default:
+		fallback("%s", message)
+	}
+}
 
 func (p *PluginProcessSupervisor) logPluginOutput(pluginName, output string) {
 	if output == "" {
 		return
 	}
 
-	matches := pluginLogRegex.FindStringSubmatch(output)
-	if matches == nil {
-		// No level found, log as info
-		p.Log().Info("[%s] %s", pluginName, output)
-		return
+	message := output
+	if matches := pluginLogRegex.FindStringSubmatch(output); matches != nil {
+		message = matches[2]
 	}
 
-	level := matches[1]
-	message := matches[2]
-	formattedMsg := fmt.Sprintf("[%s] %s", pluginName, message)
-
-	switch level {
-	case "trace":
-		p.Log().Trace(formattedMsg)
-	case "debug":
-		p.Log().Debug(formattedMsg)
-	case "info":
-		p.Log().Info(formattedMsg)
-	case "warning":
-		p.Log().Warning(formattedMsg)
-	case "error":
-		p.Log().Error(formattedMsg)
-	default:
-		p.Log().Info(formattedMsg)
-	}
+	p.logAtPluginLevel(pluginLevel(output), fmt.Sprintf("[%s] %s", pluginName, message), p.Log().Info)
 }
 
 func (p *PluginProcessSupervisor) HandleMessage(from gen.PID, message any) error {
@@ -196,11 +241,13 @@ func (p *PluginProcessSupervisor) HandleMessage(from gen.PID, message any) error
 	case meta.MessagePortText:
 		// Text output (stderr for auth plugins, stdout for resource plugins)
 		output := strings.TrimSpace(msg.Text)
-		if auth.IsAuthTag(msg.Tag) {
+		switch {
+		case auth.IsAuthTag(msg.Tag):
 			p.logPluginOutput(auth.AuthTagName(msg.Tag), output)
-		} else {
-			pluginName := p.getPluginName(msg.Tag)
-			p.logPluginOutput(pluginName, output)
+		case isOidcCredentialTag(msg.Tag):
+			p.logPluginOutput(oidcCredentialTagName(msg.Tag), output)
+		default:
+			p.logPluginOutput(p.getPluginName(msg.Tag), output)
 		}
 
 	case meta.MessagePortData:
@@ -220,6 +267,11 @@ func (p *PluginProcessSupervisor) HandleMessage(from gen.PID, message any) error
 			if p.authPlugin.conn != nil {
 				p.authPlugin.conn.Feed(msg.Data)
 			}
+		} else if isOidcCredentialTag(msg.Tag) {
+			// Brokers run in text mode, so binary data is unexpected — log it
+			// rather than dropping it silently.
+			output := strings.TrimSpace(string(msg.Data))
+			p.logPluginOutput(oidcCredentialTagName(msg.Tag), output)
 		} else if !auth.IsAuthTag(msg.Tag) {
 			// Resource plugin binary data - log it
 			output := strings.TrimSpace(string(msg.Data))
@@ -228,13 +280,28 @@ func (p *PluginProcessSupervisor) HandleMessage(from gen.PID, message any) error
 		}
 
 	case meta.MessagePortError:
-		// Plugin error output
-		p.Log().Error("Plugin error tag=%s: %v", msg.Tag, msg.Error)
+		// The port is named for the channel, not the severity: a plugin's whole
+		// log stream arrives here at whatever level its author chose. Reporting
+		// all of it at Error made an ordinary rejected credential
+		// indistinguishable from a fault, and an installation's "error logs
+		// occurring" alert fired on a mistyped password.
+		//
+		// A line naming no level stays at Error: on the error port, assuming
+		// the worst is the right default. The wording is unchanged because it
+		// names the port, and operators filter alert queries on it.
+		p.logAtPluginLevel(
+			pluginLevel(fmt.Sprint(msg.Error)),
+			fmt.Sprintf("Plugin error tag=%s: %v", msg.Tag, msg.Error),
+			p.Log().Error,
+		)
 
 	case meta.MessagePortTerminate:
-		if auth.IsAuthTag(msg.Tag) {
+		switch {
+		case auth.IsAuthTag(msg.Tag):
 			p.handleAuthPluginTerminate(msg.Tag)
-		} else {
+		case isOidcCredentialTag(msg.Tag):
+			p.handleOidcCredentialBrokerTerminate(msg.Tag)
+		default:
 			p.handleResourcePluginTerminate(msg.Tag)
 		}
 
@@ -396,6 +463,7 @@ func (p *PluginProcessSupervisor) spawnResourcePlugin(namespace string, pluginIn
 		Env:         env,
 		Tag:         namespace,
 		Process:     gen.Atom("PluginProcessSupervisor"), // Send messages to the PluginProcessSupervisor actor
+		SysProcAttr: pluginSysProcAttr(),                 // Kill the plugin if the agent dies abruptly (Linux Pdeathsig)
 	}
 
 	// Create meta.Port
@@ -435,6 +503,7 @@ func (p *PluginProcessSupervisor) spawnAuthPluginProcess(tag string, entry *auth
 		Tag:         tag,
 		Process:     gen.Atom("PluginProcessSupervisor"),
 		Binary:      meta.PortBinaryOptions{Enable: true, ReadBufferSize: 4096},
+		SysProcAttr: pluginSysProcAttr(), // Kill the auth plugin if the agent dies abruptly (Linux Pdeathsig)
 	}
 
 	metaport, err := meta.CreatePort(portOptions)
@@ -542,6 +611,19 @@ func (p *PluginProcessSupervisor) Terminate(reason error) {
 			if err := p.SendExitMeta(pluginInfo.metaPortAlias, reason); err != nil {
 				p.Log().Debug("Failed to send exit to resource plugin namespace=%s: %v", namespace, err)
 			}
+		}
+	}
+
+	// Terminate oidc-credential brokers, unregistering the launch that is
+	// going away so the coordinator stops routing to it.
+	for name, entry := range p.oidcBrokers {
+		if entry.metaPortAlias == zeroAlias {
+			continue
+		}
+		p.unregisterOidcBroker(entry, "shutdown")
+		p.Log().Debug("Terminating oidc-credential broker name=%s alias=%v", name, entry.metaPortAlias)
+		if err := p.SendExitMeta(entry.metaPortAlias, reason); err != nil {
+			p.Log().Debug("Failed to send exit to oidc-credential broker name=%s: %v", name, err)
 		}
 	}
 

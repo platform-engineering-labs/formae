@@ -5,10 +5,150 @@
 package api
 
 import (
+	"bytes"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
+	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
+	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+// TestParseSubmitCommandErrorResponse_ResourceHasDependents asserts the client
+// decodes a 409 ResourceHasDependents body into a typed
+// FormaResourceHasDependentsError (so the CLI renders it) rather than falling
+// through to "unknown error type".
+func TestParseSubmitCommandErrorResponse_ResourceHasDependents(t *testing.T) {
+	body, err := json.Marshal(apimodel.ErrorResponse[apimodel.FormaResourceHasDependentsError]{
+		ErrorType: apimodel.ResourceHasDependents,
+		Data: apimodel.FormaResourceHasDependentsError{
+			Dependents: []apimodel.ResourceDependent{
+				{ResourceLabel: "child-subnet", ResourceType: "FakeAWS::EC2::Subnet", Stack: "consumer-stack", CascadeSource: "parent-vpc"},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	c := &Client{}
+	_, perr := c.parseSubmitCommandErrorResponse(io.NopCloser(bytes.NewReader(body)))
+	require.Error(t, perr)
+
+	var got *apimodel.ErrorResponse[apimodel.FormaResourceHasDependentsError]
+	require.ErrorAs(t, perr, &got, "must decode into a typed FormaResourceHasDependentsError")
+	require.Len(t, got.Data.Dependents, 1)
+	assert.Equal(t, "child-subnet", got.Data.Dependents[0].ResourceLabel)
+	assert.Equal(t, "consumer-stack", got.Data.Dependents[0].Stack)
+	assert.Equal(t, "parent-vpc", got.Data.Dependents[0].CascadeSource)
+}
+
+// TestParseSubmitCommandErrorResponse_ReferencedGeneratorsNotFound asserts the
+// client decodes a 400 ReferencedGeneratorsNotFound body into a typed
+// FormaReferencedGeneratorsNotFoundError (so the CLI renders it) rather than
+// falling through to "unknown error type", mirroring the
+// ReferencedResourcesNotFound case this error is modelled on.
+func TestParseSubmitCommandErrorResponse_ReferencedGeneratorsNotFound(t *testing.T) {
+	body, err := json.Marshal(apimodel.ErrorResponse[apimodel.FormaReferencedGeneratorsNotFoundError]{
+		ErrorType: apimodel.ReferencedGeneratorsNotFound,
+		Data: apimodel.FormaReferencedGeneratorsNotFoundError{
+			Missing: []pkgmodel.MissingGenerator{
+				{Label: "phantom-generator", Stack: "consumer-stack", Output: "value"},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	c := &Client{}
+	_, perr := c.parseSubmitCommandErrorResponse(io.NopCloser(bytes.NewReader(body)))
+	require.Error(t, perr)
+
+	var got *apimodel.ErrorResponse[apimodel.FormaReferencedGeneratorsNotFoundError]
+	require.ErrorAs(t, perr, &got, "must decode into a typed FormaReferencedGeneratorsNotFoundError")
+	require.Len(t, got.Data.Missing, 1)
+	assert.Equal(t, "phantom-generator", got.Data.Missing[0].Label)
+	assert.Equal(t, "consumer-stack", got.Data.Missing[0].Stack)
+	assert.Equal(t, "value", got.Data.Missing[0].Output)
+}
+
+// TestParseSubmitCommandErrorResponse_GeneratorDestinationsUnreachable asserts
+// the client decodes a GeneratorDestinationsUnreachable body into its typed
+// error, so the CLI can name the destinations rather than printing "unknown
+// error type".
+func TestParseSubmitCommandErrorResponse_GeneratorDestinationsUnreachable(t *testing.T) {
+	body, err := json.Marshal(apimodel.ErrorResponse[apimodel.FormaGeneratorDestinationsUnreachableError]{
+		ErrorType: apimodel.GeneratorDestinationsUnreachable,
+		Data: apimodel.FormaGeneratorDestinationsUnreachableError{
+			Unreachable: []apimodel.UnreachableGeneratorDestination{
+				{GeneratorLabel: "db-password", GeneratorStack: "app", Stack: "web", Label: "api-secret", Type: "AWS::SecretsManager::Secret"},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	c := &Client{}
+	_, perr := c.parseSubmitCommandErrorResponse(io.NopCloser(bytes.NewReader(body)))
+	require.Error(t, perr)
+
+	var got *apimodel.ErrorResponse[apimodel.FormaGeneratorDestinationsUnreachableError]
+	require.ErrorAs(t, perr, &got, "must decode into a typed FormaGeneratorDestinationsUnreachableError")
+	require.Len(t, got.Data.Unreachable, 1)
+	assert.Equal(t, "db-password", got.Data.Unreachable[0].GeneratorLabel)
+	assert.Equal(t, "app", got.Data.Unreachable[0].GeneratorStack)
+	assert.Equal(t, "api-secret", got.Data.Unreachable[0].Label)
+	assert.Equal(t, "web", got.Data.Unreachable[0].Stack)
+	assert.Equal(t, "AWS::SecretsManager::Secret", got.Data.Unreachable[0].Type)
+}
+
+// TestParseSubmitCommandErrorResponse_GeneratorBoundToSetOnceField asserts the
+// client decodes a GeneratorBoundToSetOnceField body into its typed error with
+// the field name intact, so the CLI can tell the operator what to edit rather
+// than printing "unknown error type".
+func TestParseSubmitCommandErrorResponse_GeneratorBoundToSetOnceField(t *testing.T) {
+	body, err := json.Marshal(apimodel.ErrorResponse[apimodel.FormaGeneratorBoundToSetOnceFieldError]{
+		ErrorType: apimodel.GeneratorBoundToSetOnceField,
+		Data: apimodel.FormaGeneratorBoundToSetOnceFieldError{
+			Fields: []apimodel.SetOnceGeneratorField{
+				{GeneratorLabel: "db-password", GeneratorStack: "app", Stack: "web", Label: "api", Type: "AWS::S3::Bucket", Field: "DbPassword"},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	c := &Client{}
+	_, perr := c.parseSubmitCommandErrorResponse(io.NopCloser(bytes.NewReader(body)))
+	require.Error(t, perr)
+
+	var got *apimodel.ErrorResponse[apimodel.FormaGeneratorBoundToSetOnceFieldError]
+	require.ErrorAs(t, perr, &got, "must decode into a typed FormaGeneratorBoundToSetOnceFieldError")
+	require.Len(t, got.Data.Fields, 1)
+	assert.Equal(t, "db-password", got.Data.Fields[0].GeneratorLabel)
+	assert.Equal(t, "app", got.Data.Fields[0].GeneratorStack)
+	assert.Equal(t, "api", got.Data.Fields[0].Label)
+	assert.Equal(t, "web", got.Data.Fields[0].Stack)
+	assert.Equal(t, "AWS::S3::Bucket", got.Data.Fields[0].Type)
+	assert.Equal(t, "DbPassword", got.Data.Fields[0].Field)
+}
+
+// TestGetFormaCommandsStatusNotFoundReturnsConcreteEmptyResult verifies a 404
+// from the commands/status endpoint resolves to a well-formed empty result
+// (non-nil, zero Commands), not a bare nil that forces every caller to
+// nil-check the response before it can tell "no matches" from "no response".
+func TestGetFormaCommandsStatusNotFoundReturnsConcreteEmptyResult(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(srv.Close)
+
+	c := NewClient(&pkgmodel.ClassicConnection{URL: srv.URL}, nil, srv.Client())
+
+	resp, err := c.GetFormaCommandsStatus("id:unknown", "test-client", 1, apimodel.CommandScopeAgent)
+	require.NoError(t, err)
+	require.NotNil(t, resp, "a 404 must resolve to a concrete empty result, not a bare nil")
+	assert.Empty(t, resp.Commands)
+}
 
 func TestFormatEndpointStandardPort(t *testing.T) {
 	want := "http://localhost:49684"

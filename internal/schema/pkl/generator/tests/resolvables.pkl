@@ -1,0 +1,67 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+/// Pins which classes ResolvablesGenerator.pkl collects as entry-point
+/// resolvables. Runs against the resolvables.pkl generated from the
+/// testprovider and fakeaws fixture packages.
+module resolvables
+
+amends "pkl:test"
+
+import "../resolvables.pkl" as resolvables
+
+local uris = resolvables.MapResolvableResourceUri()
+
+local collectedClassNames = resolvables.GetAllResolvableTypes()
+    .toList()
+    .map((it) -> it.clazz.simpleName)
+
+facts {
+    ["direct formae.Resolvable subclass is collected"] {
+        uris.containsKey("TestProvider::SQS::Queue") &&
+        uris["TestProvider::SQS::Queue"].clazz.simpleName == "QueueResolvable" &&
+        uris["TestProvider::SQS::Queue"].importName == "queue"
+    }
+
+    ["ScalarSecretResolvable subclass is collected"] {
+        uris.containsKey("TestProvider::Discovery::ScalarSecret") &&
+        uris["TestProvider::Discovery::ScalarSecret"].clazz.simpleName == "ScalarSecretEntry" &&
+        uris["TestProvider::Discovery::ScalarSecret"].importName == "discovery"
+    }
+
+    ["MappingResolvable subclass is collected"] {
+        uris.containsKey("TestProvider::Discovery::Mapping") &&
+        uris["TestProvider::Discovery::Mapping"].clazz.simpleName == "MappingEntry"
+    }
+
+    ["ListingResolvable subclass is collected"] {
+        uris.containsKey("TestProvider::Discovery::Listing") &&
+        uris["TestProvider::Discovery::Listing"].clazz.simpleName == "ListingEntry"
+    }
+
+    ["subclass two levels below a specialised base is collected"] {
+        uris.containsKey("TestProvider::Discovery::DeepChain") &&
+        uris["TestProvider::Discovery::DeepChain"].clazz.simpleName == "DeepChainEntry"
+    }
+
+    ["class extending an unrelated same-named Resolvable is not collected"] {
+        !uris.containsKey("TestProvider::Discovery::Imposter") &&
+        !collectedClassNames.contains("ImposterEntry")
+    }
+
+    ["class that only inherits type is not collected"] {
+        !collectedClassNames.contains("NestedAccessor")
+    }
+
+    ["base declaring no type of its own is not collected"] {
+        !collectedClassNames.contains("IntermediateBase")
+    }
+
+    ["type declared without a default yields no map entry"] {
+        !uris.containsKey("null") &&
+        !collectedClassNames.contains("UndefaultedEntry")
+    }
+}

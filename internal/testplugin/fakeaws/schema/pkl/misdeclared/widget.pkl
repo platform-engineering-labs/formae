@@ -1,0 +1,26 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+/*
+ * FakeAWS Widget - fixture for a schema class that carries a resource hint but
+ * does not extend formae.Resource. Rendering a resource of this type must fail
+ * with a diagnostic instead of producing a forma file.
+ */
+module fakeaws.misdeclared.widget
+
+import "@formae/formae.pkl"
+import "../fakeaws.pkl"
+
+const type = "FakeAWS::Misdeclared::Widget"
+
+@fakeaws.ResourceHint {
+    type = module.type
+    identifier = "WidgetId"
+}
+open class Widget extends formae.SubResource {
+    @fakeaws.FieldHint
+    widgetId: String
+}

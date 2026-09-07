@@ -6,6 +6,7 @@ package metastructure
 
 import (
 	"fmt"
+	"log/slog"
 	"time"
 
 	"ergo.services/ergo/act"
@@ -17,8 +18,10 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_persister"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/stack_update"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
@@ -99,9 +102,13 @@ func (s *StackExpirer) checkExpiredStacks() {
 		return
 	}
 
-	// For each expired stack, trigger a destroy command
+	// For each expired stack, trigger a destroy command. Expiry destroys real
+	// resources, so log the deadline and the anchor it was measured from — an
+	// unexpected destroy should be explainable from the log alone.
 	for _, stackInfo := range expiredStacks {
-		s.Log().Info("Expiring stack label=%s onDependents=%s", stackInfo.StackLabel, stackInfo.OnDependents)
+		s.Log().Info("Expiring stack label=%s onDependents=%s deadline=%s createdAt=%s",
+			stackInfo.StackLabel, stackInfo.OnDependents,
+			stackInfo.Deadline(), stackInfo.StackCreatedAt.UTC().Format(time.RFC3339))
 
 		if err := s.destroyExpiredStack(stackInfo); err != nil {
 			s.Log().Error("Failed to destroy expired stack label=%s: %v", stackInfo.StackLabel, err)
@@ -124,10 +131,10 @@ func (s *StackExpirer) destroyExpiredStack(stackInfo datastore.ExpiredStackInfo)
 	}
 
 	// Store the forma command
-	_, err = s.Call(
+	_, err = messages.UnwrapCall(s.Call(
 		gen.ProcessID{Name: actornames.FormaCommandPersister, Node: s.Node().Name()},
 		forma_persister.StoreNewFormaCommand{Command: *result.command},
-	)
+	))
 	if err != nil {
 		return fmt.Errorf("failed to store destroy command: %w", err)
 	}
@@ -163,6 +170,15 @@ type destroyExpiredResult struct {
 // when expiration is aborted due to external dependents, or when no updates are needed.
 // The caller is responsible for persisting the command and starting the changeset execution.
 func prepareDestroyExpiredStack(ds datastore.Datastore, stackInfo datastore.ExpiredStackInfo, clientID string, cleanupClientID string) (*destroyExpiredResult, error) {
+	// The query matches absolute deadlines by string comparison, which cannot
+	// reject an impossible calendar date. Re-check with a real parse before
+	// destroying anything: a deadline nobody can read is not a deadline.
+	if stackInfo.HasUnreadableDeadline() {
+		slog.Warn("Refusing to expire stack: its deadline is not a readable instant",
+			"stack", stackInfo.StackLabel, "expiresAt", stackInfo.ExpiresAt)
+		return nil, nil
+	}
+
 	// Load all resources in the stack
 	resources, err := ds.LoadResourcesByStack(stackInfo.StackLabel)
 	if err != nil {
@@ -224,6 +240,7 @@ func prepareDestroyExpiredStack(ds datastore.Datastore, stackInfo datastore.Expi
 		existingTargets,
 		ds,
 		nil, nil,
+		false,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate resource updates: %w", err)
@@ -245,11 +262,24 @@ func prepareDestroyExpiredStack(ds datastore.Datastore, stackInfo datastore.Expi
 		nil,                          // No target updates on destroy
 		[]stack_update.StackUpdate{}, // No stack updates on destroy
 		nil,                          // No policy updates on destroy
+		nil,                          // No generator updates on destroy
 		clientID,
+		"",
+		"",
+		forma_command.SourceStackExpirer,
 	)
 
-	// Create changeset
-	cs, err := changeset.NewChangeset(resourceUpdates, nil, destroyCommand.ID, pkgmodel.CommandDestroy)
+	// Generate any synthetic Resolve target ops, then build the changeset.
+	synth, err := target_update.SynthesizeResolveTargetUpdates(
+		resource_update.ReferencedTargetLabels(resourceUpdates),
+		resource_update.SourceTargetByKsuid(resourceUpdates),
+		nil, ds)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create changeset: %w", err)
+	}
+	// No generator draws: a destroy writes no property, and the stack's
+	// generators go with it.
+	cs, err := changeset.NewChangeset(resourceUpdates, synth, nil, destroyCommand.ID, pkgmodel.CommandDestroy, destroyCommand.Config.Mode)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create changeset: %w", err)
 	}

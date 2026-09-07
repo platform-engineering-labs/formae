@@ -7,6 +7,7 @@
 module Formae
 
 import "pkl:reflect"
+import "pkl:json"
 
 open class Description {
     hidden text: String
@@ -24,6 +25,11 @@ open class Resource {
     group: String?
     target: TargetResolvable?
     stack: StackResolvable?
+    /// Previous label of this resource. When set, an apply that does not find a
+    /// managed row at the current label will look up by this previous label
+    /// (same stack, same target) and rename the matched row in place. See
+    /// RFC-0041.
+    alias: String?
     fixed managed: Boolean = true
 
     local self = this
@@ -38,12 +44,22 @@ open class Resource {
         Group = self.group
         Target = self.target
         Stack = self.stack
+        Alias = self.alias
         Managed = self.managed
 
         Type = self.type()
         Schema = self.schema()
         Properties = self.props()
     }
+}
+
+/// Base for first-class secret resources. A provider's secret (aws.Secret, the
+/// Azure Key Vault Secret, ...) extends this and names its value property. A
+/// secret carries no cadence of its own: rotation is declared on the Generator
+/// the secret's value is bound to, so one cadence governs every destination
+/// that shares the credential.
+abstract class Secret extends Resource {
+    hidden valueProperty: String
 }
 
 open class SubResource {
@@ -53,7 +69,9 @@ open class SubResource {
 
 open class Stack {
     hidden label: String(length > 0)
-    hidden description: String
+    // Optional: a stack need not carry a description. Extracted/adopted stacks
+    // omit it so applying them never overwrites a description already set.
+    hidden description: String?
     hidden policies: Listing<Policy|PolicyResolvable>?
 
     local parent = this
@@ -63,7 +81,7 @@ open class Stack {
 
     // Output
     fixed Label: String = label
-    fixed Description: String = description
+    fixed Description: String? = description
     fixed Policies: Listing<Dynamic>? = policies?.toList()?.map((p) ->
         if (p is PolicyResolvable)
             new Dynamic { `$ref` = "policy://\(p.label)" }
@@ -93,19 +111,49 @@ open class PolicyResolvable extends Resolvable {
     hidden type = "Formae::Policy"
 }
 
-// TTL Policy - destroys stack after duration
+// TTL Policy - destroys a stack at a deadline.
+//
+// Set exactly one of:
+//   ttl       - a duration, counted from when the stack was created. Stable
+//               across re-applies: the countdown never restarts.
+//   expiresAt - an absolute instant, as an RFC 3339 timestamp. Use this when you
+//               already hold the deadline and want it to survive re-applies
+//               unchanged. Sub-second precision is dropped, and the instant must
+//               be no earlier than 2000-01-01T00:00:00Z.
+//
+// The regex on expiresAt is a shape check only — a real calendar date is
+// validated when the forma is applied.
 open class TTLPolicy extends Policy {
-    hidden ttl: Duration
+    hidden ttl: Duration?
+    hidden expiresAt: String(matches(Regex(#"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$"#)))?
     hidden onDependents: ("abort"|"cascade") = "abort"
 
     local self = this
     // Output
-    function render(): Dynamic = new {
-        Type = "ttl"
-        Label = self.label
-        TTLSeconds = self.ttl.toUnit("s").value.toInt()
-        OnDependents = self.onDependents
-    }
+    //
+    // Each variant builds its own Dynamic rather than emitting both keys and
+    // leaning on null elision: the stored payload carries the key for the
+    // variant that is set and only that key, and which key is present is what
+    // decides how the deadline is read back.
+    function render(): Dynamic =
+        if (self.ttl != null && self.expiresAt != null)
+            throw("TTLPolicy: set either ttl or expiresAt, not both")
+        else if (self.ttl != null)
+            new {
+                Type = "ttl"
+                Label = self.label
+                TTLSeconds = self.ttl.toUnit("s").value.toInt()
+                OnDependents = self.onDependents
+            }
+        else if (self.expiresAt != null)
+            new {
+                Type = "ttl"
+                Label = self.label
+                ExpiresAt = self.expiresAt
+                OnDependents = self.onDependents
+            }
+        else
+            throw("TTLPolicy: set either ttl or expiresAt")
 }
 
 // Auto-Reconcile Policy - periodically reconciles stack to declared state
@@ -118,6 +166,258 @@ open class AutoReconcilePolicy extends Policy {
         Type = "auto-reconcile"
         Label = self.label
         IntervalSeconds = self.interval.toUnit("s").value.toInt()
+    }
+}
+
+/// The cadence on which a generator draws a fresh value.
+///
+/// `every` has no default. Attaching rotation to a generator is a statement
+/// about how often its credential turns over, so there is no cadence to
+/// inherit and none to guess at: a rotation spec that names no interval is an
+/// eval-time error, not a generator that rotates on some house default.
+open class RotationSpec {
+    /// Fifteen minutes is the floor because it is the fastest sustained
+    /// cadence the common secret store survives, with the scheduler's own
+    /// limits well inside it. AWS Secrets Manager retains every version from
+    /// the last 24 hours against a fixed quota of 100 versions per secret
+    /// and advises against sustained writes more often than once every 10
+    /// minutes, so a one-minute cadence exhausts the quota in under two
+    /// hours and every rotation after that fails. Separately, the rotator
+    /// wakes on a fixed sweep, so an interval shorter than that sweep could
+    /// not be met whatever it said, and sub-second intervals would truncate
+    /// to zero in the rendered whole-second cadence, reading downstream as
+    /// no cadence at all. A credential that has to turn over faster than
+    /// this wants short-lived credentials issued per use, not a scheduler
+    /// revisiting a long-lived one.
+    every: Duration(this >= 15.min
+        || throw("RotationSpec.every: \(this) is shorter than the fifteen minute minimum rotation interval"))
+
+    local self = this
+    // Output
+    function render(): Dynamic = new {
+        EverySeconds = self.every.toUnit("s").value.toInt()
+    }
+}
+
+/// A source of generated values. Belongs to a stack; referenced by the
+/// resources whose properties take the generated value.
+abstract class Generator {
+    label: String
+    stack: StackResolvable
+    /// Previous label of this generator. Identity is the datastore row's
+    /// KSUID, not the label, so an apply that does not find a live generator
+    /// at the current label falls back to looking up this previous label
+    /// (same stack) and renames the matched row in place. Mirrors
+    /// Resource.alias.
+    alias: String?
+
+    /// Rotate this generator's value on a fixed cadence. Absent means the
+    /// value is drawn only when an apply needs one: nothing rotates a
+    /// credential on its own unless this says how often to.
+    rotation: RotationSpec?
+
+    /// The named outputs this generator produces. A destination binds to one
+    /// of them, e.g. `pw.gen.value`. Outputs are typed properties, so an
+    /// output this generator does not produce is an eval-time type error
+    /// rather than something the agent must reject later.
+    abstract hidden gen: GeneratorOutputs
+
+    local self = this
+
+    // Every StackResolvable property defaults (Resolvable's fields are all
+    // optional), so an unset `stack` silently default-constructs to an
+    // all-null instance instead of failing to evaluate. This is the actual
+    // enforcement that a generator names its stack; subclasses must fold it
+    // into their render() the same way PasswordGenerator folds in its own
+    // eval-time validation.
+    function hasStack(): Boolean =
+        self.stack.label != null || throw("Generator \"\(self.label)\": stack is required")
+
+    abstract function type(): String
+    abstract function render(): Dynamic
+}
+
+open class PasswordGenerator extends Generator {
+    length: Int(this >= 16) = 32
+    uppercase: Boolean = true
+    lowercase: Boolean = true
+    digits: Boolean = true
+    symbols: Boolean = false
+    /// Characters the destination cannot accept, removed from the alphabet.
+    excludeCharacters: String = ""
+    /// Guarantee at least one character from every enabled class.
+    requireEachIncludedType: Boolean = true
+
+    local self = this
+
+    // The type constraint forces validated() && self.hasStack() the same way
+    // render()'s return type does, so a generator referenced only via
+    // `pw.gen.value` (never collected into `forma`, so render() never runs)
+    // still gets the same eval-time validation.
+    hidden gen: PasswordOutputs(validated() && self.hasStack()) = new PasswordOutputs {
+        genLabel = self.label
+        genStack = self.stack
+    }
+
+    // Canonical alphabets, before excludeCharacters is applied. Eval-time
+    // validation below checks emptiness against these; the scheduler that
+    // actually draws characters must draw from the same sets, or a spec this
+    // accepts could still starve during unattended rejection sampling.
+    local uppercaseChars: String = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    local lowercaseChars: String = "abcdefghijklmnopqrstuvwxyz"
+    local digitChars: String = "0123456789"
+    local symbolChars: String = "!@#$%^&*()-_=+[]{}<>?/|~"
+
+    local function remaining(alphabet: String): String =
+        alphabet.chars.filter((c) -> !self.excludeCharacters.contains(c)).join("")
+
+    // Eval-time validation: a spec the scheduler could never satisfy (every
+    // class flag false, or excludeCharacters emptying an enabled class) fails
+    // here, not during unattended rejection sampling later. Referenced from
+    // render()'s return type so it is always forced, even though PKL would
+    // otherwise never evaluate an unread local.
+    local function validated(): Boolean =
+        if (!(self.uppercase || self.lowercase || self.digits || self.symbols))
+            throw("PasswordGenerator \"\(self.label)\": at least one of uppercase, lowercase, digits, symbols must be true")
+        else if (self.uppercase && remaining(uppercaseChars).isEmpty)
+            throw("PasswordGenerator \"\(self.label)\": excludeCharacters removes every uppercase character")
+        else if (self.lowercase && remaining(lowercaseChars).isEmpty)
+            throw("PasswordGenerator \"\(self.label)\": excludeCharacters removes every lowercase character")
+        else if (self.digits && remaining(digitChars).isEmpty)
+            throw("PasswordGenerator \"\(self.label)\": excludeCharacters removes every digit")
+        else if (self.symbols && remaining(symbolChars).isEmpty)
+            throw("PasswordGenerator \"\(self.label)\": excludeCharacters removes every symbol character")
+        else
+            true
+
+    function type(): String = "password"
+    function render(): Dynamic(validated() && self.hasStack()) = new {
+        Type = "password"
+        Label = self.label
+        Stack = self.stack
+        Alias = self.alias
+        Rotation = self.rotation?.render()
+        Length = length
+        Uppercase = uppercase
+        Lowercase = lowercase
+        Digits = digits
+        Symbols = symbols
+        ExcludeCharacters = excludeCharacters
+        RequireEachIncludedType = requireEachIncludedType
+    }
+}
+
+/// Generates an RSA key pair: a PKCS#8 PEM private half (`gen.privateKey`)
+/// and a PKIX PEM public half (`gen.publicKey`). One draw produces both, so
+/// two destinations bound to the two outputs always hold halves of the same
+/// pair; that is what makes this a single generator with two named outputs
+/// rather than two generators.
+open class KeyPairGenerator extends Generator {
+    /// RSA modulus size. The set matches what the consuming verifiers accept
+    /// and keeps generation time bounded; a size outside it is refused at
+    /// evaluation rather than surfacing as a draw failure later.
+    bits: Int(this == 2048 || this == 3072 || this == 4096
+        || throw("KeyPairGenerator.bits: \(this) is not a supported RSA key size (2048, 3072 or 4096)")) = 2048
+
+    local self = this
+
+    hidden gen: KeyPairOutputs(self.hasStack()) = new KeyPairOutputs {
+        genLabel = self.label
+        genStack = self.stack
+    }
+
+    function type(): String = "keypair"
+    function render(): Dynamic(self.hasStack()) = new {
+        Type = "keypair"
+        Label = self.label
+        Stack = self.stack
+        Alias = self.alias
+        Rotation = self.rotation?.render()
+        Bits = bits
+    }
+}
+
+/// A reference to one named output of a generator, e.g. `pw.gen.value`.
+/// Renders the $gen envelope the agent resolves at apply time.
+///
+/// Visibility is supplied by the generator's outputs class through `vis` and
+/// defaults to Opaque, because a generated value is usually a secret by
+/// construction. `$visibility` itself is fixed, so an author cannot set it:
+/// an authorable visibility knob would let a plan render a secret in
+/// cleartext.
+open class GeneratorOutput {
+    hidden genLabel: String?
+    hidden genStack: StackResolvable?
+    hidden output: String
+    /// Visibility the agent applies to the resolved value. An outputs class
+    /// chooses it; an author cannot, because a value rendered in cleartext
+    /// into a plan is a value nothing downstream can redact.
+    ///
+    /// The agent normalizes a generator reference to Opaque as it translates
+    /// it, so every generated value is hashed at rest today. An arm whose
+    /// output is not a secret sets this and takes that translation with it.
+    hidden vis: "Clear"|"Opaque" = "Opaque"
+
+    fixed $gen: Boolean = true
+    fixed $label: String? = genLabel
+    fixed $stack: String? = genStack?.label
+    fixed $output: String = output
+    fixed $visibility: String = vis
+
+    // Rendered when this GeneratorOutput is interpolated inside a string via
+    // \(…), mirroring Resolvable.toString(): the full envelope, base64-encoded
+    // and framed by RS (U+001E) … US (U+001F), so the agent can locate and
+    // parse it back out of arbitrary string content.
+    function toString(): String =
+        let (env = new Dynamic {
+                ["$gen"] = true
+                ["$label"] = genLabel
+                ["$stack"] = genStack?.label
+                ["$output"] = output
+                ["$visibility"] = vis
+            })
+        "\u{1e}" + new JsonRenderer { indent = "" }.renderValue(env).base64 + "\u{1f}"
+}
+
+/// Base type for the named outputs a generator produces. Each generator kind
+/// declares its own subclass, whose typed properties are the output names a
+/// destination can bind to.
+abstract class GeneratorOutputs {
+}
+
+/// The named outputs a PasswordGenerator produces.
+open class PasswordOutputs extends GeneratorOutputs {
+    hidden genLabel: String?
+    hidden genStack: StackResolvable?
+
+    local self = this
+
+    hidden value: GeneratorOutput = new GeneratorOutput {
+        genLabel = self.genLabel
+        genStack = self.genStack
+        output = "value"
+    }
+}
+
+/// The named outputs a KeyPairGenerator produces. Both halves are Opaque:
+/// a public key stored opaquely is inert, and per-output visibility is a
+/// decision deliberately not taken yet.
+open class KeyPairOutputs extends GeneratorOutputs {
+    hidden genLabel: String?
+    hidden genStack: StackResolvable?
+
+    local self = this
+
+    hidden privateKey: GeneratorOutput = new GeneratorOutput {
+        genLabel = self.genLabel
+        genStack = self.genStack
+        output = "privateKey"
+    }
+
+    hidden publicKey: GeneratorOutput = new GeneratorOutput {
+        genLabel = self.genLabel
+        genStack = self.genStack
+        output = "publicKey"
     }
 }
 
@@ -140,6 +440,10 @@ open class ResourceHint extends Annotation {
     identifier: String
     /// Type of parent resource
     parent: String?
+    /// Mapping(s) between parent identity properties and the child properties
+    /// that carry those values. Used by the changeset planner to discriminate
+    /// instance-scoped parent/child containment for runtimeDependency edges.
+    parentRefs: (ParentRef|List<ParentRef>)?
     /// Parent Property required for list operations
     listParam: (ListProperty|List<ListProperty>)?
     /// Property that dictates whether a resource is blocked from discovery
@@ -168,31 +472,111 @@ open class ListProperty {
     fixed ListParameter: String = listParameter
 }
 
+/// Maps a parent-side identity property to the child-side property that
+/// carries that value. The two names need not match (they coincide for
+/// MountTarget→FileSystem but diverge for TaskSet→Service, where the parent's
+/// `ServiceName` is referenced by the child's `Service`).
+///
+/// Uses plain camelCase fields (no hidden/fixed dance). The Go side binds via
+/// JSON struct tags — the precedent for new annotations; older annotations
+/// will migrate to the same shape separately.
+class ParentRef {
+    /// Name of the property on the parent resource that this mapping references.
+    parentProperty: String
+    /// Name of the property on this child that holds the parent's value.
+    childProperty: String
+}
+
+/// Declares that a field's live collection is shared with writers other than
+/// the owning forma (e.g. a security group's rule set, or a mapping the
+/// platform itself populates in part).
+class CoOwnership {
+    /// Glob patterns over member identities naming entries the platform
+    /// itself injects into this field's live collection. Consulted only by
+    /// extract on resources with no ownership record; never by plan or drift.
+    hidden systemPatterns: Listing<String> = new Listing {}
+
+    fixed SystemPatterns: Listing<String> = systemPatterns
+}
+
 typealias FieldUpdateMethod = "Array"|"Atomic"|"EntitySet"|"Set"
+
+typealias EdgeKind =
+    "default"            // Construction-data-flow. Default for unannotated fields.
+                         // On destroy: consumer first, producer second.
+  | "attachesTo"         // Reachability. Consumer is reachable through the
+                         // producer at runtime (e.g. ECS Service via ALB Listener).
+                         // On destroy: producer first, consumer second.
+  | "runtimeDependency"  // Containment. Consumer uses the producer and its
+                         // containment children at runtime, even though those
+                         // children are not directly referenced.
+                         // On create:  producer first, then each child K, then consumer.
+                         // On destroy: consumer first, then each child K, then producer.
 
 open class FieldHint extends Annotation {
     hidden createOnly: Boolean = false
     hidden writeOnly: Boolean = false
     hidden required: Boolean = false
     hidden requiredOnCreate: Boolean = false
+    /// The provider mandates this field in every update payload. When set, the
+    /// patch engine force-resends the field on each update even when its value
+    /// is unchanged (e.g. password-class fields). Distinct from writeOnly,
+    /// which only excludes a field from drift detection.
+    hidden requiredOnUpdate: Boolean = false
     hidden hasProviderDefault: Boolean = false
-    hidden attachesTo: Boolean = false
+    hidden opaque: Boolean = false                // NEW: field carries a formae.SecretValue
+    hidden attachesTo: Boolean = false           // DEPRECATED; use edgeKind instead
+    hidden edgeKind: EdgeKind = "default"        // NEW
     hidden indexField: String?
     hidden updateMethod: FieldUpdateMethod?
+    /// Marks this field a collection whose live content legitimately has
+    /// writers other than this forma. Requires updateMethod "Set" or
+    /// "EntitySet" (or left unset) — a field replaced or diffed wholesale
+    /// (Array, Atomic) has no per-member merge to reconcile co-ownership
+    /// against.
+    hidden coOwned: CoOwnership?
+    /// Opts this field's subtree out of empty-value normalization: empty
+    /// collections inside it are treated as values and preserved end to end.
+    hidden preserveEmptyValues: Boolean = false
+    hidden format: String = ""                   // serialized-content format (e.g. "json")
 
     hidden outputField: String?
     hidden outputTransformation: ((Any) -> Any)?
     hidden outputCondition: ((Any) -> Boolean) = (_) -> true
+
+    local self = this
+
+    // Eval-time validation: a field whose whole value is replaced or diffed
+    // atomically (Array, Atomic) has no per-member merge to reconcile
+    // co-ownership against, so declaring it coOwned is a schema-author
+    // mistake caught here rather than at drift/plan time. Likewise, an
+    // opaque field's member identities are the secret values themselves, not
+    // names — recording them in an ownership record would persist the
+    // secret unhashed, bypassing the opaque-hashing transformer entirely, so
+    // coOwned+opaque is rejected the same way until a hashing design exists.
+    local function validated(): Boolean =
+        if (self.coOwned != null && !(self.updateMethod == null || self.updateMethod == "Set" || self.updateMethod == "EntitySet"))
+            throw("FieldHint: coOwned requires updateMethod \"Set\" or \"EntitySet\" (or unset), got \"\(self.updateMethod)\"")
+        else if (self.coOwned != null && self.opaque)
+            throw("FieldHint: coOwned cannot be combined with opaque — an opaque field's member identities are its secret values, not names")
+        else
+            true
 
     // Output
     fixed CreateOnly: Boolean = createOnly
     fixed WriteOnly: Boolean = writeOnly
     fixed Required: Boolean = required
     fixed RequiredOnCreate: Boolean = requiredOnCreate
+    fixed RequiredOnUpdate: Boolean = requiredOnUpdate
     fixed HasProviderDefault: Boolean = hasProviderDefault
+    fixed Opaque: Boolean = opaque                // NEW
     fixed AttachesTo: Boolean = attachesTo
+    fixed EdgeKind: String = edgeKind
     fixed UpdateMethod: String = updateMethod ?? ""
+    fixed CoOwned: CoOwnership?(validated()) = coOwned
+    fixed PreserveEmptyValues: Boolean = preserveEmptyValues
     fixed IndexField: String = indexField ?? ""
+    fixed Format: String = format                // NEW
 }
 
 /// Annotation for target config fields to declare mutability.
@@ -222,9 +606,39 @@ open class Schema {
     Extractable: Boolean = true
     /// Property that dictates whether a resource can be moved across targets
     Portable: Boolean = false
+    /// Type of parent resource. Empty string when this resource has no parent.
+    /// Populated by Extractor.pkl from ResourceHint.parent.
+    Parent: String = ""
+    /// Identity-property mappings from this child to its parent. Empty when
+    /// this resource has no parent. Populated by Extractor.pkl from
+    /// ResourceHint.parentRefs, with a `listParam` fallback for legacy schemas.
+    ParentMappings: Listing<ParentRef> = new Listing {}
 
     /// Query fields by FieldHint property
     function query(prop: String): Listing<String> = this.hints.toMap().filter((_, v) -> v.getProperty(prop)).keys.toListing()
+}
+
+// Reaping behaviour for a target - what happens once the target has been
+// continuously unreachable.
+typealias Reaping = NeverReap|ReapAfter
+
+// NeverReap - the target is never reaped, no matter how long it stays unreachable
+open class NeverReap {
+    function render(): Dynamic = new {
+        Kind = "never"
+    }
+}
+
+// ReapAfter - the target is reaped once it has been continuously unreachable
+// for at least maxUnreachable
+open class ReapAfter {
+    hidden maxUnreachable: Duration
+
+    local self = this
+    function render(): Dynamic = new {
+        Kind = "after"
+        MaxUnreachableSeconds = self.maxUnreachable.toUnit("s").value.toInt()
+    }
 }
 
 open class Target {
@@ -232,6 +646,7 @@ open class Target {
     hidden namespace: String = config.type.toUpperCase()
     hidden config: Any?
     hidden discoverable: Boolean = true
+    hidden reap: Reaping?
 
     local self = this
     hidden res: TargetResolvable = new {
@@ -250,6 +665,7 @@ open class Target {
             else null
         else null
     fixed Discoverable: Boolean = discoverable
+    fixed Reaping: Dynamic? = self.reap?.render()
 }
 
 open class TargetResolvable extends Resolvable {
@@ -274,6 +690,21 @@ open class Resolvable {
 
     $res: Boolean = true
     $visibility: String = visibility
+
+    // Rendered when this Resolvable is interpolated inside a string via \(…).
+    // Emits the full $res envelope, base64-encoded, framed by RS (U+001E) … US (U+001F),
+    // so the agent can locate and parse it back out of arbitrary string content.
+    // Whole-value rendering (assigning the Resolvable directly) is unaffected.
+    function toString(): String =
+        let (env = new Dynamic {
+                ["$res"] = true
+                ["$label"] = label
+                ["$type"] = type
+                ["$stack"] = stack
+                ["$property"] = property
+                ["$visibility"] = visibility
+            })
+        "\u{1e}" + new JsonRenderer { indent = "" }.renderValue(env).base64 + "\u{1f}"
 }
 
 /// Resolvable that resolves to a Mapping. Supports key-based access via at().
@@ -311,10 +742,75 @@ open class ListingResolvable extends Resolvable {
     }
 }
 
+/// The consumable result of a secret reference: `secret.res.secretValue` (scalar)
+/// or `secret.res.secretValue.at(key)` (map). Opacity is derived agent-side from
+/// the source field's FieldHint.Opaque, not re-declared here.
+open class SecretValueResolvable extends Resolvable {
+    hidden jsonPath: String?
+    /// Parse the resolved value as JSON and extract a dotted path (gjson syntax).
+    /// Terminal; chainable after .at(). The extracted value stays opaque.
+    function json(path: String): SecretValueResolvable = (this) { jsonPath = path }
+    $json: String? = jsonPath
+}
+
+/// Scalar secret backends (e.g. AWS SecretString, Azure value): `secretValue` IS
+/// the value. There is no at(). A plugin's secret resolvable extends this and
+/// sets valueProperty.
+open class ScalarSecretResolvable extends Resolvable {
+    local _self = this
+    hidden valueProperty: String
+    hidden secretValue: SecretValueResolvable = new {
+        label = _self.label
+        type = _self.type
+        stack = _self.stack
+        property = valueProperty
+        visibility = _self.visibility
+    }
+}
+
+/// Accessor for map secret backends. Intentionally NOT a Resolvable: a bare
+/// `secretValue` (a forgotten .at()) cannot be assigned to a Resolvable-typed
+/// consumer field, so the mistake is a PKL eval-time type error. Only .at(key)
+/// produces a Resolvable.
+class SecretMapAccessor {
+    local _self = this
+    hidden label: String?
+    hidden type: String(matches(Regex(#"^.*::.*$"#)))?
+    hidden stack: String?
+    hidden valueProperty: String
+    hidden visibility: "Clear"|"Opaque" = "Clear"
+    /// Access a value by key in the resolved map. Colons and dots are escaped for
+    /// gjson, matching MappingResolvable.at. The leaf's label/type/stack/visibility
+    /// are captured from the accessor (via `_self`) rather than `this`, which inside
+    /// the `new {}` binds to the leaf being constructed and would self-reference.
+    function at(key: String): SecretValueResolvable = new {
+        label = _self.label
+        type = _self.type
+        stack = _self.stack
+        property = _self.valueProperty + "." + key.replaceAll(":", "\\:").replaceAll(".", "\\.")
+        visibility = _self.visibility
+    }
+}
+
+/// Map secret backends (e.g. Kubernetes data, a Vault KV path): `secretValue` is
+/// an accessor you must .at() into.
+open class MapSecretResolvable extends Resolvable {
+    local _self = this
+    hidden valueProperty: String
+    hidden secretValue: SecretMapAccessor = new {
+        label = _self.label
+        type = _self.type
+        stack = _self.stack
+        valueProperty = _self.valueProperty
+        visibility = _self.visibility
+    }
+}
+
 open class Value {
     hidden value: String
     hidden visibility: "Clear"|"Opaque" = "Clear"
     hidden strategy: "Update"|"SetOnce" = "Update"
+    hidden isHashed: Boolean = false
 
     hidden opaque: Value = (this) {
         visibility = "Opaque"
@@ -324,10 +820,59 @@ open class Value {
         strategy = "SetOnce"
     }
 
+    /// Marks the stored `$value` as a SHA-256 digest rather than plaintext.
+    /// The agent's plugin-boundary guard rejects hashed values from being
+    /// written to the cloud as literal field values.
+    hidden hashed: Value = (this) {
+        isHashed = true
+    }
+
     $value: String = value
     $visibility: String = visibility
     $strategy: String = strategy
+    $hashed: Boolean? = if (isHashed) true else null
 }
+
+/// A secret value. Typing a resource field `(String|formae.SecretValue)` (or
+/// nullable/union variants thereof) marks the field opaque in its schema
+/// FieldHint (opaque-by-default), so the agent hashes it at rest regardless
+/// of how the author supplied the value.
+open class SecretValue extends Value {
+    hidden opaque: SecretValue = (this) {
+        visibility = "Opaque"
+    }
+
+    hidden setOnce: SecretValue = (this) {
+        strategy = "SetOnce"
+    }
+
+    hidden hashed: SecretValue = (this) {
+        isHashed = true
+    }
+}
+
+/// Every way formae can supply a resource field's value other than as a literal:
+/// a reference to another resource's property, a value formae has recorded, a
+/// secret value, or one of a generator's named outputs. A field names this in
+/// place of spelling the four out, so a field that accepts anything formae can
+/// supply says so once and goes on saying it when a new envelope kind is added.
+///
+/// Because `SecretValue` is a member, a field naming this alias is marked opaque
+/// in its schema `FieldHint`, and the agent hashes its value at rest.
+///
+/// `String` is deliberately not a member: a field declares its own literal type
+/// beside the alias, as `(String|formae.ValueSource)?`. That is what keeps a
+/// constraint on the literal meaningful — with a bare `String` inside the alias,
+/// `(String(matches(Regex(#"…"#)))|formae.ValueSource)` would accept any string
+/// at all, since the alias's own unconstrained `String` arm would take it.
+///
+/// A field naming this alias accepts a generator binding. One that must not take
+/// a generated value spells out the members it does accept instead.
+typealias ValueSource =
+    Resolvable        // $res, another resource's property
+  | Value             // $value, a value formae has recorded
+  | SecretValue       // $value, and what marks the field opaque
+  | GeneratorOutput   // $gen, one of a generator's named outputs
 
 open class Prop {
     hidden flag: String?
@@ -362,15 +907,78 @@ open class Prop {
     fixed Value: (String|Boolean|Int|Float)? = value
 }
 
+// ---- typed CLI properties (RFC-105) ----------------------------------------
+
+/// Overrides the CLI flag / `prop:` key for a typed Props member, decoupling the
+/// statically-typed member name (e.g. `certArn`) from the flag a user passes on
+/// the CLI (e.g. `--cert-arn`). Mirrors the legacy `Prop.flag` override, but the
+/// member stays typed so `properties.certArn` resolves in editors.
+open class Flag extends Annotation {
+    name: String
+}
+
+/// flagName: the member's `@Flag` override if present, else the member name.
+function flagName(p): String =
+    p.annotations.filterIsInstance(Flag).firstOrNull?.name ?? p.name
+
+/// Resolve a reflected type to its simple name, unwrapping nullables.
+function typeName(t): String =
+    if (t is reflect.DeclaredType) t.referent.name
+    else if (t is reflect.NullableType) typeName(t.member)
+    else "unknown"
+
+/// fillProps constructs a typed instance of `clazz`, reading `prop:<member>`
+/// per member, coercing to the declared type, and falling back to the declared
+/// default. Type constraints on the class members are validated by `toTyped`.
+/// Prior art: pkl-pantry `pkl.experimental.structuredRead`.
+function fillProps(clazz: Class): Typed =
+    new Mapping {
+        for (n, p in reflect.Class(clazz).properties) {
+            [n] = let (raw = read?("prop:\(flagName(p))"))
+                if (raw == null) p.defaultValue
+                else
+                    let (tn = typeName(p.type))
+                    if (tn == "Int") raw.toInt()
+                    else if (tn == "Float") raw.toFloat()
+                    else if (tn == "Boolean") raw.toBoolean()
+                    else raw
+        }
+    }.toMap().toTyped(clazz)
+
+/// renderProperties turns the module's `properties` value into the manifest the
+/// CLI/agent consume. Typed instances (the extends shape) are reflected into
+/// `{ name -> Prop }`; legacy Dynamic blocks pass through unchanged. The
+/// manifest Value always comes from the INSTANCE (never a self-reading Prop),
+/// so manifest and resources cannot disagree.
+function renderProperties(opts: Any?): Any? =
+    if (opts == null) new Mapping {}
+    // LEGACY: a Dynamic `properties {}` block (amends-based formae) passes
+    // through unchanged, preserving today's wire output byte for byte.
+    // Remove together with forma.pkl's `is Typed` discriminator when the
+    // legacy block is dropped after the deprecation window.
+    else if (!(opts is Typed)) opts
+    else
+        let (inst = opts.toDynamic().toMap())
+        new Mapping {
+            for (name, p in reflect.Class(opts.getClass()).properties) {
+                [name] = new Prop {
+                    flag = flagName(p)
+                    default = p.defaultValue as (String|Boolean|Int|Float)?
+                    value = inst[name] as (String|Boolean|Int|Float)?
+                }
+            }
+        }
+
 /// FormaeRender is an ouput class notice the casing difference
 class FormaRender {
     local self = this
 
     Description: Description?
-    Properties: Dynamic?
+    Properties: Any?
     Stacks: Listing<Stack>
     Targets: Listing<Target>
     Policies: Listing<Dynamic>?
+    Generators: Listing<Dynamic>?
     Resources: Listing<Resource>(validate(this))
     hidden Resolvables: Listing<Resolvable>
 
@@ -396,7 +1004,7 @@ class FormaRender {
 
     function validateResourceResolvables(resource: Resource): Boolean =
         let (resourceClass = reflect.Class(resource.getClass()))
-        let (resolvableProperties = resourceClass.properties.filter((_, prop) ->
+        let (resolvableProperties = module.fq.allProperties(resourceClass).filter((_, prop) ->
             prop.type.toString().contains("Resolvable")
         ))
         resolvableProperties.every((propName, prop) ->
@@ -443,6 +1051,17 @@ function value(val: String) = new Value {
     value = val
 }
 
+/// A String-typed field value carrying one or more embedded resolvables,
+/// produced by `embed(...)`. Renders to an `{$embed, $template}` envelope that
+/// the agent substitutes at resolve time, shipping a plain String to the plugin.
+open class Embedded {
+    hidden template: String
+    $embed: Boolean = true
+    $template: String = template
+}
+
+function embed(s: String): Embedded = new Embedded { template = s }
+
 // Fq Formae query functions can be used globally
 class Fq {
     function fields(resourceClass: reflect.Class): Listing<String> = new Listing<String> {
@@ -450,6 +1069,33 @@ class Fq {
             k
         }
     }
+
+    /// Collects `cls`'s own properties together with every property it inherits
+    /// from an intermediate schema base. `reflect.Class.properties` is
+    /// direct-only, so a class that extends another schema class rather than a
+    /// root would otherwise expose only what it redeclares.
+    ///
+    /// The walk stops at — and excludes — the `Resource` and `SubResource`
+    /// roots: their own members (`label`, `group`, `target`, `stack`, `alias`,
+    /// `managed`) are framework plumbing, not schema fields, and collecting them
+    /// would inject six unannotated fields into every resource's schema. It also
+    /// stops at `Typed`/`Module` so a class that extends neither root cannot drag
+    /// in Pkl's own members. The roots are matched by class identity rather than
+    /// by name: a name test would reject a genuine subclass sitting under an
+    /// intermediate base and accept an unrelated provider-local class that merely
+    /// shares the name.
+    ///
+    /// Parent entries come first; a redeclaration in a subclass replaces the
+    /// parent's entry in place, keeping the parent's position.
+    function allProperties(cls: reflect.Class?): Map<String, reflect.Property> =
+        if (cls == null
+            || cls.reflectee == module.Resource
+            || cls.reflectee == module.SubResource
+            || cls.reflectee == Typed
+            || cls.reflectee == Module)
+            Map()
+        else
+            allProperties(cls.superclass) + cls.properties
 
     function findResourceHint(resourceClass: reflect.Class?): ResourceHint =
       resourceClass.annotations.filterIsInstance(ResourceHint).firstOrNull ?? findResourceHint(resourceClass.superclass)
@@ -462,15 +1108,16 @@ class Fq {
 
     function hints(resourceClass: reflect.Class): Mapping<String, FieldHint> =
         let(resourceHint = findResourceHint(resourceClass))
-        let(directHints = resourceClass.properties.filter((_, v) -> v.allAnnotations.filterIsInstance(FieldHint).length > 0).map((k, v) ->
-            let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
+        let(directHints = allProperties(resourceClass).filter((_, v) -> !v.modifiers.contains("hidden")).map((k, v) ->
+            let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull ?? new FieldHint {})
             let(key = if(fieldHint.outputField != null) fieldHint.outputField else resourceHint.outputKeyTransformation.apply(k))
             let(baseHint = (fieldHint) {
                 required = !(v.type is reflect.NullableType)
+                opaque = isSecretValueType(v.type)
             })
             Pair(key, baseHint)
         ))
-        let(nestedHints = resourceClass.properties.filter((_, v) -> isSubResourceType(v.type)).flatMap((k, v) ->
+        let(nestedHints = allProperties(resourceClass).filter((_, v) -> isSubResourceType(v.type)).flatMap((k, v) ->
             let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
             let(parentKey = if(fieldHint != null && fieldHint.outputField != null) fieldHint.outputField else resourceHint.outputKeyTransformation.apply(k))
             let(subResourceClass = getSubResourceClass(v.type))
@@ -496,15 +1143,16 @@ class Fq {
         let(nextVisited = visited.add(className))
         let(subResourceHint = findSubResourceHint(subResourceClass))
         let(outputKeyTransformation = if (subResourceHint != null) subResourceHint.outputKeyTransformation else (it) -> it)
-        let(directHints = subResourceClass.properties.filter((_, v) -> v.allAnnotations.filterIsInstance(FieldHint).length > 0).map((k, v) ->
-            let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
+        let(directHints = allProperties(subResourceClass).filter((_, v) -> !v.modifiers.contains("hidden")).map((k, v) ->
+            let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull ?? new FieldHint {})
             let(key = if(fieldHint.outputField != null) fieldHint.outputField else outputKeyTransformation.apply(k))
             let(baseHint = (fieldHint) {
                 required = !(v.type is reflect.NullableType)
+                opaque = isSecretValueType(v.type)
             })
             Pair(key, baseHint)
         ))
-        let(nestedHints = subResourceClass.properties.filter((_, v) -> isSubResourceType(v.type)).flatMap((k, v) ->
+        let(nestedHints = allProperties(subResourceClass).filter((_, v) -> isSubResourceType(v.type)).flatMap((k, v) ->
             let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
             let(parentKey = if(fieldHint != null && fieldHint.outputField != null) fieldHint.outputField else outputKeyTransformation.apply(k))
             let(nestedSubResourceClass = getSubResourceClass(v.type))
@@ -542,6 +1190,28 @@ class Fq {
         cls.superclass != null &&
         (cls.superclass.name == "SubResource" ||
          isSubResourceClass(cls.superclass))
+
+    /// Detects whether a field's declared type references formae.SecretValue,
+    /// directly or through nullable/union positions. Nested/list/map
+    /// positions are deferred — first cut only.
+    function isSecretValueType(type: reflect.Type): Boolean =
+        if (type is reflect.DeclaredType)
+            let (referent = type.referent)
+            if (referent is reflect.Class) isSecretValueClass(referent)
+            else if (referent is reflect.TypeAlias)
+                // Handle type alias by checking its aliased type
+                isSecretValueType(referent.referent)
+            else false
+        else if (type is reflect.NullableType)
+            isSecretValueType(type.member)
+        else if (type is reflect.UnionType)
+            type.members.any((m) -> isSecretValueType(m))
+        else false
+
+    function isSecretValueClass(c: reflect.Class): Boolean =
+        if (c.name == "SecretValue") true
+        else if (c.superclass != null) isSecretValueClass(c.superclass)
+        else false
 
     function getSubResourceClass(type: reflect.Type): reflect.Class =
         if (type is reflect.DeclaredType)
@@ -594,41 +1264,52 @@ class Fq {
         else
             false
 
+    /// Reports whether a property should be omitted from the rendered output
+    /// because the user did not declare it AND its type is a nullable Listing
+    /// or Mapping. Without this, an unset nullable collection renders as a
+    /// JSON null, which the patch pipeline cannot distinguish from a scalar
+    /// `null` (intended to clear a previously-set value); omitting the key
+    /// instead lets the diff treat it as absent on both sides.
+    function isUnsetNullableCollection(propType: reflect.Type, rawValue: Any?): Boolean =
+        rawValue == null && (isNullableListingType(propType) || isNullableMappingType(propType))
+
     function subresourceProps(resourceClass: reflect.Class, subResource: SubResource): Dynamic =
         let(subResourceHint = findSubResourceHint(resourceClass))
-        resourceClass.properties.filter((_, v) -> !v.modifiers.contains("hidden")).map((k, v) ->
-            let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
-            let(rawValue = subResource.getPropertyOrNull(k))
-            if (fieldHint != null && rawValue != null && fieldHint.outputCondition.apply(rawValue))
-                let(key = if(fieldHint.outputField != null) fieldHint.outputField else subResourceHint.outputKeyTransformation.apply(k))
-                if (fieldHint.outputTransformation != null)
-                    Pair(key, fieldHint.outputTransformation.apply(rawValue))
+        allProperties(resourceClass)
+            .filter((k, v) ->
+                !v.modifiers.contains("hidden")
+                && !isUnsetNullableCollection(v.type, subResource.getPropertyOrNull(k))
+            )
+            .map((k, v) ->
+                let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
+                let(rawValue = subResource.getPropertyOrNull(k))
+                if (fieldHint != null && rawValue != null && fieldHint.outputCondition.apply(rawValue))
+                    let(key = if(fieldHint.outputField != null) fieldHint.outputField else subResourceHint.outputKeyTransformation.apply(k))
+                    if (fieldHint.outputTransformation != null)
+                        Pair(key, fieldHint.outputTransformation.apply(rawValue))
+                    else
+                        Pair(key, rawValue)
                 else
+                    let(key = subResourceHint.outputKeyTransformation.apply(k))
                     Pair(key, rawValue)
-            else
-                let(key = subResourceHint.outputKeyTransformation.apply(k))
-                let(value =
-                    if (rawValue == null && isNullableListingType(v.type)) new Listing {}
-                    else if (rawValue == null && isNullableMappingType(v.type)) new Mapping {}
-                    else rawValue)
-                Pair(key, value)
-        ).toDynamic()
+            ).toDynamic()
 
     function resourceProps(resourceClass: reflect.Class, resource: Resource): Dynamic =
         let(resourceHint = findResourceHint(resourceClass))
-        resourceClass.properties.filter((_, v) -> v.allAnnotations.filterIsInstance(FieldHint).length > 0).map((k, v) ->
-            let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
-            let(key = if(fieldHint.outputField != null) fieldHint.outputField else resourceHint.outputKeyTransformation.apply(k))
-            let(rawValue = resource.getPropertyOrNull(k))
-            if (fieldHint.outputTransformation != null && rawValue != null && fieldHint.outputCondition.apply(rawValue))
-                Pair(key, fieldHint.outputTransformation.apply(rawValue))
-            else
-                let(value =
-                    if (rawValue == null && isNullableListingType(v.type)) new Listing {}
-                    else if (rawValue == null && isNullableMappingType(v.type)) new Mapping {}
-                    else rawValue)
-                Pair(key, value)
-        ).toDynamic()
+        allProperties(resourceClass)
+            .filter((k, v) ->
+                v.allAnnotations.filterIsInstance(FieldHint).length > 0
+                && !isUnsetNullableCollection(v.type, resource.getPropertyOrNull(k))
+            )
+            .map((k, v) ->
+                let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
+                let(key = if(fieldHint.outputField != null) fieldHint.outputField else resourceHint.outputKeyTransformation.apply(k))
+                let(rawValue = resource.getPropertyOrNull(k))
+                if (fieldHint.outputTransformation != null && rawValue != null && fieldHint.outputCondition.apply(rawValue))
+                    Pair(key, fieldHint.outputTransformation.apply(rawValue))
+                else
+                    Pair(key, rawValue)
+            ).toDynamic()
 
     function configHints(configClass: reflect.Class): Mapping<String, ConfigFieldHint> =
         configClass.properties
@@ -648,7 +1329,49 @@ class Fq {
                 Discoverable = hint.discoverable
                 Extractable = hint.extractable
                 Portable = hint.portable
+                Parent = hint.parent ?? ""
+                ParentMappings = parentMappingsOf(hint)
             }
+
+    /// Build the Schema.ParentMappings listing from a ResourceHint.
+    ///
+    /// Preference order: `parentRefs` (the explicit shape) over `listParam`
+    /// (legacy fallback). `parentRefs` is typed `(ParentRef|List<ParentRef>)?`
+    /// so it arrives as either a single `ParentRef` or a `List<ParentRef>`; PKL
+    /// rejects `Listing` literals at the type boundary so no `is Listing` arm is
+    /// reachable here. `listParam` keeps the `is Listing` arm for symmetry with
+    /// `extractParentMappings` in Extractor.pkl. When falling back to `listParam`,
+    /// the child-side name is taken from `listParameter` (the LIST API parameter
+    /// that carries the parent's value on the child).
+    function parentMappingsOf(resourceHint): Listing<ParentRef> =
+        let (refs = resourceHint.getProperty("parentRefs"))
+        let (listParam = resourceHint.getProperty("listParam"))
+        if (refs != null)
+            if (refs is List)
+                new Listing { for (r in refs) { fromParentRef(r) } }
+            else
+                // Single ParentRef
+                new Listing { fromParentRef(refs) }
+        else if (listParam != null)
+            if (listParam is Listing)
+                new Listing { for (p in listParam) { fromListProperty(p) } }
+            else if (listParam is List)
+                new Listing { for (p in listParam) { fromListProperty(p) } }
+            else
+                // Single ListProperty
+                new Listing { fromListProperty(listParam) }
+        else
+            new Listing {}
+
+    function fromParentRef(r): ParentRef = new ParentRef {
+        parentProperty = r.parentProperty
+        childProperty = r.childProperty
+    }
+
+    function fromListProperty(p): ParentRef = new ParentRef {
+        parentProperty = p.parentProperty
+        childProperty = p.listParameter
+    }
 
     function type(resourceClass: reflect.Class): String =
       let (resourceHint = findResourceHint(resourceClass))
@@ -656,12 +1379,12 @@ class Fq {
 
     function reverseFieldMapping(resourceClass: reflect.Class): Mapping<String, String> =
         let(resourceHint = findResourceHint(resourceClass))
-        let(directMapping = resourceClass.properties.filter((_, v) -> v.allAnnotations.filterIsInstance(FieldHint).length > 0).map((k, v) ->
+        let(directMapping = allProperties(resourceClass).filter((_, v) -> v.allAnnotations.filterIsInstance(FieldHint).length > 0).map((k, v) ->
             let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
             let(outputKey = if(fieldHint.outputField != null) fieldHint.outputField else resourceHint.outputKeyTransformation.apply(k))
             Pair(outputKey, k)
         ))
-        let(nestedMapping = resourceClass.properties.filter((_, v) ->
+        let(nestedMapping = allProperties(resourceClass).filter((_, v) ->
             v.allAnnotations.filterIsInstance(FieldHint).length > 0 &&
             isSubResourceType(v.type)
         ).flatMap((k, v) ->
@@ -691,7 +1414,7 @@ class Fq {
         let(subResourceHint = findSubResourceHint(resourceClass))
         let(outputKeyTransformation = if (subResourceHint != null) subResourceHint.outputKeyTransformation else (it) -> it)
         // Include ALL properties, not just those with @FieldHint
-        let(directMapping = resourceClass.properties.filter((_, v) -> !v.modifiers.contains("hidden")).map((k, v) ->
+        let(directMapping = allProperties(resourceClass).filter((_, v) -> !v.modifiers.contains("hidden")).map((k, v) ->
             let(fieldHint = v.allAnnotations.filterIsInstance(FieldHint).firstOrNull)
             let(outputKey =
                 if (fieldHint != null && fieldHint.outputField != null)
@@ -701,7 +1424,7 @@ class Fq {
             )
             Pair(outputKey, k)
         ))
-        let(nestedMapping = resourceClass.properties.filter((_, v) ->
+        let(nestedMapping = allProperties(resourceClass).filter((_, v) ->
             !v.modifiers.contains("hidden") &&
             isSubResourceType(v.type)
         ).flatMap((k, v) ->

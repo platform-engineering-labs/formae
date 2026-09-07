@@ -17,166 +17,17 @@ import (
 	"testing"
 
 	"github.com/labstack/echo/v4"
-	"github.com/platform-engineering-labs/formae/internal/metastructure/changeset"
-	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
+	"github.com/platform-engineering-labs/formae/internal/api/apitest"
+	"github.com/platform-engineering-labs/formae/internal/datastore"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-type WrappedCommandResponse struct {
-	SubmitCommandResponse *apimodel.SubmitCommandResponse
-	Error                 error
-}
-
-type WrappedExtractResponse struct {
-	Forma *pkgmodel.Forma
-	Error error
-}
-
-type WrappedListResponse struct {
-	ListCommandStatusResponse *apimodel.ListCommandStatusResponse
-	Error                     error
-}
-
-type WrappedCancelResponse struct {
-	CancelCommandResponse *apimodel.CancelCommandResponse
-	Error                 error
-}
-
-type WrappedTargetResponse struct {
-	Targets []*pkgmodel.Target
-	Error   error
-}
-
-type WrappedDriftResponse struct {
-	Drift apimodel.ModifiedStack
-	Error error
-}
-
-type WrappedReconcileResponse struct {
-	Response *apimodel.ForceReconcileResponse
-	Error    error
-}
-
-type WrappedCheckTTLResponse struct {
-	Response *apimodel.ForceCheckTTLResponse
-	Error    error
-}
-
-type FakeMetastructure struct {
-	applyResponses      []WrappedCommandResponse
-	destroyResponses    []WrappedCommandResponse
-	extractResponses    []WrappedExtractResponse
-	targetResponses     []WrappedTargetResponse
-	listResponses       []WrappedListResponse
-	cancelResponses     []WrappedCancelResponse
-	driftResponses      []WrappedDriftResponse
-	reconcileResponses  []WrappedReconcileResponse
-	checkTTLResponses   []WrappedCheckTTLResponse
-}
-
-func (m *FakeMetastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error) {
-	nextResponse := m.applyResponses[0]
-	m.applyResponses = m.applyResponses[1:]
-
-	return nextResponse.SubmitCommandResponse, nextResponse.Error
-}
-
-func (m *FakeMetastructure) DestroyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error) {
-	nextResponse := m.destroyResponses[0]
-	m.destroyResponses = m.destroyResponses[1:]
-
-	return nextResponse.SubmitCommandResponse, nextResponse.Error
-}
-
-func (m *FakeMetastructure) DestroyByQuery(query string, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error) {
-	nextResponse := m.destroyResponses[0]
-	m.destroyResponses = m.destroyResponses[1:]
-
-	return nextResponse.SubmitCommandResponse, nextResponse.Error
-}
-
-func (m *FakeMetastructure) CancelCommand(commandID string, clientID string) (*changeset.CancelResponse, error) {
-	return nil, nil
-}
-
-func (m *FakeMetastructure) CancelCommandsByQuery(query string, clientID string) (*apimodel.CancelCommandResponse, error) {
-	nextResponse := m.cancelResponses[0]
-	m.cancelResponses = m.cancelResponses[1:]
-
-	return nextResponse.CancelCommandResponse, nextResponse.Error
-}
-
-func (m *FakeMetastructure) ListFormaCommandStatus(commandID string, clientID string, n int) (*apimodel.ListCommandStatusResponse, error) {
-	nextResponse := m.listResponses[0]
-	m.listResponses = m.listResponses[1:]
-
-	return nextResponse.ListCommandStatusResponse, nextResponse.Error
-}
-
-func (m *FakeMetastructure) ExtractResources(query string) (*pkgmodel.Forma, error) {
-	nextResponse := m.extractResponses[0]
-	m.extractResponses = m.extractResponses[1:]
-
-	return nextResponse.Forma, nextResponse.Error
-}
-
-func (m *FakeMetastructure) ExtractTargets(query string) ([]*pkgmodel.Target, error) {
-	if len(m.targetResponses) == 0 {
-		return []*pkgmodel.Target{}, nil
-	}
-	nextResponse := m.targetResponses[0]
-	m.targetResponses = m.targetResponses[1:]
-	return nextResponse.Targets, nextResponse.Error
-}
-
-func (m *FakeMetastructure) ExtractStacks() ([]*pkgmodel.Stack, error) {
-	return []*pkgmodel.Stack{}, nil
-}
-
-func (m *FakeMetastructure) ExtractPolicies() ([]apimodel.PolicyInventoryItem, error) {
-	return []apimodel.PolicyInventoryItem{}, nil
-}
-
-func (m *FakeMetastructure) ForceSync() error {
-	return nil
-}
-
-func (m *FakeMetastructure) ForceDiscovery() error {
-	return nil
-}
-
-func (m *FakeMetastructure) ForceAutoReconcile(stackLabel string) (*apimodel.ForceReconcileResponse, error) {
-	nextResponse := m.reconcileResponses[0]
-	m.reconcileResponses = m.reconcileResponses[1:]
-
-	return nextResponse.Response, nextResponse.Error
-}
-
-func (m *FakeMetastructure) ForceCheckTTL() (*apimodel.ForceCheckTTLResponse, error) {
-	nextResponse := m.checkTTLResponses[0]
-	m.checkTTLResponses = m.checkTTLResponses[1:]
-
-	return nextResponse.Response, nextResponse.Error
-}
-
-func (m *FakeMetastructure) ListDrift(stack string) (*apimodel.ModifiedStack, error) {
-	nextResponse := m.driftResponses[0]
-	m.driftResponses = m.driftResponses[1:]
-	return &nextResponse.Drift, nextResponse.Error
-}
-
-func (m *FakeMetastructure) Stats() (*apimodel.Stats, error) {
-	return &apimodel.Stats{
-		Version: "1.0.0",
-		AgentID: "test-agent",
-	}, nil
-}
-
 func TestServer_ApplyFormaSuccessResponse(t *testing.T) {
-	meta := &FakeMetastructure{}
-	meta.applyResponses = []WrappedCommandResponse{{&apimodel.SubmitCommandResponse{
+	meta := &apitest.FakeMetastructure{}
+	meta.ApplyResponses = []apitest.WrappedCommandResponse{{&apimodel.SubmitCommandResponse{
 		CommandID: "1234",
 		Simulation: apimodel.Simulation{
 			ChangesRequired: true,
@@ -226,8 +77,8 @@ func TestServer_ApplyFormaSuccessResponse(t *testing.T) {
 }
 
 func TestServer_ApplyFormaNoChangesResponse(t *testing.T) {
-	meta := &FakeMetastructure{}
-	meta.applyResponses = []WrappedCommandResponse{{&apimodel.SubmitCommandResponse{
+	meta := &apitest.FakeMetastructure{}
+	meta.ApplyResponses = []apitest.WrappedCommandResponse{{&apimodel.SubmitCommandResponse{
 		CommandID: "1234",
 		Simulation: apimodel.Simulation{
 			ChangesRequired: false,
@@ -277,7 +128,7 @@ func TestServer_ApplyFormaNoChangesResponse(t *testing.T) {
 }
 
 func TestServer_ApplyFormaConflictingResourcesError(t *testing.T) {
-	meta := &FakeMetastructure{}
+	meta := &apitest.FakeMetastructure{}
 	conflict := apimodel.FormaConflictingCommandsError{
 		ConflictingCommands: []apimodel.Command{
 			{
@@ -308,7 +159,7 @@ func TestServer_ApplyFormaConflictingResourcesError(t *testing.T) {
 			},
 		},
 	}
-	meta.applyResponses = []WrappedCommandResponse{{&apimodel.SubmitCommandResponse{}, conflict}}
+	meta.ApplyResponses = []apitest.WrappedCommandResponse{{&apimodel.SubmitCommandResponse{}, conflict}}
 
 	server := NewServer(t.Context(), meta, nil, nil, nil, nil)
 
@@ -354,9 +205,9 @@ func TestServer_ApplyFormaConflictingResourcesError(t *testing.T) {
 }
 
 func TestServer_ApplyFormaPatchRejectedErrorError(t *testing.T) {
-	meta := &FakeMetastructure{}
+	meta := &apitest.FakeMetastructure{}
 	rejectedResult := apimodel.FormaPatchRejectedError{}
-	meta.applyResponses = []WrappedCommandResponse{{&apimodel.SubmitCommandResponse{}, rejectedResult}}
+	meta.ApplyResponses = []apitest.WrappedCommandResponse{{&apimodel.SubmitCommandResponse{}, rejectedResult}}
 
 	server := NewServer(t.Context(), meta, nil, nil, nil, nil)
 
@@ -401,9 +252,9 @@ func TestServer_ApplyFormaPatchRejectedErrorError(t *testing.T) {
 }
 
 func TestServer_ApplyFormaCyclesDetectedError(t *testing.T) {
-	meta := &FakeMetastructure{}
+	meta := &apitest.FakeMetastructure{}
 	cyclesDetectedResult := apimodel.FormaCyclesDetectedError{}
-	meta.applyResponses = []WrappedCommandResponse{{&apimodel.SubmitCommandResponse{}, cyclesDetectedResult}}
+	meta.ApplyResponses = []apitest.WrappedCommandResponse{{&apimodel.SubmitCommandResponse{}, cyclesDetectedResult}}
 
 	server := NewServer(t.Context(), meta, nil, nil, nil, nil)
 
@@ -448,14 +299,14 @@ func TestServer_ApplyFormaCyclesDetectedError(t *testing.T) {
 }
 
 func TestServer_ApplyFormaResourceNotFoundError(t *testing.T) {
-	meta := &FakeMetastructure{}
+	meta := &apitest.FakeMetastructure{}
 	resourceNotFound := apimodel.FormaReferencedResourcesNotFoundError{
 		MissingResources: []*pkgmodel.Resource{
 			{Label: "missing-resource-1", Stack: "stack-1", Type: "AWS::S3::Bucket"},
 			{Label: "missing-resource-2", Stack: "stack-2", Type: "AWS::DynamoDB::Table"},
 		},
 	}
-	meta.applyResponses = []WrappedCommandResponse{{&apimodel.SubmitCommandResponse{}, resourceNotFound}}
+	meta.ApplyResponses = []apitest.WrappedCommandResponse{{&apimodel.SubmitCommandResponse{}, resourceNotFound}}
 
 	server := NewServer(t.Context(), meta, nil, nil, nil, nil)
 
@@ -500,12 +351,176 @@ func TestServer_ApplyFormaResourceNotFoundError(t *testing.T) {
 	}
 }
 
+func TestServer_ApplyFormaGeneratorNotFoundError(t *testing.T) {
+	meta := &apitest.FakeMetastructure{}
+	generatorNotFound := apimodel.FormaReferencedGeneratorsNotFoundError{
+		Missing: []pkgmodel.MissingGenerator{
+			{Label: "missing-generator-1", Stack: "stack-1", Output: "value"},
+			{Label: "missing-generator-2", Stack: "stack-2", Output: "value"},
+		},
+	}
+	meta.ApplyResponses = []apitest.WrappedCommandResponse{{&apimodel.SubmitCommandResponse{}, generatorNotFound}}
+
+	server := NewServer(t.Context(), meta, nil, nil, nil, nil)
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+
+	_ = writer.WriteField("command", "apply")
+	_ = writer.WriteField("mode", "patch")
+	_ = writer.WriteField("simulate", "false")
+
+	part, err := writer.CreateFormFile("file", "forma.json")
+	if err != nil {
+		t.Fatalf("failed to create form file: %v", err)
+	}
+
+	jsonData, err := json.Marshal(&pkgmodel.Forma{})
+	if err != nil {
+		t.Fatalf("failed to marshal JSON: %v", err)
+	}
+	_, err = part.Write(jsonData)
+	if err != nil {
+		t.Fatalf("failed to write JSON data to form file: %v", err)
+	}
+	writer.Close()
+
+	req := httptest.NewRequest("POST", "/commands", body)
+	req.Header.Set("Client-ID", "test-client-id")
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	rec := httptest.NewRecorder()
+	c := server.echo.NewContext(req, rec)
+
+	if assert.NoError(t, server.SubmitFormaCommand(c)) {
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+		body := rec.Body.Bytes()
+
+		var errorResponse apimodel.ErrorResponse[apimodel.FormaReferencedGeneratorsNotFoundError]
+		err = json.Unmarshal(body, &errorResponse)
+		assert.NoError(t, err)
+		assert.Equal(t, apimodel.ReferencedGeneratorsNotFound, errorResponse.ErrorType)
+		assert.Equal(t, 2, len(errorResponse.Data.Missing))
+	}
+}
+
+// A refusal to draw a generator for only part of its destination set must
+// reach the operator as its own typed 422, not as an opaque 500.
+func TestServer_ApplyFormaGeneratorDestinationsUnreachableError(t *testing.T) {
+	meta := &apitest.FakeMetastructure{}
+	unreachable := apimodel.FormaGeneratorDestinationsUnreachableError{
+		Unreachable: []apimodel.UnreachableGeneratorDestination{
+			{GeneratorLabel: "db-password", GeneratorStack: "app", Stack: "web", Label: "api-secret", Type: "AWS::SecretsManager::Secret"},
+		},
+	}
+	meta.ApplyResponses = []apitest.WrappedCommandResponse{{&apimodel.SubmitCommandResponse{}, unreachable}}
+
+	server := NewServer(t.Context(), meta, nil, nil, nil, nil)
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+
+	_ = writer.WriteField("command", "apply")
+	_ = writer.WriteField("mode", "reconcile")
+	_ = writer.WriteField("simulate", "false")
+
+	part, err := writer.CreateFormFile("file", "forma.json")
+	if err != nil {
+		t.Fatalf("failed to create form file: %v", err)
+	}
+
+	jsonData, err := json.Marshal(&pkgmodel.Forma{})
+	if err != nil {
+		t.Fatalf("failed to marshal JSON: %v", err)
+	}
+	_, err = part.Write(jsonData)
+	if err != nil {
+		t.Fatalf("failed to write JSON data to form file: %v", err)
+	}
+	writer.Close()
+
+	req := httptest.NewRequest("POST", "/commands", body)
+	req.Header.Set("Client-ID", "test-client-id")
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	rec := httptest.NewRecorder()
+	c := server.echo.NewContext(req, rec)
+
+	if assert.NoError(t, server.SubmitFormaCommand(c)) {
+		assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+
+		var errorResponse apimodel.ErrorResponse[apimodel.FormaGeneratorDestinationsUnreachableError]
+		err = json.Unmarshal(rec.Body.Bytes(), &errorResponse)
+		assert.NoError(t, err)
+		assert.Equal(t, apimodel.GeneratorDestinationsUnreachable, errorResponse.ErrorType)
+		require.Len(t, errorResponse.Data.Unreachable, 1)
+		assert.Equal(t, "api-secret", errorResponse.Data.Unreachable[0].Label)
+		assert.Equal(t, "web", errorResponse.Data.Unreachable[0].Stack)
+	}
+}
+
+// A refusal to draw a generator into a field that will not accept the value
+// must reach the operator as its own typed 422, with the field named, not as
+// an opaque 500.
+func TestServer_ApplyFormaGeneratorBoundToSetOnceFieldError(t *testing.T) {
+	meta := &apitest.FakeMetastructure{}
+	setOnce := apimodel.FormaGeneratorBoundToSetOnceFieldError{
+		Fields: []apimodel.SetOnceGeneratorField{
+			{GeneratorLabel: "db-password", GeneratorStack: "app", Stack: "web", Label: "api", Type: "AWS::S3::Bucket", Field: "DbPassword"},
+		},
+	}
+	meta.ApplyResponses = []apitest.WrappedCommandResponse{{&apimodel.SubmitCommandResponse{}, setOnce}}
+
+	server := NewServer(t.Context(), meta, nil, nil, nil, nil)
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+
+	_ = writer.WriteField("command", "apply")
+	_ = writer.WriteField("mode", "reconcile")
+	_ = writer.WriteField("simulate", "false")
+
+	part, err := writer.CreateFormFile("file", "forma.json")
+	if err != nil {
+		t.Fatalf("failed to create form file: %v", err)
+	}
+
+	jsonData, err := json.Marshal(&pkgmodel.Forma{})
+	if err != nil {
+		t.Fatalf("failed to marshal JSON: %v", err)
+	}
+	_, err = part.Write(jsonData)
+	if err != nil {
+		t.Fatalf("failed to write JSON data to form file: %v", err)
+	}
+	writer.Close()
+
+	req := httptest.NewRequest("POST", "/commands", body)
+	req.Header.Set("Client-ID", "test-client-id")
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+
+	rec := httptest.NewRecorder()
+	c := server.echo.NewContext(req, rec)
+
+	if assert.NoError(t, server.SubmitFormaCommand(c)) {
+		assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+
+		var errorResponse apimodel.ErrorResponse[apimodel.FormaGeneratorBoundToSetOnceFieldError]
+		err = json.Unmarshal(rec.Body.Bytes(), &errorResponse)
+		assert.NoError(t, err)
+		assert.Equal(t, apimodel.GeneratorBoundToSetOnceField, errorResponse.ErrorType)
+		require.Len(t, errorResponse.Data.Fields, 1)
+		assert.Equal(t, "DbPassword", errorResponse.Data.Fields[0].Field)
+		assert.Equal(t, "api", errorResponse.Data.Fields[0].Label)
+	}
+}
+
 func TestServer_ApplyFormaStackReferenceNotFoundError(t *testing.T) {
-	meta := &FakeMetastructure{}
+	meta := &apitest.FakeMetastructure{}
 	stackRefNotFound := apimodel.StackReferenceNotFoundError{
 		StackLabel: "my-missing-stack",
 	}
-	meta.applyResponses = []WrappedCommandResponse{{&apimodel.SubmitCommandResponse{}, stackRefNotFound}}
+	meta.ApplyResponses = []apitest.WrappedCommandResponse{{&apimodel.SubmitCommandResponse{}, stackRefNotFound}}
 
 	server := NewServer(t.Context(), meta, nil, nil, nil, nil)
 
@@ -551,11 +566,11 @@ func TestServer_ApplyFormaStackReferenceNotFoundError(t *testing.T) {
 }
 
 func TestServer_ApplyFormaTargetReferenceNotFoundError(t *testing.T) {
-	meta := &FakeMetastructure{}
+	meta := &apitest.FakeMetastructure{}
 	targetRefNotFound := apimodel.TargetReferenceNotFoundError{
 		TargetLabel: "my-missing-target",
 	}
-	meta.applyResponses = []WrappedCommandResponse{{&apimodel.SubmitCommandResponse{}, targetRefNotFound}}
+	meta.ApplyResponses = []apitest.WrappedCommandResponse{{&apimodel.SubmitCommandResponse{}, targetRefNotFound}}
 
 	server := NewServer(t.Context(), meta, nil, nil, nil, nil)
 
@@ -601,8 +616,8 @@ func TestServer_ApplyFormaTargetReferenceNotFoundError(t *testing.T) {
 }
 
 func TestServer_ApplyFormaUnexpectedError(t *testing.T) {
-	meta := &FakeMetastructure{}
-	meta.applyResponses = []WrappedCommandResponse{{&apimodel.SubmitCommandResponse{}, fmt.Errorf("unexpected error")}}
+	meta := &apitest.FakeMetastructure{}
+	meta.ApplyResponses = []apitest.WrappedCommandResponse{{&apimodel.SubmitCommandResponse{}, fmt.Errorf("unexpected error")}}
 
 	server := NewServer(t.Context(), meta, nil, nil, nil, nil)
 
@@ -647,8 +662,8 @@ func TestServer_ApplyFormaUnexpectedError(t *testing.T) {
 }
 
 func TestServer_DestroyFormaSuccessResponse(t *testing.T) {
-	meta := &FakeMetastructure{}
-	meta.destroyResponses = []WrappedCommandResponse{{&apimodel.SubmitCommandResponse{
+	meta := &apitest.FakeMetastructure{}
+	meta.DestroyResponses = []apitest.WrappedCommandResponse{{&apimodel.SubmitCommandResponse{
 		CommandID: "1234",
 		Simulation: apimodel.Simulation{
 			ChangesRequired: true,
@@ -697,7 +712,7 @@ func TestServer_DestroyFormaSuccessResponse(t *testing.T) {
 }
 
 func TestServer_DestroyFormaConflictingResourcesError(t *testing.T) {
-	meta := &FakeMetastructure{}
+	meta := &apitest.FakeMetastructure{}
 	conflict := apimodel.FormaConflictingCommandsError{
 		ConflictingCommands: []apimodel.Command{
 			{
@@ -716,7 +731,7 @@ func TestServer_DestroyFormaConflictingResourcesError(t *testing.T) {
 		},
 	}
 
-	meta.destroyResponses = []WrappedCommandResponse{{&apimodel.SubmitCommandResponse{}, conflict}}
+	meta.DestroyResponses = []apitest.WrappedCommandResponse{{&apimodel.SubmitCommandResponse{}, conflict}}
 
 	server := NewServer(t.Context(), meta, nil, nil, nil, nil)
 
@@ -762,8 +777,8 @@ func TestServer_DestroyFormaConflictingResourcesError(t *testing.T) {
 }
 
 func TestServer_DestroyByQuerySuccessResponse(t *testing.T) {
-	meta := &FakeMetastructure{}
-	meta.destroyResponses = []WrappedCommandResponse{{&apimodel.SubmitCommandResponse{
+	meta := &apitest.FakeMetastructure{}
+	meta.DestroyResponses = []apitest.WrappedCommandResponse{{&apimodel.SubmitCommandResponse{
 		CommandID: "1234",
 		Simulation: apimodel.Simulation{
 			ChangesRequired: true,
@@ -821,11 +836,11 @@ func TestServer_DestroyByQuerySuccessResponse(t *testing.T) {
 }
 
 func TestServer_ExtractResourcesInvalidQueryError(t *testing.T) {
-	meta := &FakeMetastructure{}
+	meta := &apitest.FakeMetastructure{}
 	invalidQuery := apimodel.InvalidQueryError{
 		Reason: "wrong syntax",
 	}
-	meta.extractResponses = []WrappedExtractResponse{{nil, invalidQuery}}
+	meta.ExtractResponses = []apitest.WrappedExtractResponse{{nil, invalidQuery}}
 
 	server := NewServer(t.Context(), meta, nil, nil, nil, nil)
 
@@ -848,11 +863,11 @@ func TestServer_ExtractResourcesInvalidQueryError(t *testing.T) {
 }
 
 func TestServer_ListCommandStatusInvalidQueryError(t *testing.T) {
-	meta := &FakeMetastructure{}
+	meta := &apitest.FakeMetastructure{}
 	invalidQuery := apimodel.InvalidQueryError{
 		Reason: "wrong syntax",
 	}
-	meta.listResponses = []WrappedListResponse{{nil, invalidQuery}}
+	meta.ListResponses = []apitest.WrappedListResponse{{nil, invalidQuery}}
 
 	server := NewServer(t.Context(), meta, nil, nil, nil, nil)
 
@@ -874,9 +889,76 @@ func TestServer_ListCommandStatusInvalidQueryError(t *testing.T) {
 	}
 }
 
+// TestServer_ListCommandStatusClampsMaxResultsToCeiling verifies a
+// max_results above datastore.MaxFormaCommandsQueryLimit is clamped to the
+// ceiling before it reaches the datastore query, rather than passed through
+// unbounded.
+func TestServer_ListCommandStatusClampsMaxResultsToCeiling(t *testing.T) {
+	meta := &apitest.FakeMetastructure{
+		ListResponses: []apitest.WrappedListResponse{{
+			ListCommandStatusResponse: &apimodel.ListCommandStatusResponse{
+				Commands: []apimodel.Command{{CommandID: "c1", State: "Success"}},
+			},
+		}},
+	}
+
+	server := NewServer(t.Context(), meta, nil, nil, nil, nil)
+
+	req := httptest.NewRequest("GET", "/commands/status?max_results=5000", nil)
+	req.Header.Set("Client-ID", "test-client-id")
+	rec := httptest.NewRecorder()
+	c := server.echo.NewContext(req, rec)
+
+	if assert.NoError(t, server.ListCommandStatus(c)) {
+		assert.Equal(t, http.StatusOK, rec.Code)
+		require.Len(t, meta.RecordedListN, 1)
+		assert.Equal(t, datastore.MaxFormaCommandsQueryLimit, meta.RecordedListN[0],
+			"max_results above the ceiling must be clamped before reaching the datastore")
+	}
+}
+
+// TestServer_ListCommandStatusScopeParameter verifies how the endpoint maps
+// the scope parameter: 'agent' asks for every client's commands, while an
+// absent or unrecognized value keeps the client-scoped default so callers
+// written against the older API are unaffected.
+func TestServer_ListCommandStatusScopeParameter(t *testing.T) {
+	cases := []struct {
+		name string
+		url  string
+		want apimodel.CommandScope
+	}{
+		{"explicit agent scope", "/commands/status?scope=agent", apimodel.CommandScopeAgent},
+		{"explicit client scope", "/commands/status?scope=client", apimodel.CommandScopeClient},
+		{"absent scope", "/commands/status", apimodel.CommandScopeClient},
+		{"unrecognized scope", "/commands/status?scope=galaxy", apimodel.CommandScopeClient},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			meta := &apitest.FakeMetastructure{
+				ListResponses: []apitest.WrappedListResponse{{
+					ListCommandStatusResponse: &apimodel.ListCommandStatusResponse{
+						Commands: []apimodel.Command{{CommandID: "c1", State: "Success"}},
+					},
+				}},
+			}
+			server := NewServer(t.Context(), meta, nil, nil, nil, nil)
+
+			req := httptest.NewRequest("GET", tc.url, nil)
+			req.Header.Set("Client-ID", "test-client-id")
+			rec := httptest.NewRecorder()
+			c := server.echo.NewContext(req, rec)
+
+			require.NoError(t, server.ListCommandStatus(c))
+			require.Len(t, meta.RecordedListScopes, 1)
+			assert.Equal(t, tc.want, meta.RecordedListScopes[0])
+		})
+	}
+}
+
 func TestServer_CancelCommands_Success(t *testing.T) {
-	fakeMetastructure := &FakeMetastructure{
-		cancelResponses: []WrappedCancelResponse{
+	fakeMetastructure := &apitest.FakeMetastructure{
+		CancelResponses: []apitest.WrappedCancelResponse{
 			{
 				CancelCommandResponse: &apimodel.CancelCommandResponse{
 					CommandIDs: []string{"cmd-1", "cmd-2"},
@@ -906,8 +988,8 @@ func TestServer_CancelCommands_Success(t *testing.T) {
 }
 
 func TestServer_CancelCommands_WithQuery(t *testing.T) {
-	fakeMetastructure := &FakeMetastructure{
-		cancelResponses: []WrappedCancelResponse{
+	fakeMetastructure := &apitest.FakeMetastructure{
+		CancelResponses: []apitest.WrappedCancelResponse{
 			{
 				CancelCommandResponse: &apimodel.CancelCommandResponse{
 					CommandIDs: []string{"cmd-3"},
@@ -937,8 +1019,8 @@ func TestServer_CancelCommands_WithQuery(t *testing.T) {
 }
 
 func TestServer_CancelCommands_NoCommandsFound(t *testing.T) {
-	fakeMetastructure := &FakeMetastructure{
-		cancelResponses: []WrappedCancelResponse{
+	fakeMetastructure := &apitest.FakeMetastructure{
+		CancelResponses: []apitest.WrappedCancelResponse{
 			{
 				CancelCommandResponse: &apimodel.CancelCommandResponse{
 					CommandIDs: []string{},
@@ -963,7 +1045,7 @@ func TestServer_CancelCommands_NoCommandsFound(t *testing.T) {
 }
 
 func TestServer_CancelCommands_MissingClientID(t *testing.T) {
-	fakeMetastructure := &FakeMetastructure{}
+	fakeMetastructure := &apitest.FakeMetastructure{}
 
 	server := NewServer(context.Background(), fakeMetastructure, nil, nil, nil, nil)
 
@@ -981,8 +1063,8 @@ func TestServer_CancelCommands_MissingClientID(t *testing.T) {
 }
 
 func TestServer_CancelCommands_WithResourceUpdateStates(t *testing.T) {
-	fakeMetastructure := &FakeMetastructure{
-		cancelResponses: []WrappedCancelResponse{
+	fakeMetastructure := &apitest.FakeMetastructure{
+		CancelResponses: []apitest.WrappedCancelResponse{
 			{
 				CancelCommandResponse: &apimodel.CancelCommandResponse{
 					CommandIDs: []string{"cmd-1"},
@@ -1021,7 +1103,7 @@ func TestServer_CancelCommands_WithResourceUpdateStates(t *testing.T) {
 }
 
 func TestServer_ListTargets_Success(t *testing.T) {
-	meta := &FakeMetastructure{}
+	meta := &apitest.FakeMetastructure{}
 	targets := []*pkgmodel.Target{
 		{
 			Label:        "prod-us-east-1",
@@ -1036,7 +1118,7 @@ func TestServer_ListTargets_Success(t *testing.T) {
 			Config:       json.RawMessage(`{"Region":"us-west-2"}`),
 		},
 	}
-	meta.targetResponses = []WrappedTargetResponse{{Targets: targets, Error: nil}}
+	meta.TargetResponses = []apitest.WrappedTargetResponse{{Targets: targets, Error: nil}}
 
 	server := NewServer(context.Background(), meta, nil, nil, nil, nil)
 
@@ -1058,8 +1140,8 @@ func TestServer_ListTargets_Success(t *testing.T) {
 }
 
 func TestServer_ListTargets_NoResults(t *testing.T) {
-	meta := &FakeMetastructure{}
-	meta.targetResponses = []WrappedTargetResponse{{Targets: []*pkgmodel.Target{}, Error: nil}}
+	meta := &apitest.FakeMetastructure{}
+	meta.TargetResponses = []apitest.WrappedTargetResponse{{Targets: []*pkgmodel.Target{}, Error: nil}}
 
 	server := NewServer(context.Background(), meta, nil, nil, nil, nil)
 
@@ -1074,7 +1156,7 @@ func TestServer_ListTargets_NoResults(t *testing.T) {
 }
 
 func TestServer_ListTargets_WithQuery(t *testing.T) {
-	meta := &FakeMetastructure{}
+	meta := &apitest.FakeMetastructure{}
 	targets := []*pkgmodel.Target{
 		{
 			Label:        "tailscale-main",
@@ -1083,7 +1165,7 @@ func TestServer_ListTargets_WithQuery(t *testing.T) {
 			Config:       json.RawMessage(`{"Tailnet":"example.com"}`),
 		},
 	}
-	meta.targetResponses = []WrappedTargetResponse{{Targets: targets, Error: nil}}
+	meta.TargetResponses = []apitest.WrappedTargetResponse{{Targets: targets, Error: nil}}
 
 	server := NewServer(context.Background(), meta, nil, nil, nil, nil)
 
@@ -1105,8 +1187,8 @@ func TestServer_ListTargets_WithQuery(t *testing.T) {
 }
 
 func TestServer_ListDrift_Success(t *testing.T) {
-	meta := &FakeMetastructure{
-		driftResponses: []WrappedDriftResponse{
+	meta := &apitest.FakeMetastructure{
+		DriftResponses: []apitest.WrappedDriftResponse{
 			{
 				Drift: apimodel.ModifiedStack{
 					ModifiedResources: []apimodel.ResourceModification{
@@ -1140,8 +1222,8 @@ func TestServer_ListDrift_Success(t *testing.T) {
 }
 
 func TestServer_ListDrift_NoDrift(t *testing.T) {
-	meta := &FakeMetastructure{
-		driftResponses: []WrappedDriftResponse{
+	meta := &apitest.FakeMetastructure{
+		DriftResponses: []apitest.WrappedDriftResponse{
 			{
 				Drift: apimodel.ModifiedStack{
 					ModifiedResources: []apimodel.ResourceModification{},
@@ -1171,8 +1253,8 @@ func TestServer_ListDrift_NoDrift(t *testing.T) {
 }
 
 func TestServer_ForceReconcile_Started(t *testing.T) {
-	meta := &FakeMetastructure{
-		reconcileResponses: []WrappedReconcileResponse{
+	meta := &apitest.FakeMetastructure{
+		ReconcileResponses: []apitest.WrappedReconcileResponse{
 			{
 				Response: &apimodel.ForceReconcileResponse{
 					CommandID: "cmd-abc123",
@@ -1202,8 +1284,8 @@ func TestServer_ForceReconcile_Started(t *testing.T) {
 }
 
 func TestServer_ForceReconcile_NoDrift(t *testing.T) {
-	meta := &FakeMetastructure{
-		reconcileResponses: []WrappedReconcileResponse{
+	meta := &apitest.FakeMetastructure{
+		ReconcileResponses: []apitest.WrappedReconcileResponse{
 			{
 				Response: &apimodel.ForceReconcileResponse{
 					Message: "no drift detected",
@@ -1251,8 +1333,8 @@ func TestServer_ForceReconcile_Conflict(t *testing.T) {
 		},
 	}
 
-	meta := &FakeMetastructure{
-		reconcileResponses: []WrappedReconcileResponse{
+	meta := &apitest.FakeMetastructure{
+		ReconcileResponses: []apitest.WrappedReconcileResponse{
 			{
 				Response: nil,
 				Error:    conflict,
@@ -1281,8 +1363,8 @@ func TestServer_ForceReconcile_Conflict(t *testing.T) {
 }
 
 func TestServer_ForceReconcile_PolicyRequired(t *testing.T) {
-	meta := &FakeMetastructure{
-		reconcileResponses: []WrappedReconcileResponse{
+	meta := &apitest.FakeMetastructure{
+		ReconcileResponses: []apitest.WrappedReconcileResponse{
 			{
 				Response: nil,
 				Error: apimodel.ReconcilePolicyRequiredError{
@@ -1313,8 +1395,8 @@ func TestServer_ForceReconcile_PolicyRequired(t *testing.T) {
 }
 
 func TestServer_ForceCheckTTL_StacksExpired(t *testing.T) {
-	meta := &FakeMetastructure{
-		checkTTLResponses: []WrappedCheckTTLResponse{
+	meta := &apitest.FakeMetastructure{
+		CheckTTLResponses: []apitest.WrappedCheckTTLResponse{
 			{
 				Response: &apimodel.ForceCheckTTLResponse{
 					ExpiredStacks: []string{"stack-a", "stack-b"},
@@ -1342,8 +1424,8 @@ func TestServer_ForceCheckTTL_StacksExpired(t *testing.T) {
 }
 
 func TestServer_ForceCheckTTL_NothingExpired(t *testing.T) {
-	meta := &FakeMetastructure{
-		checkTTLResponses: []WrappedCheckTTLResponse{
+	meta := &apitest.FakeMetastructure{
+		CheckTTLResponses: []apitest.WrappedCheckTTLResponse{
 			{
 				Response: &apimodel.ForceCheckTTLResponse{
 					ExpiredStacks: []string{},
@@ -1368,4 +1450,189 @@ func TestServer_ForceCheckTTL_NothingExpired(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Empty(t, response.ExpiredStacks)
 	}
+}
+
+func TestServer_ListResourceSummaries_HappyPath(t *testing.T) {
+	meta := &apitest.FakeMetastructure{
+		SummaryResponses: []apitest.WrappedSummaryResponse{
+			{
+				Summaries: []pkgmodel.ResourceSummary{
+					{Label: "bucket-1", Stack: "default", Type: "AWS::S3::Bucket", NativeID: "my-bucket", Ksuid: "2abc"},
+					{Label: "bucket-2", Stack: "default", Type: "AWS::S3::Bucket", NativeID: "other-bucket", Ksuid: "3def"},
+				},
+				Error: nil,
+			},
+		},
+	}
+
+	server := NewServer(context.Background(), meta, nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/resources/summary?query=type:AWS::S3::Bucket", nil)
+	rec := httptest.NewRecorder()
+	c := server.echo.NewContext(req, rec)
+
+	if assert.NoError(t, server.ListResourceSummaries(c)) {
+		assert.Equal(t, http.StatusOK, rec.Code)
+
+		var summaries []pkgmodel.ResourceSummary
+		err := json.Unmarshal(rec.Body.Bytes(), &summaries)
+		assert.NoError(t, err)
+		assert.Len(t, summaries, 2)
+		assert.Equal(t, "bucket-1", summaries[0].Label)
+		assert.Equal(t, "bucket-2", summaries[1].Label)
+		assert.Equal(t, []string{"type:AWS::S3::Bucket"}, meta.RecordedSummaryQueries)
+	}
+}
+
+func TestServer_ListResourceSummaries_EmptyReturns200(t *testing.T) {
+	meta := &apitest.FakeMetastructure{}
+
+	server := NewServer(context.Background(), meta, nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/resources/summary", nil)
+	rec := httptest.NewRecorder()
+	c := server.echo.NewContext(req, rec)
+
+	if assert.NoError(t, server.ListResourceSummaries(c)) {
+		assert.Equal(t, http.StatusOK, rec.Code)
+
+		var summaries []pkgmodel.ResourceSummary
+		err := json.Unmarshal(rec.Body.Bytes(), &summaries)
+		assert.NoError(t, err)
+		assert.Empty(t, summaries)
+	}
+}
+
+func TestServer_ListResourceSummaries_InvalidQueryError(t *testing.T) {
+	meta := &apitest.FakeMetastructure{
+		SummaryResponses: []apitest.WrappedSummaryResponse{
+			{
+				Summaries: nil,
+				Error:     apimodel.InvalidQueryError{Reason: "bad syntax"},
+			},
+		},
+	}
+
+	server := NewServer(context.Background(), meta, nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/resources/summary?query=!!!", nil)
+	rec := httptest.NewRecorder()
+	c := server.echo.NewContext(req, rec)
+
+	if assert.NoError(t, server.ListResourceSummaries(c)) {
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+
+		var errorResponse apimodel.ErrorResponse[apimodel.InvalidQueryError]
+		err := json.Unmarshal(rec.Body.Bytes(), &errorResponse)
+		assert.NoError(t, err)
+		assert.Equal(t, apimodel.InvalidQuery, errorResponse.ErrorType)
+		assert.Equal(t, "bad syntax", errorResponse.Data.Reason)
+	}
+}
+
+func TestServer_GetResourceByKsuid_Found(t *testing.T) {
+	validKsuid := "3HCvcUX7215dJAkxJefX6Epd9VE"
+	meta := &apitest.FakeMetastructure{
+		ResourceByKsuidResponses: []apitest.WrappedResourceResponse{
+			{
+				Resource: &pkgmodel.Resource{
+					Label: "my-bucket",
+					Type:  "AWS::S3::Bucket",
+					Stack: "default",
+					Ksuid: validKsuid,
+				},
+				Error: nil,
+			},
+		},
+	}
+
+	server := NewServer(context.Background(), meta, nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/resources/by-ksuid/%s", validKsuid), nil)
+	rec := httptest.NewRecorder()
+	c := server.echo.NewContext(req, rec)
+	c.SetParamNames("ksuid")
+	c.SetParamValues(validKsuid)
+
+	if assert.NoError(t, server.GetResourceByKsuid(c)) {
+		assert.Equal(t, http.StatusOK, rec.Code)
+
+		var resource pkgmodel.Resource
+		err := json.Unmarshal(rec.Body.Bytes(), &resource)
+		assert.NoError(t, err)
+		assert.Equal(t, "my-bucket", resource.Label)
+		assert.Equal(t, validKsuid, resource.Ksuid)
+	}
+}
+
+func TestServer_GetResourceByKsuid_NotFound(t *testing.T) {
+	validKsuid := "3HCvcUX7215dJAkxJefX6Epd9VE"
+	meta := &apitest.FakeMetastructure{
+		ResourceByKsuidResponses: []apitest.WrappedResourceResponse{
+			{Resource: nil, Error: nil},
+		},
+	}
+
+	server := NewServer(context.Background(), meta, nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/resources/by-ksuid/%s", validKsuid), nil)
+	rec := httptest.NewRecorder()
+	c := server.echo.NewContext(req, rec)
+	c.SetParamNames("ksuid")
+	c.SetParamValues(validKsuid)
+
+	if assert.NoError(t, server.GetResourceByKsuid(c)) {
+		assert.Equal(t, http.StatusNotFound, rec.Code)
+	}
+}
+
+func TestServer_GetResourceByKsuid_MalformedKsuid(t *testing.T) {
+	meta := &apitest.FakeMetastructure{}
+
+	server := NewServer(context.Background(), meta, nil, nil, nil, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/resources/by-ksuid/not-a-ksuid", nil)
+	rec := httptest.NewRecorder()
+	c := server.echo.NewContext(req, rec)
+	c.SetParamNames("ksuid")
+	c.SetParamValues("not-a-ksuid")
+
+	err := server.GetResourceByKsuid(c)
+	assert.Error(t, err)
+	httpErr, ok := err.(*echo.HTTPError)
+	assert.True(t, ok)
+	assert.Equal(t, http.StatusBadRequest, httpErr.Code)
+	assert.Empty(t, meta.RecordedKsuidLookups)
+}
+
+func TestServer_RouteNonCollision(t *testing.T) {
+	summaryHandlerCalled := false
+	byKsuidHandlerCalled := false
+
+	e := echo.New()
+	e.GET(ListResourceSummariesRoute, func(c echo.Context) error {
+		summaryHandlerCalled = true
+		return c.JSON(http.StatusOK, nil)
+	})
+	e.GET(GetResourceByKsuidRoute, func(c echo.Context) error {
+		byKsuidHandlerCalled = true
+		return c.JSON(http.StatusOK, nil)
+	})
+
+	// Request to the summary route must NOT be captured by the by-ksuid param route
+	summaryReq := httptest.NewRequest(http.MethodGet, "/api/v1/resources/summary", nil)
+	summaryRec := httptest.NewRecorder()
+	e.ServeHTTP(summaryRec, summaryReq)
+	assert.True(t, summaryHandlerCalled, "summary handler must be called for /resources/summary")
+	assert.False(t, byKsuidHandlerCalled, "by-ksuid handler must NOT be called for /resources/summary")
+
+	// Reset
+	summaryHandlerCalled = false
+
+	// Request to the by-ksuid route
+	byKsuidReq := httptest.NewRequest(http.MethodGet, "/api/v1/resources/by-ksuid/3HCvcUX7215dJAkxJefX6Epd9VE", nil)
+	byKsuidRec := httptest.NewRecorder()
+	e.ServeHTTP(byKsuidRec, byKsuidReq)
+	assert.False(t, summaryHandlerCalled, "summary handler must NOT be called for /resources/by-ksuid/...")
+	assert.True(t, byKsuidHandlerCalled, "by-ksuid handler must be called for /resources/by-ksuid/...")
 }

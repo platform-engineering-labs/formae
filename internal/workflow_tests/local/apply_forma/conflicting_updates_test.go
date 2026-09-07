@@ -84,7 +84,11 @@ func TestMetastructure_ApplyWhileAnotherFormaIsModifyingTheStack_ReturnsConflict
 			nil, // No target updates for test
 			nil, // No stack updates for test
 			nil, // No policy updates for test
-			"")
+			nil, // No generator updates for test
+			"",
+			"",
+			"",
+			forma_command.SourceUser)
 		executingForma.State = forma_command.CommandStateInProgress
 
 		newFormaResourceUpdates := []resource_update.ResourceUpdate{
@@ -108,7 +112,7 @@ func TestMetastructure_ApplyWhileAnotherFormaIsModifyingTheStack_ReturnsConflict
 				},
 			},
 		}
-		_ = forma_command.NewFormaCommand(newForma, &config.FormaCommandConfig{}, pkgmodel.CommandApply, newFormaResourceUpdates, nil, nil, nil, "")
+		_ = forma_command.NewFormaCommand(newForma, &config.FormaCommandConfig{}, pkgmodel.CommandApply, newFormaResourceUpdates, nil, nil, nil, nil, "", "", "", forma_command.SourceUser)
 		err = m.Datastore.StoreFormaCommand(executingForma, "1")
 		if err != nil {
 			t.Fatalf("Failed to store forma command: %v", err)
@@ -120,7 +124,7 @@ func TestMetastructure_ApplyWhileAnotherFormaIsModifyingTheStack_ReturnsConflict
 			Simulate: false,
 		}
 
-		_, err = m.ApplyForma(newForma, &cfg, "test")
+		_, err = m.ApplyForma(newForma, &cfg, "test", "", "")
 		assert.Error(t, err)
 
 		var conflictErr apimodel.FormaConflictingCommandsError
@@ -168,7 +172,11 @@ func TestMetastructure_ApplyFormaRejectIfResourceIsUpdating(t *testing.T) {
 			nil, // No target updates
 			nil, // No stack updates
 			nil, // No policy updates
-			"")
+			nil, // No generator updates
+			"",
+			"",
+			"",
+			forma_command.SourceUser)
 		executingForma.State = forma_command.CommandStateInProgress
 		err = m.Datastore.StoreFormaCommand(executingForma, "1")
 		if err != nil {
@@ -203,7 +211,11 @@ func TestMetastructure_ApplyFormaRejectIfResourceIsUpdating(t *testing.T) {
 			nil, // No target updates
 			nil, // No stack updates
 			nil, // No policy updates
-			"")
+			nil, // No generator updates
+			"",
+			"",
+			"",
+			forma_command.SourceUser)
 		anotherExecutingForma.State = forma_command.CommandStateInProgress
 		err = m.Datastore.StoreFormaCommand(anotherExecutingForma, "2")
 		if err != nil {
@@ -274,14 +286,14 @@ func TestMetastructure_ApplyFormaRejectIfResourceIsUpdating(t *testing.T) {
 			newTestResourceUpdate("test-resource7", "FakeAWS::S3::Bucket", "test-stack2", "test-target", resource_update.ResourceUpdateStateNotStarted, resource_update.OperationCreate),
 		}
 
-		_ = forma_command.NewFormaCommand(newForma, &config.FormaCommandConfig{}, pkgmodel.CommandApply, newFormaResourceUpdates, nil, nil, nil, "")
+		_ = forma_command.NewFormaCommand(newForma, &config.FormaCommandConfig{}, pkgmodel.CommandApply, newFormaResourceUpdates, nil, nil, nil, nil, "", "", "", forma_command.SourceUser)
 
 		cfg := config.FormaCommandConfig{
 			Mode:     pkgmodel.FormaApplyModeReconcile,
 			Simulate: false,
 		}
 
-		_, err = m.ApplyForma(newForma, &cfg, "test")
+		_, err = m.ApplyForma(newForma, &cfg, "test", "", "")
 		assert.Error(t, err)
 
 		var conflictErr apimodel.FormaConflictingCommandsError

@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
@@ -200,6 +201,22 @@ func getOperationTimeout() time.Duration {
 	return 5 * time.Minute // Default timeout
 }
 
+// getCLIInvocationTimeout returns the bound for a single formae CLI
+// invocation. Every CLI call the harness makes either submits work and
+// returns or reads state, so none runs legitimately for minutes; the bound
+// exists so a CLI process that never exits surfaces as a test failure with a
+// diagnostic instead of a silent stall until the go-test deadline.
+// It reads from the FORMAE_TEST_CLI_TIMEOUT environment variable (in minutes).
+// Default is 5 minutes.
+func getCLIInvocationTimeout() time.Duration {
+	if val := os.Getenv("FORMAE_TEST_CLI_TIMEOUT"); val != "" {
+		if minutes, err := strconv.Atoi(val); err == nil && minutes > 0 {
+			return time.Duration(minutes) * time.Minute
+		}
+	}
+	return 5 * time.Minute
+}
+
 // getDiscoveryTimeout returns the timeout duration for discovery inventory polling.
 // It reads from FORMAE_TEST_DISCOVERY_TIMEOUT environment variable (in minutes).
 // Default is 2 minutes.
@@ -210,6 +227,68 @@ func getDiscoveryTimeout() time.Duration {
 		}
 	}
 	return 2 * time.Minute // Default timeout
+}
+
+// defaultSyncTimeout bounds the wait for a forced synchronization to report
+// completion.
+//
+// It has to clear the plugin-side retry budget, not just a typical sync. A
+// healthy sync settles in a few seconds, but plugins absorb recoverable
+// CloudControl errors with their own exponential backoff. The AWS plugin,
+// for instance, budgets ten attempts over a 1s..30s backoff, roughly three
+// minutes. Under the shared-account throttling the conformance matrix
+// generates, a sync that is still retrying is making progress, not hanging.
+// A shorter wait here turns that into a spurious failure on a random test
+// each run, so the default sits above the retry budget with headroom.
+const defaultSyncTimeout = 5 * time.Minute
+
+// getSyncTimeout returns the timeout duration for waiting on synchronization.
+// It reads from the FORMAE_TEST_SYNC_TIMEOUT environment variable (in minutes).
+func getSyncTimeout() time.Duration {
+	if val := os.Getenv("FORMAE_TEST_SYNC_TIMEOUT"); val != "" {
+		if minutes, err := strconv.Atoi(val); err == nil && minutes > 0 {
+			return time.Duration(minutes) * time.Minute
+		}
+	}
+	return defaultSyncTimeout
+}
+
+const (
+	// discoveryPollInterval is how often the discovery wait loop reads the local
+	// inventory while waiting for a scan to surface the resource.
+	discoveryPollInterval = 2 * time.Second
+	// discoveryRetriggerDefault is the default interval before the first
+	// discovery re-trigger; it then backs off exponentially toward the cap.
+	discoveryRetriggerDefault = 10 * time.Second
+	// discoveryRetriggerCap is the ceiling for the re-trigger interval.
+	discoveryRetriggerCap = 60 * time.Second
+	// discoveryRetriggerFloor is the minimum re-trigger interval. The conformance
+	// matrix runs ~100 jobs against one shared AWS account and CloudControl rate
+	// limiter, so the floor caps re-trigger pressure and cannot be configured away.
+	discoveryRetriggerFloor = 5 * time.Second
+)
+
+// getDiscoveryRetriggerBackoff returns the capped exponential backoff schedule
+// for re-triggering discovery in the discovery wait loop. The base interval is
+// read from FORMAE_TEST_DISCOVERY_RETRIGGER_INTERVAL (in seconds); empty,
+// non-numeric, or non-positive values fall back to the default, and the value is
+// clamped into [floor, cap] — up to the floor so the rate-limit guarantee holds,
+// and down to the cap so an oversized base interval can't push the first
+// re-trigger past the timeout and suppress retries entirely.
+func getDiscoveryRetriggerBackoff() backoffConfig {
+	initial := discoveryRetriggerDefault
+	if val := os.Getenv("FORMAE_TEST_DISCOVERY_RETRIGGER_INTERVAL"); val != "" {
+		if secs, err := strconv.Atoi(val); err == nil && secs > 0 {
+			initial = time.Duration(secs) * time.Second
+			if initial < discoveryRetriggerFloor {
+				initial = discoveryRetriggerFloor
+			}
+			if initial > discoveryRetriggerCap {
+				initial = discoveryRetriggerCap
+			}
+		}
+	}
+	return backoffConfig{initial: initial, max: discoveryRetriggerCap}
 }
 
 // getOOBDeleteTimeout returns the timeout duration for the OOB-delete phase's
@@ -223,6 +302,45 @@ func getOOBDeleteTimeout() time.Duration {
 		}
 	}
 	return 2 * time.Minute // Default timeout
+}
+
+const (
+	// oobSyncPollInterval is how often the OOB-delete wait loop re-reads the
+	// local inventory between sync re-triggers.
+	oobSyncPollInterval = 2 * time.Second
+	// oobSyncRetriggerDefault is the default interval before the first sync
+	// re-trigger in the OOB-delete wait; it then backs off toward the cap.
+	oobSyncRetriggerDefault = 10 * time.Second
+	// oobSyncRetriggerCap is the ceiling for the re-trigger interval.
+	oobSyncRetriggerCap = 30 * time.Second
+	// oobSyncRetriggerFloor is the minimum re-trigger interval. Sync walks every
+	// managed resource, and the conformance matrix runs ~150 jobs against one
+	// shared cloud account, so the floor caps re-trigger pressure and cannot be
+	// configured away.
+	oobSyncRetriggerFloor = 5 * time.Second
+)
+
+// getOOBSyncRetriggerBackoff returns the capped exponential backoff schedule for
+// re-triggering sync in the OOB-delete wait loop. The base interval is read from
+// FORMAE_TEST_OOB_SYNC_RETRIGGER_INTERVAL (in seconds); empty, non-numeric, or
+// non-positive values fall back to the default, and the value is clamped into
+// [floor, cap] - up to the floor so the rate-limit guarantee holds, and down to
+// the cap so an oversized base interval cannot push the first re-trigger past
+// the timeout and suppress retries entirely.
+func getOOBSyncRetriggerBackoff() backoffConfig {
+	initial := oobSyncRetriggerDefault
+	if val := os.Getenv("FORMAE_TEST_OOB_SYNC_RETRIGGER_INTERVAL"); val != "" {
+		if secs, err := strconv.Atoi(val); err == nil && secs > 0 {
+			initial = time.Duration(secs) * time.Second
+			if initial < oobSyncRetriggerFloor {
+				initial = oobSyncRetriggerFloor
+			}
+			if initial > oobSyncRetriggerCap {
+				initial = oobSyncRetriggerCap
+			}
+		}
+	}
+	return backoffConfig{initial: initial, max: oobSyncRetriggerCap}
 }
 
 // RunCRUDTests discovers test cases from the testdata directory and runs
@@ -259,6 +377,11 @@ func getOOBDeleteTimeout() time.Duration {
 //   - FORMAE_TEST_OOB_DELETE_TIMEOUT: Timeout in minutes for the OOB-delete phase's
 //     wait-for-inventory-removal step (optional). Default is 2 minutes. Raise
 //     for slow backends (e.g. managed Kubernetes).
+//   - FORMAE_TEST_TESTDATA_DIR: Override the directory containing test PKL files
+//     (optional). Absolute paths are used as-is; relative paths are resolved
+//     against the plugin directory. Defaults to "testdata". When the override
+//     points at a subdirectory without its own PklProject, the nearest ancestor
+//     containing one is used for `pkl project resolve`.
 //
 // This function should be called from a plugin's conformance_test.go:
 //
@@ -289,11 +412,26 @@ func RunCRUDTests(t *testing.T) {
 	rc := NewResultCollector()
 	t.Cleanup(func() { rc.PrintSummary() })
 
+	// The omit-and-observe sweep rides along on the CRUD run when an artifact
+	// path is configured; otherwise it is nil and inert.
+	sweep := newSweepFromEnv()
+	t.Cleanup(func() {
+		path := os.Getenv(envProviderDefaultObservations)
+		if sweep == nil || path == "" {
+			return
+		}
+		if err := sweep.writeTo(path); err != nil {
+			t.Errorf("writing provider-default observations to %s: %v", path, err)
+			return
+		}
+		t.Logf("Wrote %d provider-default observations to %s", len(sweep.observations()), path)
+	})
+
 	t.Logf("Discovered %d test case(s)", len(testCases))
 
 	for _, tc := range testCases {
 		t.Run(tc.Name, func(t *testing.T) {
-			runCRUDTest(t, tc, rc)
+			runCRUDTest(t, tc, rc, sweep)
 		})
 	}
 }
@@ -328,6 +466,149 @@ func isResolvable(value any) bool {
 	}
 	resBool, ok := res.(bool)
 	return ok && resBool
+}
+
+// isEmbed reports whether value is a {$embed: true, $template: "..."} field
+// (an embedded resolvable inside a String-typed field).
+func isEmbed(value any) bool {
+	m, ok := value.(map[string]any)
+	if !ok {
+		return false
+	}
+	embed, ok := m["$embed"].(bool)
+	return ok && embed
+}
+
+// isOpaqueValue reports whether value is a serialized opaque secret value, i.e.
+// a model.Value with $visibility == "Opaque" (or the $hashed marker set). Secret
+// fields (schema FieldHint.Opaque) are hashed at rest, so the value read back
+// from inventory or emitted by `formae extract` is not the authored plaintext
+// but an opaque envelope: {"$visibility":"Opaque","$hashed":true,"$value":<sha256>}.
+func isOpaqueValue(value any) bool {
+	m, ok := value.(map[string]any)
+	if !ok {
+		return false
+	}
+	if vis, ok := m["$visibility"].(string); ok && vis == pkgmodel.VisibilityOpaque {
+		return true
+	}
+	hashed, ok := m["$hashed"].(bool)
+	return ok && hashed
+}
+
+// containsOpaqueValue reports whether an opaque secret envelope appears anywhere
+// in value, walking nested maps and arrays.
+func containsOpaqueValue(value any) bool {
+	if isOpaqueValue(value) {
+		return true
+	}
+	switch v := value.(type) {
+	case map[string]any:
+		for _, elem := range v {
+			if containsOpaqueValue(elem) {
+				return true
+			}
+		}
+	case []any:
+		for _, elem := range v {
+			if containsOpaqueValue(elem) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// compareOpaqueValue validates an actual opaque secret value against the authored
+// expected value. Because formae hashes secret values at rest (unsalted SHA-256)
+// and cannot recover the plaintext, we never compare plaintext directly. Instead:
+//   - when the actual value carries the $hashed digest, assert it equals
+//     ComputeValueHash(expected) — a real integrity check that the plugin stored
+//     the authored secret, not a blind skip;
+//   - when $value is absent (e.g. after extraction, where the digest may be
+//     omitted), accept the opaque envelope as-is, mirroring compareResolvable.
+//
+// The expected value is normally the authored plaintext scalar, but may itself
+// already be an opaque envelope (if the fixture authored a model.Value); both are
+// handled. Neither plaintext nor digest is ever echoed into error text.
+func compareOpaqueValue(r testReporter, name string, expected, actual any, context string) bool {
+	actualMap, ok := actual.(map[string]any)
+	if !ok {
+		// Should not happen — callers gate on isOpaqueValue(actual).
+		return true
+	}
+
+	digest, hasDigest := actualMap["$value"].(string)
+	hashed, _ := actualMap["$hashed"].(bool)
+	if !hasDigest || digest == "" || !hashed {
+		// No digest to verify (e.g. omitted on extract). The envelope is opaque
+		// by construction; accept it rather than leaking anything by comparing.
+		r.Logf("Opaque value %s present without a verifiable digest (%s); accepting", name, context)
+		return true
+	}
+
+	// Derive the expected plaintext. If the fixture authored an opaque envelope,
+	// prefer its plaintext $value; otherwise use the scalar as authored.
+	expectedPlaintext := fmt.Sprintf("%v", expected)
+	if expMap, ok := expected.(map[string]any); ok {
+		if ev, ok := expMap["$value"]; ok {
+			expectedPlaintext = fmt.Sprintf("%v", ev)
+		}
+	}
+
+	if pkgmodel.ComputeValueHash(expectedPlaintext) != digest {
+		r.Errorf("Opaque value %s digest does not match the authored secret (%s)", name, context)
+		return false
+	}
+	r.Logf("Opaque value %s verified against authored secret via SHA-256 digest (%s)", name, context)
+	return true
+}
+
+// normalizeEmbedTemplate canonicalizes a $embed $template for comparison: each
+// framed span's envelope is stripped of $value/$visibility/$strategy and
+// re-encoded with sorted keys. An authored template (pre-resolution, no $value,
+// PKL insertion-order keys) and a stored template (resolved $value, Go
+// sorted-key) then compare equal when they reference the same resolvable.
+// Literal segments are preserved verbatim. Mirrors normalizeResolvables.
+func normalizeEmbedTemplate(tmpl string) string {
+	spans, err := pkgmodel.ScanEmbedSpans(tmpl)
+	if err != nil {
+		return tmpl
+	}
+	out := tmpl
+	for i := len(spans) - 1; i >= 0; i-- {
+		var env map[string]any
+		if err := json.Unmarshal([]byte(spans[i].EnvelopeJSON), &env); err != nil {
+			continue
+		}
+		delete(env, "$value")
+		delete(env, "$visibility")
+		delete(env, "$strategy")
+		canonical, err := json.Marshal(env) // map keys marshal in sorted order
+		if err != nil {
+			continue
+		}
+		out = out[:spans[i].Start] + pkgmodel.FrameEnvelope(string(canonical)) + out[spans[i].End:]
+	}
+	return out
+}
+
+// compareEmbed compares two $embed fields by normalizing their $template spans.
+func compareEmbed(r testReporter, name string, expected, actual any) bool {
+	expMap, ok1 := expected.(map[string]any)
+	actMap, ok2 := actual.(map[string]any)
+	if !ok1 || !ok2 {
+		r.Errorf("Embed field %s: expected and actual must both be $embed objects", name)
+		return false
+	}
+	expTmpl, _ := expMap["$template"].(string)
+	actTmpl, _ := actMap["$template"].(string)
+	if normalizeEmbedTemplate(expTmpl) != normalizeEmbedTemplate(actTmpl) {
+		r.Errorf("Embed field %s.$template should match expected (normalized): expected %q, got %q",
+			name, expTmpl, actTmpl)
+		return false
+	}
+	return true
 }
 
 // normalizeEscaping removes common backslash escape sequences from a string
@@ -885,8 +1166,23 @@ func compareMap(r testReporter, name string, expected, actual map[string]any, co
 			ok = false
 			continue
 		}
+		if isEmbed(expectedValue) {
+			if !compareEmbed(r, name+"."+key, expectedValue, actualValue) {
+				ok = false
+			}
+			continue
+		}
 		if isResolvable(expectedValue) {
 			if !compareResolvable(r, name+"."+key, expectedValue, actualValue, context) {
+				ok = false
+			}
+			continue
+		}
+		// Opaque secret fields are hashed at rest, so the actual value is an
+		// opaque envelope rather than the authored plaintext. Verify by digest
+		// instead of a plaintext scalar comparison.
+		if isOpaqueValue(actualValue) || isOpaqueValue(expectedValue) {
+			if !compareOpaqueValue(r, name+"."+key, expectedValue, actualValue, context) {
 				ok = false
 			}
 			continue
@@ -916,9 +1212,23 @@ func compareMap(r testReporter, name string, expected, actual map[string]any, co
 			}
 		}
 	}
-	// Reverse: actual → expected — flag extra keys not in hasProviderDefault
-	for key := range actual {
+	// Reverse: actual → expected — flag extra keys not in hasProviderDefault.
+	// Mirror the forward loop's "skip if structurally absent" forgiveness:
+	// nil / empty array / empty map values are semantically equivalent to
+	// the key being omitted (cloud providers commonly return [] / {} for
+	// fields the user didn't set, which shouldn't trigger drift detection).
+	// Real drift — non-empty unexpected values — is still flagged.
+	for key, actualValue := range actual {
 		if _, inExpected := expected[key]; inExpected {
+			continue
+		}
+		if actualValue == nil {
+			continue
+		}
+		if arr, isArr := actualValue.([]any); isArr && len(arr) == 0 {
+			continue
+		}
+		if m, isMap := actualValue.(map[string]any); isMap && len(m) == 0 {
 			continue
 		}
 		fieldPath := name + "." + key
@@ -964,10 +1274,31 @@ func compareProperties(r testReporter, expectedProperties map[string]any, actual
 			continue
 		}
 
+		// Validate embedded-resolvable fields ($embed) by normalizing their
+		// $template spans — the stored form carries the resolved $value and
+		// sorted keys, the authored form does not.
+		if isEmbed(expectedValue) {
+			r.Logf("Validating embedded-resolvable property %s (resolved at runtime)", key)
+			if !compareEmbed(r, key, expectedValue, actualValue) {
+				hasErrors = true
+			}
+			continue
+		}
+
 		// Validate resolvable properties - they should be resolved at apply time
 		if isResolvable(expectedValue) {
 			r.Logf("Validating resolvable property %s (resolved at runtime)", key)
 			if !compareResolvable(r, key, expectedValue, actualValue, context) {
+				hasErrors = true
+			}
+			continue
+		}
+
+		// Validate opaque secret properties by digest — they are hashed at rest,
+		// so the actual value is an opaque envelope, not the authored plaintext.
+		if isOpaqueValue(actualValue) || isOpaqueValue(expectedValue) {
+			r.Logf("Validating opaque secret property %s (hashed at rest)", key)
+			if !compareOpaqueValue(r, key, expectedValue, actualValue, context) {
 				hasErrors = true
 			}
 			continue
@@ -1007,9 +1338,22 @@ func compareProperties(r testReporter, expectedProperties map[string]any, actual
 		}
 	}
 
-	// Reverse: actual → expected — flag extra keys not in hasProviderDefault
-	for key := range actualProperties {
+	// Reverse: actual → expected — flag extra keys not in hasProviderDefault.
+	// Skip when the actual value is structurally absent (nil / empty array
+	// / empty map) — cloud providers commonly return [] / {} for fields
+	// the user didn't set, and that's semantically equivalent to the key
+	// being omitted. Real drift (non-empty unexpected values) still flagged.
+	for key, actualValue := range actualProperties {
 		if _, inExpected := expectedProperties[key]; inExpected {
+			continue
+		}
+		if actualValue == nil {
+			continue
+		}
+		if arr, isArr := actualValue.([]any); isArr && len(arr) == 0 {
+			continue
+		}
+		if m, isMap := actualValue.(map[string]any); isMap && len(m) == 0 {
 			continue
 		}
 		if !isProviderDefault(key, providerDefaults) {
@@ -1024,6 +1368,91 @@ func compareProperties(r testReporter, expectedProperties map[string]any, actual
 	return !hasErrors
 }
 
+// reapplyHarness is the subset of TestHarness the extract re-apply sub-step drives.
+// Narrowing it keeps the sub-step unit-testable with a fake, mirroring the
+// testReporter seam used by the comparison helpers.
+type reapplyHarness interface {
+	SimulateApply(pklFile string, mode string) (*model.Simulation, error)
+}
+
+// verifyExtractReapply simulates a patch-mode apply of the forma that
+// `formae extract` just produced and asserts the agent plans no changes. A
+// faithful extract describes state that already exists, so the simulation must
+// come back empty; a lossy one diffs, and the planned operations name exactly
+// what the re-apply would touch. Simulating rather than applying asserts the
+// round-trip property directly, keeps the resource pristine for the phases
+// that follow, and avoids waiting on a command the agent never stores for
+// zero-change applies.
+//
+// Reporting is non-fatal so the lifecycle still reaches Destroy. Returns
+// whether the round trip passed.
+func (rc *ResultCollector) verifyExtractReapply(
+	t *testing.T,
+	idx int,
+	harness reapplyHarness,
+	extractFile string,
+	extractedResource map[string]any,
+	createdResource map[string]any,
+) bool {
+	// Secret fields are hashed at rest, so extract emits an opaque envelope rather
+	// than the authored plaintext. Re-applying that would either be refused as a
+	// hashed value or write a digest to the provider; neither is a plugin defect.
+	// Opacity is read off what formae produced, never off the authored fixture,
+	// which normally holds plaintext.
+	if containsOpaqueValue(extractedResource["Properties"]) || containsOpaqueValue(createdResource["Properties"]) {
+		t.Logf("Skipping extract re-apply: resource carries an opaque secret value, which extract cannot round-trip")
+		return true
+	}
+
+	t.Log("Simulating a patch-mode apply of the extracted forma...")
+	simulation, err := harness.SimulateApply(extractFile, "patch")
+	if err != nil {
+		rc.CRUDErrorf(t, idx, PhaseExtract, "Simulated re-apply of extracted forma failed: %v", err)
+		return false
+	}
+	if simulation == nil {
+		rc.CRUDErrorf(t, idx, PhaseExtract, "Simulated re-apply of extracted forma should return a simulation")
+		return false
+	}
+	if simulation.ChangesRequired {
+		rc.CRUDErrorf(t, idx, PhaseExtract,
+			"Re-applying the extracted forma should be a zero-operation apply, but the agent plans changes: %s",
+			describePlannedChanges(&simulation.Command))
+		return false
+	}
+
+	t.Log("Extract re-apply simulation confirmed a zero-operation apply!")
+	return true
+}
+
+// describePlannedChanges renders the operations a simulation would perform, so
+// a failed round trip names exactly what the re-apply would touch.
+//
+// Only fields present in the released pkg/api/model module may be used here:
+// plugin repos build this SDK as a dependency, where the local replace on
+// ../api/model does not apply. Command.StackUpdates, for instance, is not in
+// the released module; a stack-only plan still fails the round trip through
+// ChangesRequired and falls back to the no-operations text below.
+func describePlannedChanges(cmd *model.Command) string {
+	var ops []string
+	for _, ru := range cmd.ResourceUpdates {
+		op := fmt.Sprintf("%s %s (%s)", ru.Operation, ru.ResourceLabel, ru.ResourceType)
+		// The patch document names the exact properties that diff, which is
+		// the difference between "some property is lossy" and a fixable report.
+		if len(ru.PatchDocument) > 0 {
+			op += " patch: " + string(ru.PatchDocument)
+		}
+		ops = append(ops, op)
+	}
+	for _, tu := range cmd.TargetUpdates {
+		ops = append(ops, fmt.Sprintf("%s target %s", tu.Operation, tu.TargetLabel))
+	}
+	if len(ops) == 0 {
+		return "(the simulation reported changes but listed no operations)"
+	}
+	return strings.Join(ops, "; ")
+}
+
 // runCRUDTest runs the full CRUD lifecycle for a single test case.
 // This matches the structure of formae-internal's runLifecycleTest exactly.
 //
@@ -1031,7 +1460,7 @@ func compareProperties(r testReporter, expectedProperties map[string]any, actual
 //   - Non-comparison errors (eval, apply, poll, etc.) use rc.CRUDFatalf/CRUDErrorf directly.
 //   - Property comparison errors use rc.compareCRUDProperties, which wraps compareProperties
 //     with a collectingReporter to capture individual property mismatches for the result matrix.
-func runCRUDTest(t *testing.T, tc TestCase, rc *ResultCollector) {
+func runCRUDTest(t *testing.T, tc TestCase, rc *ResultCollector, sweep *providerDefaultSweep) {
 	if isParallelEnabled() {
 		t.Parallel()
 	}
@@ -1193,11 +1622,16 @@ func runCRUDTest(t *testing.T, tc TestCase, rc *ResultCollector) {
 		// Get the extracted resource
 		extractedResource := extractedResult.Resources[0]
 
-		// Compare properties using the same logic as inventory comparison
+		// Compare properties using the same logic as inventory comparison.
+		// Only re-apply once the extracted properties are known good — applying
+		// known-bad properties would mutate the resource for no extra signal.
 		if !rc.compareCRUDProperties(t, idx, PhaseExtract, expectedProperties, extractedResource, "after extract", providerDefaults) {
 			allPropertiesMatched = false
-		} else {
+		} else if rc.verifyExtractReapply(t, idx, harness, extractFile,
+			extractedResource, actualResource) {
 			rc.SetCRUDPhase(idx, PhaseExtract, StepPassed)
+		} else {
+			allPropertiesMatched = false
 		}
 		t.Log("Extract validation completed!")
 	} else {
@@ -1206,6 +1640,12 @@ func runCRUDTest(t *testing.T, tc TestCase, rc *ResultCollector) {
 	}
 
 	// === Step 7: Force synchronization to read actual state from cloud ===
+	// A configured settle window gives a provider that populates fields
+	// asynchronously time to do so before the post-sync read is taken.
+	if window := getSettleWindow(); window > 0 {
+		t.Logf("Waiting %s for provider state to settle before sync...", window)
+		time.Sleep(window)
+	}
 	t.Log("Step 7: Forcing synchronization...")
 	if err := harness.Sync(); err != nil {
 		rc.CRUDFatalf(t, idx, PhaseSync, "Sync command failed: %v", err)
@@ -1213,7 +1653,7 @@ func runCRUDTest(t *testing.T, tc TestCase, rc *ResultCollector) {
 
 	// === Step 8: Wait for synchronization to complete ===
 	t.Log("Step 8: Waiting for synchronization to complete...")
-	if err := harness.WaitForSyncCompletion(60 * time.Second); err != nil {
+	if err := harness.WaitForSyncCompletion(getSyncTimeout()); err != nil {
 		rc.CRUDFatalf(t, idx, PhaseSync, "Synchronization should complete successfully: %v", err)
 	}
 
@@ -1228,6 +1668,12 @@ func runCRUDTest(t *testing.T, tc TestCase, rc *ResultCollector) {
 	}
 
 	resourceAfterSync := inventoryAfterSync.Resources[0]
+
+	// Record the omit-and-observe result now that both reads exist: the create
+	// echo from step 5 and the post-sync read here. The fixture's own declared
+	// properties say which of the annotated fields were omitted.
+	sweep.record(tc.Name, actualResourceType, schemaHints(expectedResource),
+		expectedProperties, propertiesOf(actualResource), propertiesOf(resourceAfterSync))
 
 	// Compare properties using helper - verifies idempotency
 	syncFailed := !rc.compareCRUDProperties(t, idx, PhaseSync, expectedProperties, resourceAfterSync, "after sync", providerDefaults)
@@ -1638,7 +2084,23 @@ func runDiscoveryTest(t *testing.T, tc TestCase, rc *ResultCollector) {
 	}
 	t.Logf("Extracted plugin namespace: %s, resource type: %s", namespace, resourceType)
 
-	t.Log("Step 1: Creating resource out-of-band via plugin...")
+	// Launch the plugin before anything is created so the descriptor below can be
+	// read first: a type that is not discoverable must skip without provisioning
+	// the fixture's infrastructure out of band.
+	if err := harness.EnsurePluginLaunched(evalOutput); err != nil {
+		rc.DiscoveryFatalf(t, idx, PhaseCreateOOB, "failed to launch plugin: %v", err)
+	}
+
+	t.Log("Step 1: Checking if resource type is discoverable...")
+	descriptor, err := harness.GetResourceDescriptorFromCoordinator(resourceType)
+	if err != nil {
+		t.Skipf("Skipping discovery test: failed to get resource descriptor for %s: %v", resourceType, err)
+	}
+	if !descriptor.Discoverable {
+		t.Skipf("Skipping discovery test: resource type %s has discoverable=false", resourceType)
+	}
+
+	t.Log("Step 2: Creating resource out-of-band via plugin...")
 
 	// Create all resources directly via the plugin (bypassing formae)
 	// Use CreateAllUnmanagedResources to get all created resources for cleanup
@@ -1656,28 +2118,9 @@ func runDiscoveryTest(t *testing.T, tc TestCase, rc *ResultCollector) {
 	}
 	t.Logf("Created %d resource(s), main resource NativeID: %s (type: %s)", len(createdResources), nativeID, resourceType)
 
-	// Parse target from eval output for cleanup
-	var forma pkgmodel.Forma
-	if err := json.Unmarshal([]byte(evalOutput), &forma); err != nil {
-		rc.DiscoveryFatalf(t, idx, PhaseCreateOOB, "failed to parse forma for cleanup: %v", err)
-	}
-	if len(forma.Targets) == 0 {
-		rc.DiscoveryFatalf(t, idx, PhaseCreateOOB, "no targets found in forma for cleanup")
-	}
-	target := forma.Targets[0]
-
-	// Register cleanup to delete all created resources (in reverse order - dependents before dependencies).
-	// DeleteUnmanagedResource handles retries on recoverable errors internally.
-	harness.RegisterCleanup(func() {
-		t.Logf("Cleaning up %d unmanaged resource(s)...", len(createdResources))
-		for i := len(createdResources) - 1; i >= 0; i-- {
-			res := createdResources[i]
-			t.Logf("Deleting unmanaged resource: type=%s, label=%s, nativeID=%s", res.ResourceType, res.Label, res.NativeID)
-			if err := harness.DeleteUnmanagedResource(res.ResourceType, res.NativeID, &target); err != nil {
-				t.Logf("Warning: failed to delete unmanaged resource %s: %v", res.Label, err)
-			}
-		}
-	})
+	// Deletion of each created resource is registered by
+	// CreateAllUnmanagedResources as soon as that resource exists, so a create
+	// that fails partway still cleans up what it made.
 
 	// Extract all unique resource types from created resources for discovery configuration.
 	// This includes both the main resource type and any parent/dependency types.
@@ -1715,44 +2158,30 @@ func runDiscoveryTest(t *testing.T, tc TestCase, rc *ResultCollector) {
 	}
 	rc.SetDiscoveryPhase(idx, PhaseCreateOOB, StepPassed)
 
-	// Step 2: Register target for discovery
-	t.Log("Step 2: Registering target for discovery...")
+	// Step 3: Register target for discovery
+	t.Log("Step 3: Registering target for discovery...")
 	if err := harness.RegisterTargetForDiscovery([]byte(evalOutput)); err != nil {
 		rc.DiscoveryFatalf(t, idx, PhaseRegister, "failed to register target: %v", err)
 	}
 
-	// Step 3: Wait for plugin to register (using extracted namespace, not directory name)
-	t.Log("Step 3: Waiting for plugin to register...")
+	// Step 4: Wait for plugin to register (using extracted namespace, not directory name)
+	t.Log("Step 4: Waiting for plugin to register...")
 	if err := harness.WaitForPluginRegistered(namespace, 60*time.Second); err != nil {
 		rc.DiscoveryFatalf(t, idx, PhaseRegister, "plugin did not register: %v", err)
 	}
 	rc.SetDiscoveryPhase(idx, PhaseRegister, StepPassed)
 
-	// Step 4: Check if resource is discoverable before continuing
-	t.Log("Step 4: Checking if resource type is discoverable...")
-	descriptor, err := harness.GetResourceDescriptorFromCoordinator(resourceType)
-	if err != nil {
-		t.Skipf("Skipping discovery test: failed to get resource descriptor for %s: %v", resourceType, err)
-	}
-	if !descriptor.Discoverable {
-		t.Skipf("Skipping discovery test: resource type %s has discoverable=false", resourceType)
-	}
-
-	// Step 5: Trigger discovery
-	t.Log("Step 5: Triggering discovery...")
-	if err := harness.TriggerDiscovery(); err != nil {
-		rc.DiscoveryFatalf(t, idx, PhaseDiscover, "failed to trigger discovery: %v", err)
-	}
-
-	// Step 6: Wait for resource to appear in inventory
-	t.Log("Step 6: Waiting for resource in inventory...")
-	if err := harness.WaitForResourceInInventory(resourceType, nativeID, false, getDiscoveryTimeout()); err != nil {
+	// Step 5: Re-trigger discovery across the timeout while polling inventory.
+	// The wait loop triggers the first scan itself, so there is no separate
+	// standalone trigger here — re-scanning tolerates CloudControl propagation lag.
+	t.Log("Step 5: Discovering resource (re-trigger + poll)...")
+	if err := harness.WaitForResourceDiscovered(resourceType, nativeID, getDiscoveryTimeout()); err != nil {
 		rc.DiscoveryFatalf(t, idx, PhaseDiscover, "resource not discovered: %v", err)
 	}
 	rc.SetDiscoveryPhase(idx, PhaseDiscover, StepPassed)
 
-	// Step 7: Verify the discovered resource
-	t.Log("Step 7: Verifying discovered resource...")
+	// Step 6: Verify the discovered resource
+	t.Log("Step 6: Verifying discovered resource...")
 	inventory, err := harness.Inventory(fmt.Sprintf("type: %s managed: false", resourceType))
 	if err != nil {
 		rc.DiscoveryFatalf(t, idx, PhaseDiscoveryVerify, "failed to query inventory: %v", err)

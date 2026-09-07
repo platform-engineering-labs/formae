@@ -173,6 +173,26 @@ func TestClassifyConfigChange_ResolvableDifferentRef_IsImmutable(t *testing.T) {
 	assert.Equal(t, ConfigImmutableChange, result)
 }
 
+func TestClassifyConfigChange_ResolvableVisibilityIgnored(t *testing.T) {
+	// A target-config secret credential persists with $visibility:"Opaque" (so
+	// reference-don't-store strips its $value), but the forma renders the same
+	// ref with $visibility:"Clear" — opacity is derived from the source property,
+	// not stamped on the envelope. This derived metadata must not count as a
+	// change: otherwise an idempotent re-apply classifies the createOnly
+	// credential as an immutable change and forces a spurious target replace.
+	existing := json.RawMessage(`{"Password":{"$ref":"formae://abc#/decodedData.admin-password","$visibility":"Opaque"},"Username":"admin"}`)
+	new := json.RawMessage(`{"Password":{"$ref":"formae://abc#/decodedData.admin-password","$visibility":"Clear"},"Username":"admin"}`)
+	schema := pkgmodel.ConfigSchema{
+		Hints: map[string]pkgmodel.ConfigFieldHint{
+			"Password": {CreateOnly: true},
+			"Username": {CreateOnly: true},
+		},
+	}
+
+	result := ClassifyConfigChange(existing, new, schema)
+	assert.Equal(t, ConfigNoChange, result)
+}
+
 func TestClassifyConfigChange_FieldRemoved(t *testing.T) {
 	existing := json.RawMessage(`{"Region":"us-east-1","Profile":"prod"}`)
 	new := json.RawMessage(`{"Region":"us-east-1"}`)

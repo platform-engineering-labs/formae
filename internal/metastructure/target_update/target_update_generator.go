@@ -8,9 +8,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/tidwall/gjson"
 
+	"github.com/platform-engineering-labs/formae/internal/metastructure/reaping"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	"github.com/platform-engineering-labs/formae/pkg/api/model"
@@ -25,11 +27,32 @@ type TargetDatastore interface {
 
 type TargetUpdateGenerator struct {
 	datastore TargetDatastore
+	// manifestDefaultReap is the plugin-manifest default reaping behaviour used
+	// when a target declares none. It is nil when no manifest default is wired,
+	// in which case admission falls through to the global reaping default.
+	manifestDefaultReap pkgmodel.ReapingBehaviour
+	// minReapDuration is the floor enforced on any target's explicit reap-after
+	// duration (see resolveTargetReaping). It defaults to reaping.MinReapDuration
+	// (derived from the nominal/default sync interval); WithMinReapDuration lets
+	// the caller align it with the agent's actual configured interval.
+	minReapDuration time.Duration
 }
 
 // NewTargetUpdateGenerator creates a new target update generator
 func NewTargetUpdateGenerator(ds TargetDatastore) *TargetUpdateGenerator {
-	return &TargetUpdateGenerator{datastore: ds}
+	return &TargetUpdateGenerator{
+		datastore:       ds,
+		minReapDuration: reaping.MinReapDuration,
+	}
+}
+
+// WithMinReapDuration overrides the reap-after admission floor. Production
+// wiring (FormaCommandFromForma) uses this to derive the floor from the
+// agent's actual configured synchronization interval rather than the
+// package's nominal default.
+func (tp *TargetUpdateGenerator) WithMinReapDuration(d time.Duration) *TargetUpdateGenerator {
+	tp.minReapDuration = d
+	return tp
 }
 
 // GenerateTargetUpdates determines what target changes are needed.
@@ -103,6 +126,13 @@ func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, c
 	resolvables := resolver.ExtractResolvableURIsFromJSON(target.Config)
 	slog.Debug("Target resolvables extracted", "label", target.Label, "count", len(resolvables), "uris", resolvables)
 
+	// A target whose current row has been reaped is recovered on re-declare.
+	// Recovery must produce an update even when config/discoverable/schema are
+	// unchanged; otherwise an identical re-apply dedupes to no update, the
+	// datastore's UpdateTarget never runs, and the target stays reaped forever.
+	isReaped := existing != nil && existing.Health != nil &&
+		existing.Health.State == pkgmodel.TargetHealthStateReaped
+
 	// Handle apply command (create or update)
 	var operation TargetOperation
 	if existing == nil {
@@ -120,7 +150,7 @@ func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, c
 
 		// Determine which configs to compare. When the new config contains
 		// $ref resolvables, resolve them first so we compare actual values.
-		existingResolved, newResolved, err := tp.resolvedConfigs(existing.Config, target.Config, resolvables)
+		existingResolved, newResolved, _, anyRefDangling, err := tp.resolvedConfigs(existing.Config, target.Config, resolvables)
 		if err != nil {
 			return TargetUpdate{}, false, fmt.Errorf("failed to resolve target configs: %w", err)
 		}
@@ -143,7 +173,24 @@ func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, c
 			// - The raw config format changed (e.g., plain value ↔ $ref wrapper)
 			// - The discoverable flag changed
 			// - The ConfigSchema changed (e.g., plugin annotations updated)
-			if !util.JsonEqualRaw(existing.Config, target.Config) {
+			//
+			// Two configs with the same $refs are the same config: strip the
+			// cached $value and the derived $visibility/$strategy so identity
+			// alone drives the comparison. The one exception is a DANGLING ref
+			// (its source is gone): keep its stale cached $value so it surfaces
+			// as an update rather than being silently fed to a plugin. A ref that
+			// merely exposes no readable value (an opaque hash, an unsynced
+			// status) is not dangling and must not trigger a spurious update on
+			// every re-apply.
+			var existingForRaw, desiredForRaw json.RawMessage
+			if anyRefDangling {
+				existingForRaw = stripDerivedRefMetadataRaw(existing.Config)
+				desiredForRaw = stripDerivedRefMetadataRaw(target.Config)
+			} else {
+				existingForRaw = stripResolvableValuesRaw(existing.Config)
+				desiredForRaw = stripResolvableValuesRaw(target.Config)
+			}
+			if !util.JsonEqualRaw(existingForRaw, desiredForRaw) {
 				operation = TargetOperationUpdate
 			} else if existing.Discoverable != target.Discoverable {
 				operation = TargetOperationUpdate
@@ -151,6 +198,11 @@ func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, c
 				// Only update for schema changes when the incoming schema has hints.
 				// An empty incoming schema means the plugin/agent doesn't emit one —
 				// don't wipe existing metadata.
+				operation = TargetOperationUpdate
+			} else if isReaped {
+				// Config/discoverable/schema are all unchanged, but the target is
+				// reaped — force a recover update so UpdateTarget mints a fresh
+				// incarnation and resets health.
 				operation = TargetOperationUpdate
 			} else {
 				return TargetUpdate{}, false, nil
@@ -165,6 +217,14 @@ func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, c
 		target.ConfigSchema = existing.ConfigSchema
 	}
 
+	// Resolve the reaping behaviour at admission: explicit per-target > plugin
+	// manifest default > global default. Write the resolved behaviour back onto
+	// the target so the datastore persists the concrete reap_kind /
+	// reap_max_unreachable_seconds columns.
+	if err := tp.resolveTargetReaping(&target); err != nil {
+		return TargetUpdate{}, false, err
+	}
+
 	return TargetUpdate{
 		Target:               target,
 		ExistingTarget:       existing,
@@ -174,6 +234,46 @@ func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, c
 		ModifiedTs:           now,
 		RemainingResolvables: resolvables,
 	}, true, nil
+}
+
+// resolveTargetReaping applies the reaping precedence (explicit > manifest
+// default > global default), enforces the reap-after duration floor, and writes
+// the resolved behaviour back onto target.Reaping.
+func (tp *TargetUpdateGenerator) resolveTargetReaping(target *pkgmodel.Target) error {
+	explicit, err := pkgmodel.ParseReaping(target.Reaping)
+	if err != nil {
+		return fmt.Errorf("invalid reaping for target %s: %w", target.Label, err)
+	}
+
+	resolved := pkgmodel.ResolveReaping(explicit, tp.manifestDefaultReap)
+
+	if after, ok := resolved.(*pkgmodel.ReapAfter); ok {
+		floor := int64(tp.minReapDuration.Seconds())
+		if after.MaxUnreachableSeconds < floor {
+			return fmt.Errorf("target %s reap-after of %ds is below the minimum of %ds",
+				target.Label, after.MaxUnreachableSeconds, floor)
+		}
+	}
+
+	raw, err := pkgmodel.MarshalReaping(resolved)
+	if err != nil {
+		return fmt.Errorf("failed to marshal resolved reaping for target %s: %w", target.Label, err)
+	}
+	target.Reaping = raw
+	return nil
+}
+
+// isHashedAtRest reports whether a property value read from the datastore is an
+// opaque envelope whose $value is a SHA-256 digest rather than the plaintext.
+// Only a top-level envelope counts: a container that merely holds a hashed value
+// somewhere inside still has clear fields whose change must be detected, so it
+// is resolved normally.
+func isHashedAtRest(raw string) bool {
+	parsed := gjson.Parse(raw)
+	if !parsed.IsObject() {
+		return false
+	}
+	return parsed.Get("$hashed").Bool()
 }
 
 // configSchemasEqual returns true if two ConfigSchemas have identical hints.
@@ -194,54 +294,95 @@ func configSchemasEqual(a, b pkgmodel.ConfigSchema) bool {
 // field-level comparison. Both configs are stripped of $ref metadata so that
 // ClassifyConfigChange compares plain values. When the new config contains
 // $ref resolvables, they are resolved from the DB first.
-func (tp *TargetUpdateGenerator) resolvedConfigs(existingConfig, newConfig json.RawMessage, resolvables []pkgmodel.FormaeURI) (json.RawMessage, json.RawMessage, error) {
+// resolvedConfigs resolves the $refs in newConfig against the datastore and
+// returns both configs with $ref metadata stripped for comparison. The third
+// return reports whether ALL refs resolved to a value; the fourth reports
+// whether any ref is DANGLING — its source resource could not be loaded at all,
+// as opposed to loading fine but exposing no readable value at the path (e.g. an
+// opaque credential stored as a hash, or a status field not yet synced). A
+// dangling ref means a stale cached $value must surface as an update; a
+// present-but-unresolvable ref does not, because the reference identity is
+// unchanged.
+func (tp *TargetUpdateGenerator) resolvedConfigs(existingConfig, newConfig json.RawMessage, resolvables []pkgmodel.FormaeURI) (json.RawMessage, json.RawMessage, bool, bool, error) {
 	if len(resolvables) == 0 {
 		// No resolvables in new config, but existing config may still have
 		// $ref metadata from a previous apply. Strip it for comparison.
 		existingValues, err := resolver.ConvertToPluginFormat(existingConfig)
 		if err != nil {
-			return existingConfig, newConfig, nil
+			return existingConfig, newConfig, true, false, nil
 		}
-		return existingValues, newConfig, nil
+		return existingValues, newConfig, true, false, nil
 	}
 
 	// Resolve $ref values from DB for comparison
 	resolvedConfig := make([]byte, len(newConfig))
 	copy(resolvedConfig, newConfig)
 
+	allResolved := true
+	anyDangling := false
 	for _, uri := range resolvables {
 		ksuid := uri.KSUID()
 		propertyPath := uri.PropertyPath()
 
 		resource, err := tp.datastore.LoadResourceById(ksuid)
 		if err != nil || resource == nil {
-			slog.Debug("Cannot resolve $ref from DB, treating as config change",
+			// The source resource is gone — a genuinely dangling ref.
+			slog.Debug("Cannot load $ref source from DB, treating as dangling",
 				"uri", uri, "error", err)
-			return existingConfig, newConfig, nil
+			anyDangling = true
+			allResolved = false
+			continue
 		}
 
-		value := gjson.GetBytes(resource.Properties, propertyPath)
-		if !value.Exists() {
-			slog.Debug("Referenced property not found in resource, treating as config change",
+		strVal, ok := resource.GetProperty(propertyPath)
+		if !ok {
+			// The source is present but exposes no readable value at this path
+			// (e.g. an opaque credential nested inside a hashed envelope, or an
+			// unsynced status field). The reference is valid, so this is not a
+			// change — compare by $ref identity rather than treating it as
+			// dangling.
+			slog.Debug("Referenced property not readable, comparing by ref identity",
 				"uri", uri, "propertyPath", propertyPath)
-			return existingConfig, newConfig, nil
+			allResolved = false
+			continue
 		}
 
-		resolvedConfig, err = resolver.ResolvePropertyReferences(uri, resolvedConfig, value.String())
-		if err != nil {
-			return existingConfig, newConfig, nil
+		if isHashedAtRest(strVal) {
+			// The property IS readable, but what it holds is a digest, not the
+			// value: an opaque field is persisted as a whole hashed envelope, so
+			// GetProperty hands back that envelope's raw JSON. Resolving it would
+			// compare the desired side's digest against a stored side that carries
+			// no $value at all (reference-don't-store strips it), so a target with
+			// a secret-sourced credential would report a change on every re-apply.
+			// A digest can never participate in a value comparison, so fall back to
+			// $ref identity — the same treatment as an unreadable property, and
+			// explicitly NOT dangling.
+			slog.Debug("Referenced property is hashed at rest, comparing by ref identity",
+				"uri", uri, "propertyPath", propertyPath)
+			allResolved = false
+			continue
 		}
+
+		resolvedConfig, err = resolver.ResolvePropertyReferences(uri, resolvedConfig, strVal)
+		if err != nil {
+			allResolved = false
+			continue
+		}
+	}
+
+	if !allResolved {
+		return existingConfig, newConfig, false, anyDangling, nil
 	}
 
 	// Strip $ref metadata from both sides so ClassifyConfigChange sees plain values
 	existingValues, err := resolver.ConvertToPluginFormat(existingConfig)
 	if err != nil {
-		return existingConfig, json.RawMessage(resolvedConfig), nil
+		return existingConfig, json.RawMessage(resolvedConfig), true, false, nil
 	}
 	newValues, err := resolver.ConvertToPluginFormat(resolvedConfig)
 	if err != nil {
-		return existingConfig, json.RawMessage(resolvedConfig), nil
+		return existingConfig, json.RawMessage(resolvedConfig), true, false, nil
 	}
 
-	return existingValues, newValues, nil
+	return existingValues, newValues, true, false, nil
 }

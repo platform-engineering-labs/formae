@@ -1,0 +1,47 @@
+/*
+ * © 2026 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+// Two plugin resources bound to the two halves of one key-pair generator:
+// the shape the per-installation identity keys use, where each half lands in
+// its own secret with its own readers.
+
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+import "@fakeaws/fakeaws.pkl"
+import "@fakeaws/secretsmanager/secret.pkl"
+
+forma {
+  local appStack = new formae.Stack {
+    label = "generator-keypair-stack"
+    description = "Stack for a key-pair-bound pair of secrets"
+  }
+  appStack
+
+  new formae.Target {
+    label = "default-aws-target"
+    config = new fakeaws.Config {
+      region = "us-west-2"
+    }
+  }
+
+  local idKey = new formae.KeyPairGenerator {
+    label = "id-key"
+    stack = appStack.res
+  }
+  idKey
+
+  new secret.Secret {
+    label = "id-key-private"
+    name = "id-key-private"
+    secretString = idKey.gen.privateKey
+  }
+
+  new secret.Secret {
+    label = "id-key-public"
+    name = "id-key-public"
+    secretString = idKey.gen.publicKey
+  }
+}

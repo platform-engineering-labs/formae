@@ -173,6 +173,88 @@ func TestDiscoverPlugins_Auth_SkipsPluginsWithoutManifest(t *testing.T) {
 	assert.Nil(t, DiscoverPlugins(baseDir, Auth))
 }
 
+func TestDiscoverPlugins_OidcCredentialClassifiesOnlyToItsOwnScan(t *testing.T) {
+	dir := t.TempDir()
+	createFakePlugin(t, dir, "fai", "0.1.0", `name = "fai"
+type = "oidc-credential"
+version = "0.1.0"
+namespaces { "aws"; "Azure" }
+license = "FSL-1.1-ALv2"
+minFormaeVersion = "0.90.0"`)
+	oidc := DiscoverPlugins(dir, OidcCredential)
+	require.Len(t, oidc, 1)
+	require.Equal(t, []string{"AWS", "AZURE"}, oidc[0].Namespaces)
+	require.Empty(t, DiscoverPlugins(dir, Resource), "an oidc-credential binary must not classify as a resource plugin")
+	require.Empty(t, DiscoverPlugins(dir, Auth))
+}
+
+func TestDiscoverPluginsMulti_DevOverridesSystem(t *testing.T) {
+	systemDir := t.TempDir()
+	devDir := t.TempDir()
+
+	createFakePlugin(t, systemDir, "aws", "v1.0.0", resourceManifest("aws", "AWS"))
+	createFakePlugin(t, devDir, "aws", "v0.0.1-dev", resourceManifest("aws", "AWS"))
+
+	results := DiscoverPluginsMulti([]string{devDir, systemDir}, Resource)
+
+	require.Len(t, results, 1)
+	assert.Equal(t, "aws", results[0].Name)
+	assert.Equal(t, "v0.0.1-dev", results[0].Version)
+	assert.Contains(t, results[0].BinaryPath, devDir)
+}
+
+func TestDiscoverPluginsMulti_SystemUsedWhenNoDevOverride(t *testing.T) {
+	systemDir := t.TempDir()
+	devDir := t.TempDir()
+
+	createFakePlugin(t, systemDir, "aws", "v1.0.0", resourceManifest("aws", "AWS"))
+	createFakePlugin(t, systemDir, "azure", "v2.0.0", resourceManifest("azure", "AZURE"))
+	createFakePlugin(t, devDir, "aws", "v0.0.1-dev", resourceManifest("aws", "AWS"))
+
+	results := DiscoverPluginsMulti([]string{devDir, systemDir}, Resource)
+
+	require.Len(t, results, 2)
+
+	names := map[string]string{}
+	for _, r := range results {
+		names[r.Name] = r.Version
+	}
+	assert.Equal(t, "v0.0.1-dev", names["aws"])
+	assert.Equal(t, "v2.0.0", names["azure"])
+}
+
+func TestDiscoverPluginsMulti_SkipsEmptyAndNonexistentDirs(t *testing.T) {
+	systemDir := t.TempDir()
+	createFakePlugin(t, systemDir, "aws", "v1.0.0", resourceManifest("aws", "AWS"))
+
+	results := DiscoverPluginsMulti([]string{"", "/nonexistent", t.TempDir(), systemDir}, Resource)
+
+	require.Len(t, results, 1)
+	assert.Equal(t, "aws", results[0].Name)
+}
+
+func TestDiscoverPluginsMulti_NilDirs(t *testing.T) {
+	assert.Nil(t, DiscoverPluginsMulti(nil, Resource))
+}
+
+func TestDiscoverPluginsMulti_Auth(t *testing.T) {
+	systemDir := t.TempDir()
+	devDir := t.TempDir()
+
+	createFakePlugin(t, systemDir, "auth-basic", "v1.0.0", authManifest("auth-basic"))
+	createFakePlugin(t, devDir, "auth-custom", "v0.1.0", authManifest("auth-custom"))
+
+	results := DiscoverPluginsMulti([]string{devDir, systemDir}, Auth)
+
+	require.Len(t, results, 2)
+	names := map[string]bool{}
+	for _, r := range results {
+		names[r.Name] = true
+	}
+	assert.True(t, names["auth-basic"])
+	assert.True(t, names["auth-custom"])
+}
+
 func TestDiscoverPlugins_Resource_PopulatesMinFormaeVersion(t *testing.T) {
 	baseDir := t.TempDir()
 	createFakePlugin(t, baseDir, "cloudflare-dns", "v1.2.0", resourceManifest("cloudflare-dns", "CLOUDFLARE"))
@@ -297,4 +379,32 @@ func TestFilterCompatiblePlugins_AllCompatible(t *testing.T) {
 
 	result := FilterCompatiblePlugins(plugins, "1.0.0", "0.50.0", "0.2.1")
 	require.Len(t, result, 2)
+}
+
+func TestFilterCompatiblePlugins_OldAgentRejectsPluginRequiringNewerVersion(t *testing.T) {
+	// FilterCompatiblePlugins drops a plugin whose minFormaeVersion exceeds the
+	// running agent version. A released agent below that floor will never
+	// include the plugin in its load set.
+	plugin := PluginInfo{
+		Name:             "aws",
+		Namespace:        "AWS",
+		Version:          "v2.0.0",
+		BinaryPath:       "/plugins/aws/v2.0.0/aws",
+		Type:             Resource,
+		MinFormaeVersion: "0.89.0",
+	}
+
+	// Old agent (0.88.0) must not load a plugin that requires 0.89.0.
+	rejected := FilterCompatiblePlugins([]PluginInfo{plugin}, "0.88.0", "0.84.0", "0.2.1")
+	assert.Empty(t, rejected, "old agent should reject plugin requiring a newer formae version")
+
+	// Agent running exactly the required version must accept it.
+	accepted := FilterCompatiblePlugins([]PluginInfo{plugin}, "0.89.0", "0.84.0", "0.2.1")
+	require.Len(t, accepted, 1, "agent at exactly the required version should accept the plugin")
+	assert.Equal(t, "aws", accepted[0].Name)
+
+	// Newer agent must also accept it.
+	alsoAccepted := FilterCompatiblePlugins([]PluginInfo{plugin}, "0.90.0", "0.84.0", "0.2.1")
+	require.Len(t, alsoAccepted, 1, "newer agent should accept the plugin")
+	assert.Equal(t, "aws", alsoAccepted[0].Name)
 }

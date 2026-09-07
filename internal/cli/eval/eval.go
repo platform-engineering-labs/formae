@@ -6,27 +6,31 @@ package eval
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/spf13/cobra"
 
 	"github.com/platform-engineering-labs/formae/internal/cli/app"
 	"github.com/platform-engineering-labs/formae/internal/cli/cmd"
 	"github.com/platform-engineering-labs/formae/internal/cli/config"
-	"github.com/platform-engineering-labs/formae/internal/cli/display"
 	"github.com/platform-engineering-labs/formae/internal/cli/printer"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
 	"github.com/platform-engineering-labs/formae/internal/logging"
 	"github.com/platform-engineering-labs/formae/internal/schema"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
+
+// isTerminal is a package-level seam so tests can stub it.
+var isTerminal = tui.IsTerminal
 
 type EvalOptions struct {
 	FormaFile      string
 	Mode           pkgmodel.FormaApplyMode
 	OutputConsumer printer.Consumer
 	OutputSchema   string
-	Beautify       bool
-	Colorize       bool
 	Properties     map[string]string
+	SchemaLocation schema.SchemaLocation
 }
 
 func validateEvalOptions(opts *EvalOptions) error {
@@ -62,9 +66,13 @@ func EvalCmd() *cobra.Command {
 			consumer, _ := command.Flags().GetString("output-consumer")
 			opts.OutputConsumer = printer.Consumer(consumer)
 			opts.OutputSchema, _ = command.Flags().GetString("output-schema")
-			opts.Beautify, _ = command.Flags().GetBool("beautify")
-			opts.Colorize, _ = command.Flags().GetBool("colorize")
 			opts.Properties = cmd.PropertiesFromCmd(command)
+			schemaLocation, _ := command.Flags().GetString("schema-location")
+			loc, err := parseSchemaLocation(schemaLocation)
+			if err != nil {
+				return err
+			}
+			opts.SchemaLocation = loc
 
 			configFile, _ := command.Flags().GetString("config")
 			app, err := cmd.AppFromContext(command.Context(), configFile, "", command)
@@ -86,12 +94,24 @@ func EvalCmd() *cobra.Command {
 
 	command.Flags().String("mode", string(pkgmodel.FormaApplyModeReconcile), "Apply mode (reconcile | patch)")
 	command.Flags().String("output-schema", "json", "The schema to use for the result output (json | yaml)")
-	command.Flags().Bool("beautify", true, "beautify output (human consumer only)")
-	command.Flags().Bool("colorize", true, "colorize output (human consumer only)")
 	command.Flags().String("output-consumer", string(printer.ConsumerHuman), "Consumer of the command result (human | machine)")
-	command.Flags().String("config", "", "Path to config file")
+	command.Flags().String("schema-location", "remote", "How plugin PKL schemas are referenced when serializing the evaluated forma. 'remote' (default) emits package:// URIs that PKL fetches from the hub. 'local' emits local file imports against the agent's on-disk PklProject paths; requires CLI and agent to share a filesystem.")
+	cmd.AddConfigFlags(command)
 
 	return command
+}
+
+// parseSchemaLocation maps the --schema-location flag value to the
+// internal SchemaLocation enum.
+func parseSchemaLocation(s string) (schema.SchemaLocation, error) {
+	switch s {
+	case "", "remote":
+		return schema.SchemaLocationRemote, nil
+	case "local":
+		return schema.SchemaLocationLocal, nil
+	default:
+		return "", cmd.FlagErrorf("invalid --schema-location %q; must be one of 'remote' or 'local'", s)
+	}
 }
 
 func runEval(app *app.App, opts *EvalOptions) error {
@@ -105,23 +125,25 @@ func runEval(app *app.App, opts *EvalOptions) error {
 }
 
 func runEvalForHumans(app *app.App, opts *EvalOptions) error {
+	th := app.Theme()
 	app.PrintBanner()
-	fmt.Print(display.Gold("Evaluating forma:") + "\n  " + display.Green("File: ") + fmt.Sprintf("%s\n  ", opts.FormaFile) + display.Green("Mode:") + fmt.Sprintf(" %s\n\n", opts.Mode))
+	fmt.Printf("%s\n\n", renderEvalHeader(th, opts.FormaFile, string(opts.Mode)))
 
 	result, err := app.Evaluate(opts.FormaFile, opts.Properties, opts.Mode)
 	if err != nil {
 		return fmt.Errorf("cannot evaluate forma: %v", err)
 	}
 	output, err := app.SerializeForma(result, &schema.SerializeOptions{
-		Schema:   opts.OutputSchema,
-		Beautify: opts.Beautify,
-		Colorize: opts.Colorize,
+		Schema:         opts.OutputSchema,
+		Beautify:       true,
+		Colorize:       isTerminal(os.Stdout),
+		SchemaLocation: opts.SchemaLocation,
 	})
 	if err != nil {
 		return fmt.Errorf("cannot serialize eval result: %v", err)
 	}
 
-	fmt.Printf("%s\n\n%s\n", display.Goldf("Evaluated forma as '%s':", opts.OutputSchema), output)
+	fmt.Printf("%s\n\n%s\n", components.SectionHeader(th, fmt.Sprintf("Evaluated forma as '%s'", opts.OutputSchema)), output)
 
 	return nil
 }

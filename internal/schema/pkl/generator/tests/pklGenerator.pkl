@@ -18,6 +18,8 @@ local zoneJson = new json.Parser {}.parse(read("../examples/json/dns_zone.json")
 local computeServerJson = new json.Parser {}.parse(read("../examples/json/compute_server.json"))
 local appRunnerServiceJson = new json.Parser {}.parse(read("../examples/json/apprunner_service.json"))
 local crossStackRefJson = new json.Parser {}.parse(read("../examples/json/cross_stack_ref.json"))
+local hashedValueJson = new json.Parser {}.parse(read("../examples/json/hashed_value.json"))
+local secretJsonSelectorJson = new json.Parser {}.parse(read("../examples/json/secret_json_selector_ref.json"))
 
 facts {
     ["SQS Queue - generates correct imports"] {
@@ -28,7 +30,7 @@ facts {
 
     ["SQS Queue - generates forma block with stacks and targets"] {
         let (result = generator.generateFormaFile(sqsJson))
-        result.contains("amends \"@formae/forma.pkl\"") &&
+        result.contains("extends \"@formae/forma.pkl\"") &&
         result.contains("import \"@formae/formae.pkl\"") &&
         result.contains("formae.Stack") &&
         result.contains("label = \"queue-stack\"") &&
@@ -122,6 +124,49 @@ facts {
 
     ["modulePathToAlias - single path never collides"] {
         generator.modulePathToAlias("@aws/ec2/ec2.pkl", List("@aws/ec2/ec2.pkl")) == "ec2"
+    }
+
+    // Version-style parent dirs (e.g. `v1.34`) get sanitized to valid
+    // Pkl identifiers and placed AFTER the basename so the meaningful
+    // symbol leads — alias = `<baseName>_<sanitizedVersion>`. This avoids
+    // the historical bug where `v1.34_k8s` was emitted as the alias and
+    // rejected by the Pkl parser due to the `.` in the identifier.
+    ["modulePathToAlias - version parent placed after baseName, sanitized"] {
+        let (allPaths = List("@k8s/k8s.pkl", "@k8s/v1.34/k8s.pkl"))
+        generator.modulePathToAlias("@k8s/v1.34/k8s.pkl", allPaths) == "k8s_v1_34" &&
+        // Package-root file: parent (`@k8s` → `k8s`) collapses with baseName
+        // (`k8s`) — emit just `k8s` instead of the ugly `k8s_k8s` duplicate.
+        generator.modulePathToAlias("@k8s/k8s.pkl", allPaths) == "k8s"
+    }
+
+    ["modulePathToAlias - multiple version dirs each get filename_version"] {
+        let (allPaths = List("@k8s/v1.34/k8s.pkl", "@k8s/v1.35/k8s.pkl"))
+        generator.modulePathToAlias("@k8s/v1.34/k8s.pkl", allPaths) == "k8s_v1_34" &&
+        generator.modulePathToAlias("@k8s/v1.35/k8s.pkl", allPaths) == "k8s_v1_35"
+    }
+
+    // importExists protects against bogus namespace-base imports. The
+    // fixture packages ship `@fakeaws/fakeaws.pkl` and
+    // `@testprovider/testprovider.pkl`, so both should resolve to true.
+    // A made-up path or an unknown package should resolve to false so
+    // the synthesized namespace-base import is filtered out of allImports
+    // and doesn't fight a real per-version import for the same alias.
+    ["importExists - existing root module returns true"] {
+        generator.importExists("@fakeaws/fakeaws.pkl") &&
+        generator.importExists("@testprovider/testprovider.pkl")
+    }
+
+    ["importExists - missing module returns false"] {
+        !generator.importExists("@fakeaws/does-not-exist.pkl") &&
+        !generator.importExists("@testprovider/missing.pkl")
+    }
+
+    ["importExists - unknown package returns false"] {
+        !generator.importExists("@unknownpkg/anything.pkl")
+    }
+
+    ["importExists - malformed path returns false"] {
+        !generator.importExists("nopackage")
     }
 
     // --- importFormatting unit tests ---
@@ -239,6 +284,14 @@ facts {
         result.contains("infraStack.res.label")
     }
 
+    ["Selector ref - renders the sub-key selector through the secret-value accessor"] {
+        let (result = generator.generateFormaFile(secretJsonSelectorJson))
+        // The selector names one member of the secret document. It must survive
+        // regeneration, and it must hang off secretValue: json() is defined on the
+        // secret-value resolvable, not on the accessor the property mapping picks.
+        result.contains(".secretValue.json(\"password\")")
+    }
+
     ["Cross-stack ref - generates resolvable with VPCResolvable type"] {
         let (result = generator.generateFormaFile(crossStackRefJson))
         result.contains("vpc.VPCResolvable")
@@ -248,5 +301,55 @@ facts {
         let (result = generator.generateFormaFile(crossStackRefJson))
         result.contains("label = \"infra-stack\"") &&
         result.contains("label = \"app-stack\"")
+    }
+
+    // --- Hashed opaque value round-trip tests ---
+    // A stored $hashed:true opaque field must emit .hashed in the fluent
+    // chain and carry the sentinel inline comment. A non-hashed opaque or
+    // a clear field must emit neither.
+
+    ["Hashed value - emits .hashed in fluent chain"] {
+        let (result = generator.generateFormaFile(hashedValueJson))
+        result.contains(".hashed")
+    }
+
+    ["Hashed value - emits sentinel inline comment for hashed field"] {
+        let (result = generator.generateFormaFile(hashedValueJson))
+        result.contains("// hashed secret value — cannot be applied as-is; re-supply the plaintext to set it")
+    }
+
+    ["Hashed value - comment appears on line with hashed field only"] {
+        let (result = generator.generateFormaFile(hashedValueJson))
+        // The hashed resource emits .hashed with the comment.
+        result.contains("a3f5b2c8d9e1f04712345678abcdef0123456789abcdef0123456789abcdef01") &&
+        result.contains("// hashed secret value — cannot be applied as-is; re-supply the plaintext to set it")
+    }
+
+    ["Non-hashed opaque - no .hashed and no sentinel comment"] {
+        let (result = generator.generateFormaFile(hashedValueJson))
+        // The non-hashed opaque resource renders as .opaque without .hashed.
+        result.contains("b4e6c3d7e8f2a15823456789bcdef01234567890bcdef01234567890bcdef012") &&
+        // opaque without hashed means the value line must not carry the sentinel on the same line;
+        // count by verifying the comment appears exactly once (only for the hashed resource).
+        result.split("// hashed secret value").length == 2
+    }
+
+    ["Clear value - no .hashed and no sentinel comment"] {
+        let (result = generator.generateFormaFile(hashedValueJson))
+        result.contains("name = \"example.com\"") &&
+        // Exactly one occurrence of the sentinel (for the single hashed resource).
+        result.split("// hashed secret value").length == 2
+    }
+
+    ["Strict boolean - absent $hashed means no .hashed emitted"] {
+        // zone-opaque-nohash has $visibility=Opaque but no $hashed key.
+        // Its rendered output must contain .opaque but not .opaque.hashed for that value.
+        let (result = generator.generateFormaFile(hashedValueJson))
+        let (nohashValue = "b4e6c3d7e8f2a15823456789bcdef01234567890bcdef01234567890bcdef012")
+        // The rendered form is: formae.value("<hex>").opaque — check by wrapping in quotes.
+        let (hasOpaqueLine = result.contains("formae.value(\"" + nohashValue + "\").opaque"))
+        let (hasHashedLine = result.contains("formae.value(\"" + nohashValue + "\").opaque.hashed"))
+        // Must render .opaque but not extend it with .hashed.
+        hasOpaqueLine && !hasHashedLine
     }
 }

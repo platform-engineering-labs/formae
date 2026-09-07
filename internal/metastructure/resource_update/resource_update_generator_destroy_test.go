@@ -334,8 +334,7 @@ func TestGenerateResourceUpdatesForDestroy(t *testing.T) {
 				existingTargets,
 				ds,
 				nil,
-				nil,
-			)
+				nil, false)
 
 			if tt.expectedError != "" {
 				assert.Error(t, err)

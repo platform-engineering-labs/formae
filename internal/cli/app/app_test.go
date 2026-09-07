@@ -10,8 +10,10 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/platform-engineering-labs/formae/internal/cli/config"
+	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
 // On Linux dynamically loaded modules are mapped to shared address space.
@@ -81,4 +83,21 @@ func TestParseIncludeSpec(t *testing.T) {
 			assert.Equal(t, tt.wantIsLocal, isLocal)
 		})
 	}
+}
+
+// TestAuthClient_NoAuthBlockReturnsTypedError verifies that AuthClient
+// returns a *NoAuthPluginError — rather than a generic error or a nil
+// client — when the active profile carries no cli.auth block, so callers
+// like `formae login` can distinguish "nothing to discover" from a plugin
+// that failed to start.
+func TestAuthClient_NoAuthBlockReturnsTypedError(t *testing.T) {
+	a := &App{Config: &pkgmodel.Config{}}
+
+	client, err := a.AuthClient()
+
+	assert.Nil(t, client)
+	require.Error(t, err)
+	var noAuth *NoAuthPluginError
+	require.ErrorAs(t, err, &noAuth)
+	assert.Equal(t, "no auth plugin configured for the active profile", err.Error())
 }

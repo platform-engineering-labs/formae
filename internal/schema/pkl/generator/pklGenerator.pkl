@@ -9,7 +9,26 @@ module FormaGenerator
 import "./gen.pkl" as gen
 import "@formae/formae.pkl"
 import "./resources.pkl"
+import "./imports.pkl" as availableImports
 import "pkl:json"
+
+/// Whether the given import path actually exists in the resolved packages
+/// graph. Used to filter speculative `@<pkg>/<pkg>.pkl` namespace-base
+/// imports synthesized in `generateFormaFile` — some plugins don't ship a
+/// file at the package root (e.g. plugin-k8s ships `target.pkl` instead),
+/// and emitting a bogus import drags an extra entry into the alias
+/// collision pool, mis-aliasing real imports.
+function importExists(path: String): Boolean =
+    let (parts = path.split("/"))
+    if (parts.length < 2)
+        false
+    else
+        let (pkg = parts.first)
+        let (pkgModules = availableImports.packages.getOrNull(pkg))
+        if (pkgModules == null)
+            false
+        else
+            pkgModules.containsKey(path)
 
 resourceTypes = resources.GetAllResourceTypes()
 typeMap = resourceTypes.fold(Map(), (acc: Map<String, resources.Resource>, elem) ->
@@ -18,13 +37,13 @@ typeMap = resourceTypes.fold(Map(), (acc: Map<String, resources.Resource>, elem)
 
 function headerImports(): String =
     """
-    amends "@formae/forma.pkl"
+    extends "@formae/forma.pkl"
     import "@formae/formae.pkl"
     """
 
 function getImports(type: String, dependencies: List<String>): String =
     """
-    amends "@formae/forma.pkl"
+    extends "@formae/forma.pkl"
     import "@formae/formae.pkl"
 
 
@@ -52,10 +71,24 @@ function appendProperties(parsed: json.Value): json.Value =
 
 /// Derive a unique Pkl identifier alias from a module path.
 /// When the simple filename would collide with another import in the set,
-/// prepend the parent directory segment.
+/// disambiguate using the parent directory segment.
+///
+/// Disambiguation order depends on whether the parent looks like a version
+/// directory (`v<digits>...`):
+///   - Version parent:  alias = "<baseName>_<sanitizedParent>"  ("filename
+///     first") so the meaningful symbol leads. e.g. "@k8s/v1.34/k8s.pkl" +
+///     "@k8s/k8s.pkl" -> "k8s_v1_34" / "k8s_k8s".
+///   - Non-version parent: alias = "<sanitizedParent>_<baseName>" so the
+///     namespace leads, matching the existing cross-plugin pattern. e.g.
+///     "@aws/ecs/service.pkl" + "@gcp/cloudrun/service.pkl" -> "ecs_service" /
+///     "cloudrun_service".
+///
+/// The parent segment is sanitized to a valid Pkl identifier (replace any
+/// non-[A-Za-z0-9_] characters with `_`) so directory names like `v1.34`
+/// don't synthesize an alias containing `.`, which the Pkl parser rejects.
+///
 /// e.g., "@cloudflare-dns/cloudflare-dns.pkl" -> "cloudflare_dns"
 /// e.g., "@aws/ec2/ec2.pkl" -> "ec2"
-/// e.g., "@aws/ecs/service.pkl" + "@gcp/cloudrun/service.pkl" -> "ecs_service" / "cloudrun_service"
 function modulePathToAlias(modulePath: String, allPaths: List<String>): String =
     let (segments = modulePath.replaceAll(".pkl", "").split("/"))
     let (baseName = segments.last.replaceAll("-", "_"))
@@ -63,8 +96,18 @@ function modulePathToAlias(modulePath: String, allPaths: List<String>): String =
         p != modulePath && p.replaceAll(".pkl", "").split("/").last.replaceAll("-", "_") == baseName
     ).length > 0)
     if (hasCollision && segments.length >= 2)
-        let (parent = segments[segments.length - 2].replaceAll("-", "_").replaceFirst("@", ""))
-        "\(parent)_\(baseName)"
+        let (rawParent = segments[segments.length - 2].replaceFirst("@", ""))
+        let (parent = rawParent.replaceAll(Regex(#"[^A-Za-z0-9_]"#), "_"))
+        let (isVersion = rawParent.matches(Regex(#"^v\d+(\..+)?$"#)))
+        if (isVersion)
+            "\(baseName)_\(parent)"
+        else if (parent == baseName)
+            // Package-root files like @k8s/k8s.pkl: parent and basename
+            // collapse to the same identifier (`k8s_k8s`), which is ugly
+            // and adds no information. Emit just `baseName`.
+            baseName
+        else
+            "\(parent)_\(baseName)"
     else
         baseName
 
@@ -78,7 +121,7 @@ function parseStacks(stacksData: List<Map<String, Any>>, policyLabelMap: Map<Str
     let (stacksString = stacksData.map((stackData) ->
         let (label = stackData["label"])
         let (camelCaseLabel = toCamelCase(label))
-        let (description = stackData.getOrNull("description") ?? "This was generated")
+        let (description = stackData.getOrNull("description") as String?)
         let (policies = stackData.getOrNull("policies") as List?)
 
         let (labelLine = if (label == "$unmanaged")
@@ -105,14 +148,26 @@ function parseStacks(stacksData: List<Map<String, Any>>, policyLabelMap: Map<Str
                     // Inline policy - render directly (without label, as it's typically auto-generated)
                     let (policyType = policy.getPropertyOrNull("Type") as String?)
                     if (policyType == "ttl")
-                        let (ttlSeconds = policy.getPropertyOrNull("TTLSeconds") as Number? ?? 0)
+                        let (expiresAt = policy.getPropertyOrNull("ExpiresAt") as String?)
                         let (onDependents = policy.getPropertyOrNull("OnDependents") as String? ?? "abort")
-                        """
-                        new formae.TTLPolicy {
-                                    ttl = \(ttlSeconds).s
-                                    onDependents = "\(onDependents)"
-                                }
-                        """
+                        // A TTL policy carries either an absolute deadline or a
+                        // duration; emit back the one it was stored with, so
+                        // extract -> apply -> extract is stable.
+                        if (expiresAt != null)
+                            """
+                            new formae.TTLPolicy {
+                                        expiresAt = "\(expiresAt)"
+                                        onDependents = "\(onDependents)"
+                                    }
+                            """
+                        else
+                            let (ttlSeconds = policy.getPropertyOrNull("TTLSeconds") as Number? ?? 0)
+                            """
+                            new formae.TTLPolicy {
+                                        ttl = \(ttlSeconds).s
+                                        onDependents = "\(onDependents)"
+                                    }
+                            """
                     else if (policyType == "auto-reconcile")
                         let (intervalSeconds = policy.getPropertyOrNull("IntervalSeconds") as Number? ?? 0)
                         """
@@ -131,11 +186,19 @@ function parseStacks(stacksData: List<Map<String, Any>>, policyLabelMap: Map<Str
             ""
         )
 
+        // Emit the description line only when the stack actually has one, so
+        // extracted/adopted stacks (which carry no description) don't ship an
+        // empty or placeholder value that would overwrite a stored description.
+        let (descriptionLine = if (description != null && description != "")
+            "\n        description = \"\(description)\""
+        else
+            ""
+        )
+
         """
 
       local \(camelCaseLabel) = new formae.Stack {
-        \(labelLine)
-        description = "\(description)"\(policiesLine)
+        \(labelLine)\(descriptionLine)\(policiesLine)
       }
       \(camelCaseLabel)
       """
@@ -150,9 +213,21 @@ function parsePolicies(policiesData: List<Map<String, Any>>): String =
         let (camelCaseLabel = toCamelCase(label))
 
         if (policyType == "ttl")
-            let (ttlSeconds = policyData["TTLSeconds"] as Number)
+            let (expiresAt = policyData.getOrNull("ExpiresAt") as String?)
             let (onDependents = policyData.getOrNull("OnDependents") as String? ?? "abort")
-            """
+            if (expiresAt != null)
+                """
+
+      local \(camelCaseLabel) = new formae.TTLPolicy {
+        label = "\(label)"
+        expiresAt = "\(expiresAt)"
+        onDependents = "\(onDependents)"
+      }
+      \(camelCaseLabel)
+      """
+            else
+                let (ttlSeconds = policyData["TTLSeconds"] as Number)
+                """
 
       local \(camelCaseLabel) = new formae.TTLPolicy {
         label = "\(label)"
@@ -179,6 +254,80 @@ function parsePolicies(policiesData: List<Map<String, Any>>): String =
       """
     ))
     policiesString.join("\n")
+
+// Escapes a value about to be interpolated into an emitted PKL string
+// literal. Mirrors gen.pkl's escapeString (not importable here: that
+// function is local to gen.pkl).
+local function escapeGeneratorString(str: String): String =
+    str
+        .replaceAll("\\", "\\\\")
+        .replaceAll("\"", "\\\"")
+        .replaceAll("\n", "\\n")
+        .replaceAll("\r", "\\r")
+        .replaceAll("\t", "\\t")
+
+/// Parses standalone generators and generates PKL output. Mirrors
+/// parsePolicies: generators are always declared standalone (never nested
+/// inside a stack block), but unlike policies they carry their own `stack`
+/// reference, resolved here the same way parseResources resolves
+/// target/stack references on resources.
+function parseGenerators(generatorsData: List<Map<String, Any>>, stackLabelMap: Map<String, String>): String =
+    let (generatorsString = generatorsData.map((generatorData) ->
+        let (generatorType = generatorData["Type"] as String)
+        let (label = generatorData["Label"] as String)
+        let (camelCaseLabel = toCamelCase(label))
+        let (stackLabel = generatorData.getOrNull("Stack") as String?)
+        let (stackLine = if (stackLabel != null)
+            "\n        stack = \(stackLabelMap.getOrNull(stackLabel) ?? toCamelCase(stackLabel)).res"
+        else
+            ""
+        )
+        let (rotationEverySeconds = generatorData.getOrNull("RotationEverySeconds") as Number?)
+        let (rotationLine = if (rotationEverySeconds != null)
+            "\n        rotation = new formae.RotationSpec {\n          every = \(rotationEverySeconds.toInt()).s\n        }"
+        else
+            ""
+        )
+        if (generatorType == "password")
+            let (length = generatorData["Length"] as Number)
+            let (uppercase = generatorData["Uppercase"] as Boolean)
+            let (lowercase = generatorData["Lowercase"] as Boolean)
+            let (digits = generatorData["Digits"] as Boolean)
+            let (symbols = generatorData["Symbols"] as Boolean)
+            let (excludeCharacters = generatorData.getOrNull("ExcludeCharacters") as String? ?? "")
+            let (requireEachIncludedType = generatorData.getOrNull("RequireEachIncludedType") as Boolean? ?? true)
+            """
+
+      local \(camelCaseLabel) = new formae.PasswordGenerator {
+        label = "\(label)"\(stackLine)\(rotationLine)
+        length = \(length)
+        uppercase = \(uppercase)
+        lowercase = \(lowercase)
+        digits = \(digits)
+        symbols = \(symbols)
+        excludeCharacters = "\(escapeGeneratorString(excludeCharacters))"
+        requireEachIncludedType = \(requireEachIncludedType)
+      }
+      \(camelCaseLabel)
+      """
+        else if (generatorType == "keypair")
+            let (bits = generatorData["Bits"] as Number)
+            """
+
+      local \(camelCaseLabel) = new formae.KeyPairGenerator {
+        label = "\(label)"\(stackLine)\(rotationLine)
+        bits = \(bits.toInt())
+      }
+      \(camelCaseLabel)
+      """
+        else
+            // Unknown generator type - skip with comment
+            """
+
+      // Skipped unknown generator type: \(generatorType) (label: \(label))
+      """
+    ))
+    generatorsString.join("\n")
 
 function parseTargets(targetsData: List<Map<String, Any>>): String =
     let (targetsString = targetsData.map((targetData) ->
@@ -241,20 +390,36 @@ function generateFormaFile(parsed: json.Value): String =
     let (pklMaps = parsedList.map((resource) ->
         let (resourceType = resource.Type)
         let (properties = appendProperties(resource))
-        gen.genPklToMap(gen.applyResource(typeMap[resourceType].clazz, properties).toDynamic()).put("target", resource.Target).put("stack", resource.Stack)
+        // Identifies which resource is being rendered, for use in error messages.
+        let (resourceContext = "Cannot render resource \"\(resource.Label)\" in stack \"\(resource.Stack)\" of type \"\(resourceType)\"")
+        gen.genPklToMap(gen.applyResource(typeMap[resourceType].clazz, properties, resourceContext).toDynamic()).put("target", resource.Target).put("stack", resource.Stack)
     ))
 
     // Phase 2: Collect all imports for collision-aware alias computation
     let (resourceImports = parsedList.map((resource) -> typeMap[resource.Type].moduleName).distinct)
-    // Get unique namespaces from resource types and add base module imports for Tag support (e.g., @azure/azure.pkl)
+    // Get unique namespaces from resource types and add base module imports for Tag support (e.g., @azure/azure.pkl).
+    // Skip synthesized base imports whose file doesn't actually exist in
+    // the resolved packages graph — packages such as plugin-k8s ship the
+    // root file under a different basename (target.pkl) and don't expose
+    // `@<pkg>/<pkg>.pkl`. Without this filter the bogus entry triggers a
+    // basename collision against legitimate per-version imports, forcing
+    // `modulePathToAlias` to disambiguate (`k8s` → `k8s_v1_34`) while the
+    // body renderer in gen.pkl still emits the bare basename — they
+    // diverge and the generated forma fails to evaluate.
     let (namespaceBaseImports = parsedList.map((resource) ->
         let (resourceImport = typeMap[resource.Type].moduleName)
         let (packageName = resourceImport.split("/").first.replaceFirst("@", ""))
         "@" + packageName + "/" + packageName + ".pkl"
-    ).distinct)
+    ).distinct.filter((p) -> importExists(p)))
     // Combine and deduplicate - for flat package structures, resourceImport and namespaceImport may be the same
     let (imports = (resourceImports + namespaceBaseImports).distinct)
-    let (dependencyImports = pklMaps.flatMap((pklMap) -> gen.generateImportStatements(pklMap)).distinct.filter((e) -> !imports.contains(e)))
+    // `@formae/formae.pkl` is always imported by headerImports() (binding the
+    // name `formae`), so it must never re-appear as an aliased dependency
+    // import — modulePathToAlias would alias it back to `formae`, producing a
+    // duplicate `formae` member. It reaches generateImportStatements as the
+    // __import_statement__ of any value rendered through the formae fluent API
+    // (e.g. an opaque `formae.value("...").opaque.hashed` secret).
+    let (dependencyImports = pklMaps.flatMap((pklMap) -> gen.generateImportStatements(pklMap)).distinct.filter((e) -> !imports.contains(e) && e != "@formae/formae.pkl"))
     let (allImports = (imports + dependencyImports).distinct)
 
     // Phase 3: Render resources with collision-aware aliases
@@ -280,7 +445,9 @@ function generateFormaFile(parsed: json.Value): String =
     // Extract stack data from the parsed JSON, falling back to resource stack labels if Stacks is not present
     let (stacksFromJson = parsed.Stacks.toList().map((stack) -> Map(
             "label", stack.Label,
-            "description", stack.Description,
+            // Description is optional and omitted from JSON when unset, so read it
+            // safely — a missing property must not error.
+            "description", stack.getPropertyOrNull("Description"),
             "policies", stack.getPropertyOrNull("Policies")?.toList() ?? List()
             )
         )
@@ -292,7 +459,30 @@ function generateFormaFile(parsed: json.Value): String =
             "Type", policy.Type,
             "Label", policy.Label,
             "TTLSeconds", policy.getPropertyOrNull("TTLSeconds"),
+            "ExpiresAt", policy.getPropertyOrNull("ExpiresAt"),
             "OnDependents", policy.getPropertyOrNull("OnDependents")
+            )
+        )
+    else
+        List()
+    )
+
+    // Extract standalone generators from the parsed JSON
+    let (generatorsFromJson = if (parsed.getPropertyOrNull("Generators") != null)
+        parsed.Generators.toList().map((generator) -> Map(
+            "Type", generator.Type,
+            "Label", generator.Label,
+            "Stack", generator.getPropertyOrNull("Stack"),
+            "RotationEverySeconds", generator.getPropertyOrNull("Rotation")
+                ?.getPropertyOrNull("EverySeconds"),
+            "Length", generator.getPropertyOrNull("Length"),
+            "Uppercase", generator.getPropertyOrNull("Uppercase"),
+            "Lowercase", generator.getPropertyOrNull("Lowercase"),
+            "Digits", generator.getPropertyOrNull("Digits"),
+            "Symbols", generator.getPropertyOrNull("Symbols"),
+            "ExcludeCharacters", generator.getPropertyOrNull("ExcludeCharacters"),
+            "RequireEachIncludedType", generator.getPropertyOrNull("RequireEachIncludedType"),
+            "Bits", generator.getPropertyOrNull("Bits")
             )
         )
     else
@@ -337,6 +527,15 @@ function generateFormaFile(parsed: json.Value): String =
         ""
     )
 
+    // Generate generators section (only if there are generators). Placed
+    // after stacks (it emits `stack = <camelCase>.res` references) and
+    // before resources.
+    let (generatorsSection = if (generatorsFromJson.length > 0)
+        parseGenerators(generatorsFromJson, stackLabelMap) + "\n"
+    else
+        ""
+    )
+
     """
     \(headerImports())
 
@@ -345,7 +544,7 @@ function generateFormaFile(parsed: json.Value): String =
 
     forma {\(policiesSection)
         \(parseStacks(stacksFromJson, policyLabelMap))
-
+        \(generatorsSection)
         \(parseTargets(targetsFromJson))
 
         \(parseResources(resources, targetLabelMap, stackLabelMap))

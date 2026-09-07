@@ -1,0 +1,1 @@
+[{"Label":"global-ttl","Type":"ttl","Config":{"TTLSeconds":86400,"Type":"ttl"},"AttachedStacks":["prod","staging"]},{"Label":"global-recon","Type":"auto-reconcile","Config":{"IntervalSeconds":3600,"Type":"auto-reconcile"},"AttachedStacks":["staging"]},{"Label":"standalone-policy","Type":"ttl","Config":{"TTLSeconds":86400,"Type":"ttl"}}]

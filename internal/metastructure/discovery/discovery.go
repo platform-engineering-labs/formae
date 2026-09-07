@@ -6,6 +6,7 @@ package discovery
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -30,6 +31,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
@@ -74,9 +76,7 @@ func NewDiscovery() gen.ProcessBehavior {
 
 // Messages processed by Discovery
 
-type Discover struct {
-	Once bool
-}
+type Discover struct{}
 
 type ResumeScanning struct{}
 
@@ -87,13 +87,31 @@ const (
 	// InitialDelay is the delay before the first discovery run after startup
 	// to allow the plugins to register.
 	InitialDelay = 10 * time.Second
+
+	// discoveryTickName is the GenericTimeout name used for the periodic
+	// re-arm. Setting a new timer with this name auto-cancels any prior one,
+	// so exactly one periodic tick is in flight at any time.
+	discoveryTickName = gen.Atom("discovery-tick")
 )
+
+// rescheduleAction returns the action that schedules the next periodic
+// discovery. Auto-cancel-on-replace semantics of the named GenericTimeout
+// guarantee a single periodic chain.
+func rescheduleAction(data DiscoveryData) []statemachine.Action {
+	if !data.discoveryCfg.Enabled {
+		return nil
+	}
+	return []statemachine.Action{statemachine.GenericTimeout{
+		Name:     discoveryTickName,
+		Duration: data.discoveryCfg.Interval,
+		Message:  Discover{},
+	}}
+}
 
 type DiscoveryData struct {
 	ds                            datastore.Datastore
 	serverCfg                     *pkgmodel.ServerConfig
 	discoveryCfg                  *pkgmodel.DiscoveryConfig
-	isScheduledDiscovery          bool
 	targets                       map[string]pkgmodel.Target
 	resourceHierarchy             map[string]*hierarchyNode
 	resourceDescriptors           map[string]plugin.ResourceDescriptor
@@ -119,11 +137,31 @@ type DiscoveryData struct {
 	hasPendingResumeScan bool
 	// Cached plugin info per namespace, refreshed at start of each discovery cycle
 	pluginInfoCache map[string]*messages.PluginInfoResponse
+	// resolvedTargets tracks which targets have had their opaque $ref config
+	// successfully resolved this cycle. Keyed by target label.
+	resolvedTargets map[string]bool
+	// failedTargets tracks which targets failed opaque $ref resolution this
+	// cycle. Such targets are skipped for all remaining scan operations.
+	failedTargets map[string]bool
 }
 
 func (d *DiscoveryData) SetTargets(targets []*pkgmodel.Target) {
 	d.targets = make(map[string]pkgmodel.Target, len(targets))
+	if d.resolvedTargets == nil {
+		d.resolvedTargets = make(map[string]bool)
+	}
+	if d.failedTargets == nil {
+		d.failedTargets = make(map[string]bool)
+	}
 	for _, target := range targets {
+		// A reaped (or reap-pending) target is being — or has been —
+		// tombstoned by the reaper. Never sweep it: its resources are already
+		// invisible to every live-resource query, and scanning it would race
+		// the reap transaction and/or re-discover resources the target no
+		// longer answers for.
+		if target.Health != nil && target.Health.State == pkgmodel.TargetHealthStateReaped {
+			continue
+		}
 		d.targets[target.Label] = *target
 	}
 }
@@ -178,6 +216,8 @@ func (d *Discovery) Init(args ...any) (statemachine.StateMachineSpec[DiscoveryDa
 		pluginInfoCache:               make(map[string]*messages.PluginInfoResponse),
 		typesWithChildrenQueued:       make(map[string]struct{}),
 		nativeIDsByCommand:            make(map[string][]string),
+		resolvedTargets:               make(map[string]bool),
+		failedTargets:                 make(map[string]bool),
 	}
 
 	spec := statemachine.NewStateMachineSpec(StateIdle,
@@ -211,12 +251,13 @@ func (d *Discovery) Init(args ...any) (statemachine.StateMachineSpec[DiscoveryDa
 func onStateChange(oldState gen.Atom, newState gen.Atom, data DiscoveryData, proc gen.Process) (gen.Atom, DiscoveryData, error) {
 	if oldState == StateDiscovering && newState == StateIdle {
 		proc.Log().Debug("Discovery finished (duration=%s). The following resources have been discovered:\n%s", time.Since(data.timeStarted), renderSummary(data.summary))
-		if data.isScheduledDiscovery {
-			_, err := proc.SendAfter(proc.PID(), Discover{}, data.discoveryCfg.Interval)
-			if err != nil {
-				proc.Log().Error("Failed to schedule next discovery run: %v", err)
-				return newState, data, gen.TerminateReasonPanic
+		if len(data.failedTargets) > 0 {
+			labels := make([]string, 0, len(data.failedTargets))
+			for label := range data.failedTargets {
+				labels = append(labels, label)
 			}
+			slices.Sort(labels)
+			proc.Log().Warning("discovery: %d target(s) skipped this cycle due to config resolution failure: %v", len(data.failedTargets), labels)
 		}
 	}
 	return newState, data, nil
@@ -256,10 +297,10 @@ func resumeDiscovery(from gen.PID, state gen.Atom, data DiscoveryData, message m
 
 // getPluginInfo fetches plugin info from PluginCoordinator
 func getPluginInfo(proc gen.Process, namespace string) (*messages.PluginInfoResponse, error) {
-	result, err := proc.Call(
+	result, err := messages.UnwrapCall(proc.Call(
 		gen.ProcessID{Name: actornames.PluginCoordinator, Node: proc.Node().Name()},
 		messages.GetPluginInfo{Namespace: namespace},
-	)
+	))
 	if err != nil {
 		return nil, fmt.Errorf("failed to get plugin info for %s: %w", namespace, err)
 	}
@@ -283,13 +324,15 @@ func discover(from gen.PID, state gen.Atom, data DiscoveryData, message Discover
 		return state, data, nil, nil
 	}
 
-	data.isScheduledDiscovery = !message.Once
 	data.timeStarted = time.Now()
 	data.summary = make(map[string]int)
 
 	// Clear per-cycle state at start of each discovery cycle
 	data.pluginInfoCache = make(map[string]*messages.PluginInfoResponse)
 	data.typesWithChildrenQueued = make(map[string]struct{})
+	data.recentlyDiscoveredResourceIDs = make(map[string]struct{})
+	data.resolvedTargets = make(map[string]bool)
+	data.failedTargets = make(map[string]bool)
 	proc.Log().Debug("Starting resource discovery timestamp=%v", data.timeStarted)
 
 	allTargets, err := data.ds.LoadDiscoverableTargets()
@@ -302,17 +345,7 @@ func discover(from gen.PID, state gen.Atom, data DiscoveryData, message Discover
 	// If there are no discoverable targets, complete discovery immediately
 	if len(data.targets) == 0 {
 		proc.Log().Debug("No discoverable targets found, completing discovery")
-
-		if data.isScheduledDiscovery {
-			_, err := proc.SendAfter(proc.PID(), Discover{}, data.discoveryCfg.Interval)
-			if err != nil {
-				proc.Log().Error("Failed to schedule next discovery run: %v", err)
-				return StateIdle, data, nil, gen.TerminateReasonPanic
-			}
-			proc.Log().Debug("Scheduled next discovery run interval=%s", data.discoveryCfg.Interval)
-		}
-
-		return StateIdle, data, nil, nil
+		return StateIdle, data, rescheduleAction(data), nil
 	}
 
 	for _, target := range data.targets {
@@ -362,15 +395,7 @@ func discover(from gen.PID, state gen.Atom, data DiscoveryData, message Discover
 	// to allow future Discover messages to be processed
 	if !data.HasOutstandingWork() {
 		proc.Log().Debug("No targets could be processed (plugins not available), completing discovery")
-		if data.isScheduledDiscovery {
-			_, err := proc.SendAfter(proc.PID(), Discover{}, data.discoveryCfg.Interval)
-			if err != nil {
-				proc.Log().Error("Failed to schedule next discovery run: %v", err)
-				return StateIdle, data, nil, gen.TerminateReasonPanic
-			}
-			proc.Log().Debug("Scheduled next discovery run interval=%s", data.discoveryCfg.Interval)
-		}
-		return StateIdle, data, nil, nil
+		return StateIdle, data, rescheduleAction(data), nil
 	}
 
 	// Send ResumeScanning only after confirming work was queued and we're transitioning to StateDiscovering.
@@ -383,6 +408,48 @@ func discover(from gen.PID, state gen.Atom, data DiscoveryData, message Discover
 	}
 
 	return StateDiscovering, data, nil, nil
+}
+
+// ensureTargetResolved guarantees that data.targets[label].Config holds the
+// ephemeral resolved form of the target's config (opaque $ref replaced by live
+// plaintext) before any List call reaches the plugin. Resolution is memoized
+// within the current discovery cycle via data.resolvedTargets / data.failedTargets
+// so each target is resolved at most once per cycle regardless of how many
+// resource types it scans.
+//
+// Returns the updated DiscoveryData and true on success; false when the target
+// failed resolution (it should be skipped for the remainder of this cycle).
+func ensureTargetResolved(data DiscoveryData, label string, proc gen.Process) (DiscoveryData, bool) {
+	if data.resolvedTargets == nil {
+		data.resolvedTargets = make(map[string]bool)
+	}
+	if data.failedTargets == nil {
+		data.failedTargets = make(map[string]bool)
+	}
+
+	if data.resolvedTargets[label] {
+		return data, true
+	}
+	if data.failedTargets[label] {
+		return data, false
+	}
+
+	resolved, err := resolveTargetConfigForList(proc, data.targets[label])
+	if err != nil {
+		// Fail closed: a target whose credential source is missing or rotated is
+		// skipped for the remainder of this cycle so its ListResources call is
+		// never issued with a stale or unresolved credential. The target recovers
+		// automatically on the next discovery cycle once the source resolves.
+		proc.Log().Error("discovery: skipping target %s: could not resolve its config: %v", label, err)
+		data.failedTargets[label] = true
+		return data, false
+	}
+
+	t := data.targets[label]
+	t.Config = resolved
+	data.targets[label] = t
+	data.resolvedTargets[label] = true
+	return data, true
 }
 
 func resumeScanning(from gen.PID, state gen.Atom, data DiscoveryData, message ResumeScanning, proc gen.Process) (gen.Atom, DiscoveryData, []statemachine.Action, error) {
@@ -413,12 +480,28 @@ func resumeScanning(from gen.PID, state gen.Atom, data DiscoveryData, message Re
 
 		for range n {
 			nextOp := data.queuedListOperations[namespace][0]
-			err := scanTargetForResourceType(data.targets[nextOp.TargetLabel], nextOp, data, proc)
-			if err != nil {
-				proc.Log().Error("Failed to scan target for resource type %s: %v", nextOp.ResourceType, err)
-				return state, data, nil, gen.TerminateReasonPanic
-			}
 			data.queuedListOperations[namespace] = data.queuedListOperations[namespace][1:]
+			var ok bool
+			data, ok = ensureTargetResolved(data, nextOp.TargetLabel, proc)
+			if !ok {
+				continue
+			}
+			if err := scanTargetForResourceType(data.targets[nextOp.TargetLabel], nextOp, data, proc); err != nil {
+				// A failed scan of a single resource type must not crash the
+				// Discovery actor. Skip the resource type for this cycle and
+				// keep scanning the rest; it is re-queued on the next cycle. A
+				// spawn timeout is transient back-pressure (the plugin node was
+				// momentarily unresponsive), so it is logged at WRN; anything
+				// else is unexpected and logged at ERR. Either way the actor
+				// survives — mirroring ResourceUpdater and ResolveCache, which
+				// already treat a plugin spawn/operation failure as terminal for
+				// the unit of work, never fatal for the actor.
+				if errors.Is(err, gen.ErrTimeout) {
+					proc.Log().Warning("Skipping resource type %s for this discovery cycle: transient spawn back-pressure: %v", nextOp.ResourceType, err)
+				} else {
+					proc.Log().Error("Skipping resource type %s for this discovery cycle: %v", nextOp.ResourceType, err)
+				}
+			}
 		}
 	}
 	for namespace, done := range finished {
@@ -433,6 +516,15 @@ func resumeScanning(from gen.PID, state gen.Atom, data DiscoveryData, message Re
 			return state, data, nil, nil
 		}
 		delete(data.queuedListOperations, namespace)
+	}
+
+	// If every scanned operation this cycle was skipped (e.g. all spawns timed
+	// out), no Listing callback will arrive to drive completion. Finish the
+	// cycle here so the Discovering->Idle transition fires and the next
+	// scheduled discovery run is queued; otherwise Discovery would hang in
+	// StateDiscovering forever.
+	if !data.HasOutstandingWork() {
+		return StateIdle, data, rescheduleAction(data), nil
 	}
 
 	return StateDiscovering, data, nil, nil
@@ -454,9 +546,31 @@ func scanTargetForResourceType(target pkgmodel.Target, op ListOperation, data Di
 	uri := discoveryURI(op.ResourceType)
 	operation := resource.OperationList
 	operationID := uuid.New().String()
+	listParameters := util.StringToMap[plugin.ListParam](op.ListParams)
+
+	// Strip resolvable metadata ($ref/$value wrappers) from target config before
+	// sending to plugin — plugins expect plain JSON values, not resolvable objects.
+	pluginConfig := target.Config
+	if cleanConfig, err := resolver.ConvertToPluginFormat(target.Config); err == nil {
+		pluginConfig = cleanConfig
+	}
+
+	// A generator reference in the target's config names a credential that was
+	// never drawn; the envelope is never that credential. Sending it would hand
+	// the plugin a JSON object where a token belongs. Conversion leaves such an
+	// envelope untouched, so this checks the document either branch above
+	// settled on. Skip this resource type for the cycle rather than scanning
+	// with a credential formae does not have: a scan that cannot authenticate
+	// returns nothing and would be indistinguishable from an empty account.
+	// This must run before the spawn below — a PluginOperator started for a
+	// scan that never sends ListResources is never reaped.
+	if err := resolver.GuardNoUnresolvedGenerators(pluginConfig); err != nil {
+		delete(data.outstandingListOperations, mapKey)
+		return fmt.Errorf("cannot scan %s in target %s: its configuration is bound to a generator whose value has not been drawn: %w", op.ResourceType, target.Label, err)
+	}
 
 	// Spawn PluginOperator via PluginCoordinator
-	spawnResult, err := proc.Call(
+	spawnResult, err := messages.UnwrapCall(proc.Call(
 		gen.ProcessID{Name: actornames.PluginCoordinator, Node: proc.Node().Name()},
 		messages.SpawnPluginOperator{
 			Namespace:   target.Namespace,
@@ -464,12 +578,11 @@ func scanTargetForResourceType(target pkgmodel.Target, op ListOperation, data Di
 			Operation:   string(operation),
 			OperationID: operationID,
 			RequestedBy: proc.PID(),
-		})
+		}))
 	if err != nil {
 		delete(data.outstandingListOperations, mapKey)
 		return fmt.Errorf("failed to spawn PluginOperator for %s: %w", uri, err)
 	}
-	listParameters := util.StringToMap[plugin.ListParam](op.ListParams)
 	spawnRes, ok := spawnResult.(messages.SpawnPluginOperatorResult)
 	if !ok {
 		delete(data.outstandingListOperations, mapKey)
@@ -478,13 +591,6 @@ func scanTargetForResourceType(target pkgmodel.Target, op ListOperation, data Di
 	if spawnRes.Error != "" {
 		delete(data.outstandingListOperations, mapKey)
 		return fmt.Errorf("failed to spawn PluginOperator: %s", spawnRes.Error)
-	}
-
-	// Strip resolvable metadata ($ref/$value wrappers) from target config before
-	// sending to plugin — plugins expect plain JSON values, not resolvable objects.
-	pluginConfig := target.Config
-	if cleanConfig, err := resolver.ConvertToPluginFormat(target.Config); err == nil {
-		pluginConfig = cleanConfig
 	}
 
 	err = proc.Send(spawnRes.PID, plugin.ListResources{
@@ -515,7 +621,7 @@ func processListing(from gen.PID, state gen.Atom, data DiscoveryData, message pl
 	if message.Error != "" {
 		proc.Log().Error("Failed to list resources for %s in target %s: %s", message.ResourceType, message.TargetLabel, message.Error)
 		if !data.HasOutstandingWork() {
-			return StateIdle, data, nil, nil
+			return StateIdle, data, rescheduleAction(data), nil
 		}
 		return state, data, nil, nil
 	}
@@ -541,12 +647,12 @@ func processListing(from gen.PID, state gen.Atom, data DiscoveryData, message pl
 		if err := discoverChildrenOnce(op, data, proc); err != nil {
 			proc.Log().Error("Failed to discover children for %s in target %s: %v", message.ResourceType, message.TargetLabel, err)
 			if !data.HasOutstandingWork() {
-				return StateIdle, data, nil, nil
+				return StateIdle, data, rescheduleAction(data), nil
 			}
 			return state, data, nil, nil
 		}
 		if !data.HasOutstandingWork() {
-			return StateIdle, data, nil, nil
+			return StateIdle, data, rescheduleAction(data), nil
 		}
 		return state, data, nil, nil
 	}
@@ -556,7 +662,7 @@ func processListing(from gen.PID, state gen.Atom, data DiscoveryData, message pl
 	if !ok {
 		proc.Log().Error("Target not found for label %s", message.TargetLabel)
 		if !data.HasOutstandingWork() {
-			return StateIdle, data, nil, nil
+			return StateIdle, data, rescheduleAction(data), nil
 		}
 		return state, data, nil, nil
 	}
@@ -566,7 +672,7 @@ func processListing(from gen.PID, state gen.Atom, data DiscoveryData, message pl
 	if err != nil {
 		proc.Log().Error("Failed to synchronize resources for %s in target %s: %v", message.ResourceType, message.TargetLabel, err)
 		if !data.HasOutstandingWork() {
-			return StateIdle, data, nil, nil
+			return StateIdle, data, rescheduleAction(data), nil
 		}
 	}
 
@@ -610,17 +716,6 @@ func getMatchFiltersFromCache(data *DiscoveryData, namespace string) []pkgmodel.
 	return pluginInfo.MatchFilters
 }
 
-// findMatchFiltersForType finds all MatchFilters that apply to the given resource type
-func findMatchFiltersForType(filters []pkgmodel.MatchFilter, resourceType string) []pkgmodel.MatchFilter {
-	var result []pkgmodel.MatchFilter
-	for i := range filters {
-		if slices.Contains(filters[i].ResourceTypes, resourceType) {
-			result = append(result, filters[i])
-		}
-	}
-	return result
-}
-
 func synchronizeResources(op ListOperation, namespace string, target pkgmodel.Target, resources []plugin.ListedResource, data DiscoveryData, proc gen.Process) (string, error) {
 	// Get schema from cache instead of calling plugin directly
 	schema, err := getSchemaFromCache(&data, namespace, op.ResourceType)
@@ -656,7 +751,7 @@ func synchronizeResources(op ListOperation, namespace string, target pkgmodel.Ta
 		return "", fmt.Errorf("failed to load targets: %w", err)
 	}
 
-	resourceUpdates, err := resource_update.GenerateResourceUpdates(&forma, pkgmodel.CommandSync, formaCommandConfig.Mode, resource_update.FormaCommandSourceDiscovery, existingTargets, data.ds, nil, nil)
+	resourceUpdates, err := resource_update.GenerateResourceUpdates(&forma, pkgmodel.CommandSync, formaCommandConfig.Mode, resource_update.FormaCommandSourceDiscovery, existingTargets, data.ds, nil, nil, false)
 	if err != nil {
 		proc.Log().Error("failed to generate resource updates: %v", err)
 		return "", fmt.Errorf("failed to generate resource updates: %w", err)
@@ -665,7 +760,7 @@ func synchronizeResources(op ListOperation, namespace string, target pkgmodel.Ta
 	// Attach MatchFilters from cache to resource updates for declarative filtering
 	matchFilters := getMatchFiltersFromCache(&data, namespace)
 	for i := range resourceUpdates {
-		filters := findMatchFiltersForType(matchFilters, resourceUpdates[i].DesiredState.Type)
+		filters := pkgmodel.FiltersForType(matchFilters, resourceUpdates[i].DesiredState.Type)
 		if len(filters) > 0 {
 			resourceUpdates[i].MatchFilters = filters
 		}
@@ -679,13 +774,17 @@ func synchronizeResources(op ListOperation, namespace string, target pkgmodel.Ta
 		nil, // No target updates on discovery
 		nil, // No stack updates on discovery
 		nil, // No policy updates on discovery
+		nil, // No generator updates on discovery
 		"discovery",
+		"",
+		"",
+		forma_command.SourceDiscovery,
 	)
 
 	// store the forma command
-	_, err = proc.Call(actornames.FormaCommandPersister, forma_persister.StoreNewFormaCommand{
+	_, err = messages.UnwrapCall(proc.Call(actornames.FormaCommandPersister, forma_persister.StoreNewFormaCommand{
 		Command: *syncCommand,
-	})
+	}))
 	if err != nil {
 		proc.Log().Error("failed to store sync command: %v", err)
 		return "", err
@@ -693,7 +792,23 @@ func synchronizeResources(op ListOperation, namespace string, target pkgmodel.Ta
 
 	// Pass CommandSync so the DAG skips buildOperationRelationships — discovery
 	// sync reads are independent and one failed read must not cascade to others.
-	cs, _ := changeset.NewChangeset(syncCommand.ResourceUpdates, nil, syncCommand.ID, pkgmodel.CommandSync)
+	synth, err := target_update.SynthesizeResolveTargetUpdates(
+		resource_update.ReferencedTargetLabels(syncCommand.ResourceUpdates),
+		resource_update.SourceTargetByKsuid(syncCommand.ResourceUpdates),
+		nil, data.ds)
+	if err != nil {
+		slog.Error("failed to build changeset for discovery sync command", "commandID", syncCommand.ID, "error", err)
+		finalizeFailedSyncCommand(syncCommand, proc)
+		return "", fmt.Errorf("failed to build changeset: %w", err)
+	}
+	// No generator draws: a sync command only reads the inventory, so no
+	// destination in it is waiting for a generated value.
+	cs, err := changeset.NewChangeset(syncCommand.ResourceUpdates, synth, nil, syncCommand.ID, pkgmodel.CommandSync, syncCommand.Config.Mode)
+	if err != nil {
+		slog.Error("failed to build changeset for discovery sync command", "commandID", syncCommand.ID, "error", err)
+		finalizeFailedSyncCommand(syncCommand, proc)
+		return "", fmt.Errorf("failed to build changeset: %w", err)
+	}
 
 	proc.Log().Debug("Ensuring ChangesetExecutor for sync command commandID=%s", syncCommand.ID)
 	_, err = proc.Call(
@@ -805,7 +920,7 @@ func syncCompleted(from gen.PID, state gen.Atom, data DiscoveryData, message cha
 		proc.Log().Error("Discovery failed to synchronize discovered resources resourceType=%s listParams=%s commandID=%s", op.ResourceType, op.ListParams, message.CommandID)
 		delete(data.nativeIDsByCommand, message.CommandID)
 		if !data.HasOutstandingWork() {
-			return StateIdle, data, nil, nil
+			return StateIdle, data, rescheduleAction(data), nil
 		}
 	}
 
@@ -823,7 +938,7 @@ func syncCompleted(from gen.PID, state gen.Atom, data DiscoveryData, message cha
 		if err != nil {
 			proc.Log().Error("Failed to load parent resources for child discovery type=%s target=%s: %v", op.ResourceType, op.TargetLabel, err)
 			if !data.HasOutstandingWork() {
-				return StateIdle, data, nil, nil
+				return StateIdle, data, rescheduleAction(data), nil
 			}
 			return state, data, nil, nil
 		}
@@ -843,13 +958,13 @@ func syncCompleted(from gen.PID, state gen.Atom, data DiscoveryData, message cha
 		if err := discoverChildren(syncedParents, op, data, proc); err != nil {
 			proc.Log().Error("Failed to discover children for %s in target %s: %v", op.ResourceType, op.TargetLabel, err)
 			if !data.HasOutstandingWork() {
-				return StateIdle, data, nil, nil
+				return StateIdle, data, rescheduleAction(data), nil
 			}
 			return state, data, nil, nil
 		}
 	}
 	if !data.HasOutstandingWork() {
-		return StateIdle, data, nil, nil
+		return StateIdle, data, rescheduleAction(data), nil
 	}
 
 	return state, data, nil, nil
@@ -1014,4 +1129,31 @@ func injectResolvables(props string, op ListOperation) json.RawMessage {
 	}
 
 	return json.RawMessage(props)
+}
+
+// finalizeFailedSyncCommand marks all resource updates in the command as failed and then
+// finalizes the command itself, preventing persisted commands from being left in a
+// non-terminal pending state when changeset construction fails after storage.
+func finalizeFailedSyncCommand(cmd *forma_command.FormaCommand, proc gen.Process) {
+	refs := make([]forma_persister.ResourceUpdateRef, 0, len(cmd.ResourceUpdates))
+	for _, ru := range cmd.ResourceUpdates {
+		refs = append(refs, forma_persister.ResourceUpdateRef{
+			URI:       ru.URI(),
+			Operation: ru.Operation,
+		})
+	}
+	persister := actornames.FormaCommandPersister
+	if len(refs) > 0 {
+		if _, err := messages.UnwrapCall(proc.Call(persister, forma_persister.MarkResourcesAsFailed{
+			CommandID:          cmd.ID,
+			Resources:          refs,
+			ResourceModifiedTs: time.Now(),
+		})); err != nil {
+			slog.Error("Discovery: failed to mark resources as failed for aborted command", "commandID", cmd.ID, "error", err)
+			return
+		}
+	}
+	if _, err := messages.UnwrapCall(proc.Call(persister, forma_persister.FinalizeIncompleteCommand{CommandID: cmd.ID})); err != nil {
+		slog.Error("Discovery: failed to finalize aborted command", "commandID", cmd.ID, "error", err)
+	}
 }

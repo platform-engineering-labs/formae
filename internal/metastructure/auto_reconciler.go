@@ -19,6 +19,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_persister"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
@@ -266,7 +267,16 @@ type reconcileResult struct {
 // prepareReconcile builds a reconcile FormaCommand and Changeset from the stack's last-reconcile snapshot.
 // It returns nil (with no error) when no drift is detected. The caller is responsible for persisting
 // the command and starting the changeset execution.
-func prepareReconcile(ds datastore.Datastore, stackLabel string, clientID string) (*reconcileResult, error) {
+//
+// source records who initiated the command, which is what decides whether it
+// is part of the user-facing command history: a user asking for a
+// force-reconcile passes forma_command.SourceUser and can then follow the
+// returned command id through `formae command status`, while the scheduled
+// reconcile beat passes forma_command.SourceAutoReconciler and stays out of
+// the way. It is distinct from the resource updates' own source below, which
+// records the mechanism that produced them (an auto-reconcile) either way,
+// and which decides what counts as the stack's reconcile baseline.
+func prepareReconcile(ds datastore.Datastore, stackLabel string, clientID string, subject string, subjectName string, source forma_command.Source) (*reconcileResult, error) {
 	// Get resources at last reconcile as full Resource objects
 	snapshots, err := ds.GetResourcesAtLastReconcile(stackLabel)
 	if err != nil {
@@ -274,7 +284,19 @@ func prepareReconcile(ds datastore.Datastore, stackLabel string, clientID string
 	}
 
 	if len(snapshots) == 0 {
-		return nil, fmt.Errorf("no resources to reconcile")
+		// Empty baseline = nothing to enforce. Two cases produce this:
+		//   1. The user destroyed the stack (latest user-source row per
+		//      ksuid is a delete; outer filter drops it; snapshot empty).
+		//   2. No user-source reconcile-mode command has ever touched
+		//      the stack (the auto-reconcile policy was attached but
+		//      no apply ran yet).
+		// Both cases are no-ops for the auto-reconciler, not errors.
+		// Returning (nil, nil) lets startReconcile fall through its
+		// "no drift, nothing to reconcile" branch and reschedule the
+		// next tick quietly. Otherwise (returning an error) we'd log
+		// a failed reconcile attempt on every beat after a successful
+		// destroy.
+		return nil, nil
 	}
 
 	// Convert snapshots to Resource objects.
@@ -284,27 +306,15 @@ func prepareReconcile(ds datastore.Datastore, stackLabel string, clientID string
 	// record; their KSUID must never be reused.
 	resources := make([]*pkgmodel.Resource, 0, len(snapshots))
 	for _, snapshot := range snapshots {
-		ksuid := snapshot.KSUID
-		if ksuid != "" {
-			uri := pkgmodel.NewFormaeURI(ksuid, "")
-			existing, err := ds.LoadResource(uri)
-			if err != nil || existing == nil {
-				// KSUID was deleted — clear it so assignKSUIDs() resolves a fresh one
-				ksuid = ""
+		var existing *pkgmodel.Resource
+		if snapshot.KSUID != "" {
+			uri := pkgmodel.NewFormaeURI(snapshot.KSUID, "")
+			loaded, err := ds.LoadResource(uri)
+			if err == nil {
+				existing = loaded
 			}
 		}
-		res := &pkgmodel.Resource{
-			Ksuid:      ksuid,
-			Type:       snapshot.Type,
-			Label:      snapshot.Label,
-			Target:     snapshot.Target,
-			Stack:      stackLabel,
-			NativeID:   snapshot.NativeID,
-			Properties: snapshot.Properties,
-			Schema:     snapshot.Schema,
-			Managed:    true,
-		}
-		resources = append(resources, res)
+		resources = append(resources, reconcileResourceFromSnapshot(snapshot, existing, stackLabel))
 	}
 
 	// Convert to Forma
@@ -337,6 +347,7 @@ func prepareReconcile(ds datastore.Datastore, stackLabel string, clientID string
 		existingTargets,
 		ds,
 		nil, nil,
+		false,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate resource updates: %w", err)
@@ -358,11 +369,25 @@ func prepareReconcile(ds datastore.Datastore, stackLabel string, clientID string
 		nil, // No target updates
 		nil, // No stack updates
 		nil, // No policy updates
+		nil, // No generator updates
 		clientID,
+		subject,
+		subjectName,
+		source,
 	)
 
-	// Create changeset
-	cs, err := changeset.NewChangeset(resourceUpdates, nil, reconcileCommand.ID, pkgmodel.CommandApply)
+	// Generate any synthetic Resolve target ops, then build the changeset.
+	synth, err := target_update.SynthesizeResolveTargetUpdates(
+		resource_update.ReferencedTargetLabels(resourceUpdates),
+		resource_update.SourceTargetByKsuid(resourceUpdates),
+		nil, ds)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create changeset: %w", err)
+	}
+	// No generator draws: an auto-reconcile re-asserts persisted desired
+	// state, whose $gen destinations already carry the value that was
+	// drawn for them. Rotating a credential is a user-initiated apply.
+	cs, err := changeset.NewChangeset(resourceUpdates, synth, nil, reconcileCommand.ID, pkgmodel.CommandApply, reconcileCommand.Config.Mode)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create changeset: %w", err)
 	}
@@ -384,7 +409,7 @@ func startReconcile(proc gen.Process, data *AutoReconcilerData, stackLabel strin
 		return "", nil // Not an error - just skip and reschedule
 	}
 
-	result, err := prepareReconcile(data.datastore, stackLabel, "auto-reconciler")
+	result, err := prepareReconcile(data.datastore, stackLabel, "auto-reconciler", "", "", forma_command.SourceAutoReconciler)
 	if err != nil {
 		return "", err
 	}
@@ -396,10 +421,10 @@ func startReconcile(proc gen.Process, data *AutoReconcilerData, stackLabel strin
 	proc.Log().Debug("Generated resource updates for stack=%s, starting reconcile command=%s", stackLabel, result.command.ID)
 
 	// Store the forma command
-	_, err = proc.Call(
+	_, err = messages.UnwrapCall(proc.Call(
 		gen.ProcessID{Name: actornames.FormaCommandPersister, Node: proc.Node().Name()},
 		forma_persister.StoreNewFormaCommand{Command: *result.command},
-	)
+	))
 	if err != nil {
 		return "", fmt.Errorf("failed to store reconcile command: %w", err)
 	}
@@ -423,4 +448,44 @@ func startReconcile(proc gen.Process, data *AutoReconcilerData, stackLabel strin
 	}
 
 	return result.command.ID, nil
+}
+
+// reconcileResourceFromSnapshot converts a last-reconcile snapshot into the
+// resource to embed in a reconcile forma. `existing` is the live row looked
+// up by snapshot.KSUID, or nil if the KSUID has been deleted since the
+// snapshot was taken (its tombstone forbids reuse).
+//
+// A rename (via patch apply) since the last reconcile leaves the
+// snapshot with the OLD label while the live row carries the NEW label.
+// Without the override the synthesized reconcile forma asks the engine to
+// "re-create" the old label, treats the new label as drift, and silently
+// undoes the user's rename. Use the live row's current label and record the
+// snapshot label as `alias` so the resource-update generator pairs the
+// synthesized resource with the renamed inventory row by alias instead of
+// by stale label.
+func reconcileResourceFromSnapshot(snapshot datastore.ResourceSnapshot, existing *pkgmodel.Resource, stackLabel string) *pkgmodel.Resource {
+	ksuid := snapshot.KSUID
+	label := snapshot.Label
+	alias := ""
+	if ksuid != "" {
+		if existing == nil {
+			// KSUID was deleted — clear it so assignKSUIDs() resolves a fresh one.
+			ksuid = ""
+		} else if existing.Label != "" && existing.Label != snapshot.Label {
+			label = existing.Label
+			alias = snapshot.Label
+		}
+	}
+	return &pkgmodel.Resource{
+		Ksuid:      ksuid,
+		Type:       snapshot.Type,
+		Label:      label,
+		Alias:      alias,
+		Target:     snapshot.Target,
+		Stack:      stackLabel,
+		NativeID:   snapshot.NativeID,
+		Properties: snapshot.Properties,
+		Schema:     snapshot.Schema,
+		Managed:    true,
+	}
 }

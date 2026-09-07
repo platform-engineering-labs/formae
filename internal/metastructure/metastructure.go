@@ -5,10 +5,12 @@
 package metastructure
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -23,19 +25,25 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/auth"
 	"github.com/platform-engineering-labs/formae/internal/constants"
 	"github.com/platform-engineering-labs/formae/internal/datastore"
+	"github.com/platform-engineering-labs/formae/internal/datastore/migration"
 	"github.com/platform-engineering-labs/formae/internal/logging"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/changeset"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/discovery"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/drift"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_persister"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/generator_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/policy_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/querier"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/reaping"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/stack_update"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/target_reaper"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/transformations"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
@@ -47,22 +55,27 @@ const (
 )
 
 type MetastructureAPI interface {
-	ApplyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error)
-	DestroyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error)
-	DestroyByQuery(query string, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error)
-	CancelCommand(commandID string, clientID string) (*changeset.CancelResponse, error)
-	CancelCommandsByQuery(query string, clientID string) (*apimodel.CancelCommandResponse, error)
-	ListFormaCommandStatus(query string, clientID string, n int) (*apimodel.ListCommandStatusResponse, error)
+	ApplyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string, subject string, subjectName string) (*apimodel.SubmitCommandResponse, error)
+	DestroyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string, subject string, subjectName string) (*apimodel.SubmitCommandResponse, error)
+	DestroyByQuery(query string, config *config.FormaCommandConfig, clientID string, subject string, subjectName string) (*apimodel.SubmitCommandResponse, error)
+	CancelCommand(commandID string, force bool, clientID string) (*changeset.CancelResponse, error)
+	CancelCommandsByQuery(query string, force bool, caller querier.Caller) (*apimodel.CancelCommandResponse, error)
+	ListFormaCommandStatus(query string, caller querier.Caller, n int, scope apimodel.CommandScope) (*apimodel.ListCommandStatusResponse, error)
 	ExtractResources(query string) (*pkgmodel.Forma, error)
+	ListResourceSummaries(query string) ([]pkgmodel.ResourceSummary, error)
+	ExtractResourceByKsuid(ksuid string) (*pkgmodel.Resource, error)
 	ExtractTargets(query string) ([]*pkgmodel.Target, error)
 	ExtractStacks() ([]*pkgmodel.Stack, error)
 	ExtractPolicies() ([]apimodel.PolicyInventoryItem, error)
+	ExtractGenerators() ([]apimodel.GeneratorInventoryItem, error)
 	ForceSync() error
 	ForceDiscovery() error
-	ForceAutoReconcile(stackLabel string) (*apimodel.ForceReconcileResponse, error)
+	ForceAutoReconcile(stackLabel string, subject string, subjectName string) (*apimodel.ForceReconcileResponse, error)
 	ForceCheckTTL() (*apimodel.ForceCheckTTLResponse, error)
+	ForceReap() error
 	ListDrift(stack string) (*apimodel.ModifiedStack, error)
 	Stats() (*apimodel.Stats, error)
+	RegisteredPlugins() ([]messages.RegisteredPluginInfo, error)
 }
 
 type Metastructure struct {
@@ -82,13 +95,20 @@ type Metastructure struct {
 	// the process) and the API server (which uses it for request validation).
 	AuthPluginHandle *auth.AuthPluginHandle
 
+	// OnApplicationStopped is invoked when the orchestrator application stops
+	// for any reason other than a deliberate shutdown. At that point every
+	// actor is gone while the process and its HTTP surface keep running, so
+	// the owner must treat the process as failed and exit; the restart is what
+	// re-runs incomplete commands. Set by the agent before Start().
+	OnApplicationStopped func(reason error)
+
 	// commandMu serializes Apply/Destroy/ForceAutoReconcile to prevent TOCTOU
 	// races between the conflict check and command storage. This will be
 	// removed once the Metastructure itself becomes an actor.
 	commandMu sync.Mutex
 }
 
-func NewMetastructure(ctx context.Context, cfg *pkgmodel.Config, externalResourcePlugins []plugin.ResourcePluginInfo, agentID string) (*Metastructure, error) {
+func NewMetastructure(ctx context.Context, cfg *pkgmodel.Config, externalResourcePlugins []plugin.ResourcePluginInfo, oidcCredentialPlugins []plugin.OidcCredentialPluginInfo, agentID string) (*Metastructure, error) {
 	datastoreType := cfg.Agent.Datastore.DatastoreType
 	if datastoreType == "" {
 		datastoreType = "sqlite"
@@ -99,15 +119,17 @@ func NewMetastructure(ctx context.Context, cfg *pkgmodel.Config, externalResourc
 		return nil, err
 	}
 
-	return NewMetastructureWithDataStoreAndContext(ctx, cfg, externalResourcePlugins, ds, agentID)
+	return NewMetastructureWithDataStoreAndContext(ctx, cfg, externalResourcePlugins, oidcCredentialPlugins, ds, agentID)
 }
 
-func NewMetastructureWithDataStoreAndContext(ctx context.Context, cfg *pkgmodel.Config, externalResourcePlugins []plugin.ResourcePluginInfo, datastore datastore.Datastore, agentID string) (*Metastructure, error) {
+func NewMetastructureWithDataStoreAndContext(ctx context.Context, cfg *pkgmodel.Config, externalResourcePlugins []plugin.ResourcePluginInfo, oidcCredentialPlugins []plugin.OidcCredentialPluginInfo, datastore datastore.Datastore, agentID string) (*Metastructure, error) {
 	metastructure := &Metastructure{}
 
 	metastructure.Datastore = datastore
 	metastructure.Cfg = cfg
 
+	// Registers pkg/credential's types too, so the agent, every resource
+	// plugin, and every oidc-credential broker agree on the wire format.
 	err := plugin.RegisterSharedEDFTypes()
 	if err != nil {
 		return nil, err
@@ -115,7 +137,7 @@ func NewMetastructureWithDataStoreAndContext(ctx context.Context, cfg *pkgmodel.
 
 	metastructure.nodeName = fmt.Sprintf("%s@%s", cfg.Agent.Server.Nodename, cfg.Agent.Server.Hostname)
 	apps := []gen.ApplicationBehavior{
-		CreateApplication(),
+		CreateApplication(metastructure.applicationStopped),
 	}
 
 	if cfg.Agent.Server.ObserverPort != 0 {
@@ -129,20 +151,22 @@ func NewMetastructureWithDataStoreAndContext(ctx context.Context, cfg *pkgmodel.
 	metastructure.options.Applications = apps
 
 	metastructure.options.Env = map[gen.Env]any{
-		gen.Env("ExternalResourcePlugins"): externalResourcePlugins,
-		gen.Env("Datastore"):               metastructure.Datastore,
-		gen.Env("Context"):                 ctx,
-		gen.Env("disable_metrics"):         true,
-		gen.Env("ServerConfig"):            cfg.Agent.Server,
-		gen.Env("DatastoreConfig"):         cfg.Agent.Datastore,
-		gen.Env("RetryConfig"):             cfg.Agent.Retry,
-		gen.Env("SynchronizationConfig"):   cfg.Agent.Synchronization,
-		gen.Env("DiscoveryConfig"):         cfg.Agent.Discovery,
-		gen.Env("LoggingConfig"):           cfg.Agent.Logging,
-		gen.Env("OTelConfig"):              cfg.Agent.OTel,
-		gen.Env("StackExpirerConfig"):      cfg.Agent.StackExpirer,
-		gen.Env("AgentID"):                 agentID,
-		gen.Env("ResourcePluginConfigs"):   cfg.Agent.ResourcePlugins,
+		gen.Env("ExternalResourcePlugins"):     externalResourcePlugins,
+		gen.Env("OidcCredentialPlugins"):       oidcCredentialPlugins,
+		gen.Env("OidcCredentialPluginConfigs"): cfg.Agent.OidcCredentialPlugins,
+		gen.Env("Datastore"):                   metastructure.Datastore,
+		gen.Env("Context"):                     ctx,
+		gen.Env("disable_metrics"):             true,
+		gen.Env("ServerConfig"):                cfg.Agent.Server,
+		gen.Env("DatastoreConfig"):             cfg.Agent.Datastore,
+		gen.Env("RetryConfig"):                 cfg.Agent.Retry,
+		gen.Env("SynchronizationConfig"):       cfg.Agent.Synchronization,
+		gen.Env("DiscoveryConfig"):             cfg.Agent.Discovery,
+		gen.Env("LoggingConfig"):               cfg.Agent.Logging,
+		gen.Env("OTelConfig"):                  cfg.Agent.OTel,
+		gen.Env("StackExpirerConfig"):          cfg.Agent.StackExpirer,
+		gen.Env("AgentID"):                     agentID,
+		gen.Env("ResourcePluginConfigs"):       cfg.Agent.ResourcePlugins,
 	}
 
 	// Enable Ergo networking for distributed plugin architecture
@@ -192,6 +216,15 @@ func NewMetastructureWithDataStoreAndContext(ctx context.Context, cfg *pkgmodel.
 	return metastructure, nil
 }
 
+// applicationStopped relays an abnormal orchestrator-application stop to the
+// owner. It reads OnApplicationStopped at stop time, so the owner may set the
+// field any time between construction and Start().
+func (m *Metastructure) applicationStopped(reason error) {
+	if m.OnApplicationStopped != nil {
+		m.OnApplicationStopped(reason)
+	}
+}
+
 func (m *Metastructure) Start() error {
 	slog.Info("Starting actor node", "node", m.nodeName)
 
@@ -206,6 +239,41 @@ func (m *Metastructure) Start() error {
 	// Set after construction but before Start(), same pattern as TestResourcePlugin.
 	if m.AuthPluginHandle != nil {
 		m.options.Env[gen.Env("AuthPluginHandle")] = m.AuthPluginHandle
+	}
+
+	// One-time, idempotent sweep that hashes any plaintext opaque secrets left
+	// behind by writes made before opaque-value hashing existed. It
+	// runs against the datastore alone — no actors, no plugins — so it happens
+	// here, before the node starts, rather than after: keying opacity on the
+	// hard-coded known-opaque table (not a running plugin coordinator) means we
+	// don't have to sequence it against actor/plugin startup. Safe on every
+	// boot: a no-op once everything eligible is hashed, and it never touches
+	// DesiredState of a command that isn't final yet, so it can't interfere
+	// with ReRunIncompleteCommands below.
+	if err := migration.BackfillHashedSecrets(m.Datastore); err != nil {
+		slog.Error("Failed to backfill hashed secrets", "error", err)
+		return err
+	}
+
+	// One-time, idempotent sweep that populates the refs column on pre-migration
+	// resource rows so they are queryable by the indexed cascade lookup. Runs
+	// against the datastore alone — no actors, no plugins — before the node
+	// starts; a no-op on dialects without the refs column (sqlite, mssql).
+	if err := migration.BackfillResourceRefs(m.Datastore); err != nil {
+		slog.Error("Failed to backfill resource refs", "error", err)
+		return err
+	}
+
+	// One-time repair of unmanaged rows an older build stored with dot-exploded
+	// duplicates of their literal map keys. It forgets those rows so the next
+	// discovery cycle re-ingests them cleanly, which is only safe here: after
+	// this point the actors are running and writing, and the replay of
+	// incomplete commands below could restore what was forgotten. It records
+	// what it did per target, so a repaired target is never repaired twice, and
+	// it defers any target whose replay would resurrect the old rows.
+	if err := migration.ReingestCorruptedUnmanagedRows(m.Datastore); err != nil {
+		slog.Error("Failed to re-ingest dotted-key-corrupted unmanaged resources", "error", err)
+		return err
 	}
 
 	node, err := ergo.StartNode(gen.Atom(m.nodeName), m.options)
@@ -253,10 +321,12 @@ func (m *Metastructure) callActor(targetPID gen.ProcessID, message any) (any, er
 		return nil, fmt.Errorf("failed to send request to MetastructureBridge: %w", err)
 	}
 
-	// Wait for either success or error response
+	// Wait for either success or error response. A CallFailed reply is a
+	// request-scoped failure answered by the target actor; fold it into the
+	// error return so every callActor site sees one (result, error) contract.
 	select {
 	case response := <-successChan:
-		return response, nil
+		return messages.UnwrapCall(response, nil)
 	case err := <-errorChan:
 		return nil, err
 	case <-time.After(actorCallTimeout):
@@ -264,7 +334,7 @@ func (m *Metastructure) callActor(targetPID gen.ProcessID, message any) (any, er
 	}
 }
 
-func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error) {
+func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string, subject string, subjectName string) (*apimodel.SubmitCommandResponse, error) {
 	m.commandMu.Lock()
 	defer m.commandMu.Unlock()
 
@@ -275,12 +345,45 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 	// first, we guarantee that if no incomplete commands exist, all their resources are already
 	// persisted and visible to subsequent queries.
 	if !config.Simulate {
-		if err := m.checkForConflictingCommands(stackLabelsFromForma(forma)); err != nil {
+		if err := m.checkForConflictingCommands(drift.StackLabelsFromForma(forma)); err != nil {
+			return nil, err
+		}
+
+		// Reject an apply that touches a reaped target without re-declaring it.
+		// A reaped target is a tombstone for a target that stayed unreachable past
+		// its reap threshold; a resource-only or stale apply that references it must
+		// not silently resurrect it. Re-declaring the target (it appears in the
+		// forma's targets block) is the sanctioned recovery path: it produces a
+		// target update that mints a fresh incarnation, so it is allowed through.
+		if err := m.checkForReapedTargets(forma); err != nil {
 			return nil, err
 		}
 	}
 
-	fa, err := FormaCommandFromForma(forma, config, pkgmodel.CommandApply, m.Datastore, clientID, resource_update.FormaCommandSourceUser)
+	// A forced reconcile asserts the write witness (the state formae's own
+	// last write observed, which sync never refreshes) into the desired
+	// state before planning, so witnessed out-of-band movement is reverted
+	// like any overwritten drift. Assertion covers the forma's declared
+	// resources; a resource updated indirectly (a cascade into an undeclared
+	// stack) has no declaration to assert onto and keeps the pre-existing
+	// absorb behavior under force.
+	if config.Mode == pkgmodel.FormaApplyModeReconcile && config.Force {
+		assertMods := make(map[string][]datastore.ResourceModification)
+		assertWitnesses := make(map[string]json.RawMessage)
+		// AssertWitnessesIntoForma only ever consults assertWitnesses; the
+		// ownership record has no role in witness assertion, so this map is
+		// discarded — LoadModificationsAndWitnesses still requires it to keep
+		// one shared loader for both records.
+		assertRecords := make(map[string]pkgmodel.OwnedMembers)
+		for _, stackLabel := range drift.StackLabelsFromForma(forma) {
+			if err := drift.LoadModificationsAndWitnesses(m.Datastore, stackLabel, assertMods, assertWitnesses, assertRecords); err != nil {
+				return nil, err
+			}
+		}
+		forma = drift.AssertWitnessesIntoForma(forma, assertMods, assertWitnesses)
+	}
+
+	fa, err := FormaCommandFromForma(forma, config, pkgmodel.CommandApply, m.Datastore, clientID, subject, subjectName, resource_update.FormaCommandSourceUser, m.Cfg.Agent.Synchronization.Interval)
 	if err != nil {
 		if requiredFieldsErr, ok := err.(apimodel.RequiredFieldMissingOnCreateError); ok {
 			return nil, requiredFieldsErr
@@ -293,6 +396,49 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 		}
 		slog.Error("Failed to create apply from forma", "error", err)
 		return nil, err
+	}
+
+	// Drift rejection runs before the no-changes return: a drift-only soft
+	// reconcile must confront, not report "no changes". Out-of-band movement
+	// on provider-default content formae's own write witnessed is drift like
+	// any other; movement on content formae never wrote (late-populated
+	// defaults, runtime registrations) stays the infrastructure's business
+	// and never rejects. The snapshot is loaded AFTER planning so drift a
+	// sync persists mid-submission is still confronted rather than silently
+	// overwritten; a sync landing after this check keeps the pre-existing
+	// race window.
+	if config.Mode == pkgmodel.FormaApplyModeReconcile && !config.Force {
+		modificationsByStack := make(map[string][]datastore.ResourceModification)
+		witnessByKsuid := make(map[string]json.RawMessage)
+		recordByKsuid := make(map[string]pkgmodel.OwnedMembers)
+		seenStacks := map[string]bool{}
+		for _, stackLabel := range append(drift.StackLabelsFromForma(forma), fa.GetStackLabels()...) {
+			if seenStacks[stackLabel] {
+				continue
+			}
+			seenStacks[stackLabel] = true
+			if err := drift.LoadModificationsAndWitnesses(m.Datastore, stackLabel, modificationsByStack, witnessByKsuid, recordByKsuid); err != nil {
+				return nil, err
+			}
+		}
+		var modifiedStacks = make(map[string]apimodel.ModifiedStack)
+		for stackLabel, modifications := range modificationsByStack {
+			unabsorbed := drift.FilterUnabsorbedModifications(modifications, forma, fa)
+			unabsorbed = append(unabsorbed, drift.WitnessedMovedModifications(modifications, witnessByKsuid, recordByKsuid, forma, fa)...)
+			unabsorbed = drift.RetainConfrontable(unabsorbed, recordByKsuid, forma)
+			if len(unabsorbed) > 0 {
+				modifiedResources := make([]apimodel.ResourceModification, 0, len(unabsorbed))
+				for _, modification := range unabsorbed {
+					modifiedResources = append(modifiedResources, drift.ToAPIResourceModification(modification))
+				}
+				modifiedStacks[stackLabel] = apimodel.ModifiedStack{
+					ModifiedResources: modifiedResources,
+				}
+			}
+		}
+		if len(modifiedStacks) > 0 {
+			return nil, apimodel.FormaReconcileRejectedError{ModifiedStacks: modifiedStacks}
+		}
 	}
 
 	if !fa.HasChanges() {
@@ -309,38 +455,16 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 	// Create changeset early to catch validation errors before simulate
 	var cs changeset.Changeset
 	if len(fa.ResourceUpdates) > 0 || len(fa.TargetUpdates) > 0 {
-		cs, err = changeset.NewChangeset(fa.ResourceUpdates, fa.TargetUpdates, fa.ID, fa.Command)
+		synth, synthErr := target_update.SynthesizeResolveTargetUpdates(
+			resource_update.ReferencedTargetLabels(fa.ResourceUpdates),
+			resource_update.SourceTargetByKsuid(fa.ResourceUpdates),
+			fa.TargetUpdates, m.Datastore)
+		if synthErr != nil {
+			return nil, synthErr
+		}
+		cs, err = changeset.NewChangeset(fa.ResourceUpdates, append(fa.TargetUpdates, synth...), fa.DrawGeneratorUpdates, fa.ID, fa.Command, config.Mode)
 		if err != nil {
 			return nil, err
-		}
-	}
-
-	if config.Mode == pkgmodel.FormaApplyModeReconcile && !config.Force {
-		var modifiedStacks = make(map[string]apimodel.ModifiedStack)
-		for _, stackLabel := range fa.GetStackLabels() {
-			modifications, loadErr := m.Datastore.GetResourceModificationsSinceLastReconcile(stackLabel)
-			if loadErr != nil {
-				slog.Error("Failed to load most recent non-reconcile forma commands by stack", "stack", stackLabel, "error", loadErr)
-				return nil, fmt.Errorf("failed to load most recent forma commands for stack %s: %w", stackLabel, loadErr)
-			}
-			if len(modifications) > 0 {
-				// Filter out modifications that have been absorbed into the forma.
-				// A modification is absorbed when the forma contains the resource
-				// and no resource update was generated for it (properties match current state).
-				unabsorbed := filterUnabsorbedModifications(modifications, forma, fa)
-				if len(unabsorbed) > 0 {
-					modifiedResources := make([]apimodel.ResourceModification, 0, len(unabsorbed))
-					for _, modification := range unabsorbed {
-						modifiedResources = append(modifiedResources, apimodel.ResourceModification(modification))
-					}
-					modifiedStacks[stackLabel] = apimodel.ModifiedStack{
-						ModifiedResources: modifiedResources,
-					}
-				}
-			}
-		}
-		if len(modifiedStacks) > 0 {
-			return nil, apimodel.FormaReconcileRejectedError{ModifiedStacks: modifiedStacks}
 		}
 	}
 
@@ -514,6 +638,106 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 		}
 	}
 
+	if len(fa.GeneratorUpdates) > 0 {
+		// A generator has no standalone form, so every update is stack-scoped —
+		// unlike the policy StackIDMap above there is no "empty = standalone"
+		// case to skip. Build it the same way: prefer a stack this same command
+		// just created or updated, else resolve the label from the datastore.
+		stackIDMap := make(map[string]string)
+		for _, su := range fa.StackUpdates {
+			if su.Stack.ID != "" {
+				stackIDMap[su.Stack.Label] = su.Stack.ID
+			}
+		}
+
+		for _, gu := range fa.GeneratorUpdates {
+			if _, ok := stackIDMap[gu.StackLabel]; ok {
+				continue
+			}
+			stack, err := m.Datastore.GetStackByLabel(gu.StackLabel)
+			if err != nil {
+				return nil, fmt.Errorf("failed to look up stack %q for generator update: %w", gu.StackLabel, err)
+			}
+			if stack != nil {
+				stackIDMap[gu.StackLabel] = stack.ID
+				continue
+			}
+			// STOPGAP: the stack was deleted by a concurrent command between
+			// conflict check and generator persist. See the identical race
+			// noted on the policy StackIDMap above.
+			slog.Warn("Stack deleted during apply setup, failing stored command",
+				"commandID", fa.ID, "stackLabel", gu.StackLabel)
+			refs := make([]forma_persister.ResourceUpdateRef, len(fa.ResourceUpdates))
+			for i, ru := range fa.ResourceUpdates {
+				refs[i] = forma_persister.ResourceUpdateRef{
+					URI:       ru.DesiredState.URI(),
+					Operation: ru.Operation,
+				}
+			}
+			_, markErr := m.callActor(
+				gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
+				forma_persister.MarkResourcesAsFailed{
+					CommandID:          fa.ID,
+					Resources:          refs,
+					ResourceModifiedTs: time.Now(),
+				},
+			)
+			if markErr != nil {
+				slog.Error("Failed to mark resources as failed after stack deletion",
+					"commandID", fa.ID, "stackLabel", gu.StackLabel, "error", markErr)
+			}
+			return nil, apimodel.StackDeletedDuringApplyError{StackLabel: gu.StackLabel}
+		}
+
+		_, err = m.callActor(
+			gen.ProcessID{Name: actornames.ResourcePersister, Node: m.Node.Name()},
+			generator_update.PersistGeneratorUpdates{
+				GeneratorUpdates: fa.GeneratorUpdates,
+				CommandID:        fa.ID,
+				StackIDMap:       stackIDMap,
+			},
+		)
+		if err != nil {
+			slog.Error("Failed to persist generator updates", "error", err)
+			return nil, fmt.Errorf("failed to persist generator updates: %w", err)
+		}
+		m.Node.Log().Debug("Successfully persisted generator updates count=%d", len(fa.GeneratorUpdates))
+
+		// Unlike PolicyUpdates and StackUpdates, GeneratorUpdates is not
+		// round-tripped through the forma_commands table: that table's
+		// resource/target/stack/policy update snapshots live in dedicated
+		// columns (see StoreFormaCommand), and adding a generator_updates
+		// column is command-status observability, not part of connecting
+		// Forma.Generators to the datastore. The generator writes themselves
+		// (CreateGenerator/UpdateGenerator/DeleteGenerator, just above) are
+		// fully durable regardless.
+
+		// A command whose only work is generator work has now done all of it,
+		// and nothing downstream will ever move it off NotStarted: the
+		// changeset executor below starts only for resource or target
+		// updates, and a generator update has no state message of its own to
+		// recompute the command state the way UpdateStackStates and
+		// UpdatePolicyStates do for theirs. Left alone the command sits
+		// incomplete forever, which is worse than failing: it never
+		// self-heals, and dropping an unreferenced generator from a forma is
+		// an ordinary edit. Finalize it here instead, which recomputes the
+		// command state over its (empty) resource updates and reads Success.
+		//
+		// A failure to finalize is logged rather than returned: the generator
+		// writes are already durable, so reporting the apply as failed would
+		// misdescribe it, and the recovery sweep finalizes the command on the
+		// agent's next start.
+		if len(fa.ResourceUpdates) == 0 && len(fa.TargetUpdates) == 0 {
+			if _, ferr := m.callActor(
+				gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
+				forma_persister.FinalizeIncompleteCommand{CommandID: fa.ID},
+			); ferr != nil {
+				slog.Error("Failed to finalize a generator-only command",
+					"commandID", fa.ID, "error", ferr)
+			}
+		}
+	}
+
 	if len(fa.ResourceUpdates) > 0 || len(fa.TargetUpdates) > 0 {
 		m.Node.Log().Debug("Starting ChangesetExecutor of changeset from forma command commandID=%s", fa.ID)
 		_, err = m.callActor(
@@ -548,11 +772,15 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 
 func translateToAPICommand(fa *forma_command.FormaCommand) apimodel.Command {
 	apiCommand := apimodel.Command{
-		CommandID: fa.ID,
-		Command:   string(fa.Command),
-		State:     string(fa.State),
-		StartTs:   fa.StartTs,
-		EndTs:     fa.ModifiedTs,
+		CommandID:   fa.ID,
+		Command:     string(fa.Command),
+		Mode:        string(fa.Config.Mode),
+		Source:      string(fa.Source),
+		Subject:     fa.Subject,
+		SubjectName: fa.SubjectName,
+		State:       string(fa.State),
+		StartTs:     fa.StartTs,
+		EndTs:       fa.ModifiedTs,
 	}
 	for _, ru := range fa.ResourceUpdates {
 		var dur time.Duration = 0
@@ -560,18 +788,35 @@ func translateToAPICommand(fa *forma_command.FormaCommand) apimodel.Command {
 			dur = ru.ModifiedTs.Sub(ru.StartTs)
 		}
 
+		var oldLabel string
+		if ru.PriorState.Label != "" && ru.PriorState.Label != ru.DesiredState.Label {
+			oldLabel = ru.PriorState.Label
+		}
+
+		// Property and patch documents are redacted at this single projection
+		// point: everything downstream (simulate responses, command status,
+		// conflict listings, the CLI, API consumers) is presentation data, and
+		// neither opaque plaintext (pre-persist documents) nor at-rest digests
+		// belong in it.
+		opaque := transformations.OpaqueFields(ru.DesiredState.Schema, ru.DesiredState.Type)
+		for f := range transformations.OpaqueFields(ru.PriorState.Schema, ru.PriorState.Type) {
+			opaque[f] = true
+		}
+
 		apiCommand.ResourceUpdates = append(apiCommand.ResourceUpdates, apimodel.ResourceUpdate{
 			ResourceID:      ru.DesiredState.Ksuid,
 			ResourceType:    ru.DesiredState.Type,
 			ResourceLabel:   ru.DesiredState.Label,
+			OldLabel:        oldLabel,
 			StackName:       ru.StackLabel,
 			OldStackName:    ru.PriorState.Stack,
-			Properties:      ru.DesiredState.Properties,
-			OldProperties:   ru.PreviousProperties,
-			PatchDocument:   ru.DesiredState.PatchDocument,
-			CreateOnlyPatch: ru.CreateOnlyPatch,
+			Properties:      transformations.RedactPropertiesForDisplay(ru.DesiredState.Properties, opaque),
+			OldProperties:   transformations.RedactPropertiesForDisplay(ru.PreviousProperties, opaque),
+			PatchDocument:   transformations.RedactPatchDocumentForDisplay(ru.DesiredState.PatchDocument, opaque),
+			CreateOnlyPatch: transformations.RedactPatchDocumentForDisplay(ru.CreateOnlyPatch, opaque),
 			Operation:       string(ru.Operation),
 			State:           string(ru.State),
+			StartedAt:       ru.StartTs,
 			Duration:        dur.Milliseconds(),
 			CurrentAttempt:  ru.MostRecentProgressResult.Attempts,
 			MaxAttempts:     ru.MostRecentProgressResult.MaxAttempts,
@@ -670,16 +915,118 @@ func translateToAPICommand(fa *forma_command.FormaCommand) apimodel.Command {
 		})
 	}
 
+	for _, gu := range fa.GeneratorUpdates {
+		var dur time.Duration = 0
+		if !gu.StartTs.IsZero() {
+			dur = gu.ModifiedTs.Sub(gu.StartTs)
+		}
+
+		// Generator may be nil defensively (mirroring the pu.Policy nil
+		// check above); in practice the generator diff always sets it, on
+		// every operation. On a Delete it is the existing (about-to-be-
+		// removed) generator; on a Create/Update it is the desired one.
+		var generatorLabel, generatorType string
+		if gu.Generator != nil {
+			generatorLabel = gu.Generator.GetLabel()
+			generatorType = gu.Generator.GetType()
+		}
+
+		// Marshal generator configs for diff display. A concrete Generator's
+		// own KSUID field is tagged json:"-", so this can never leak
+		// generator identity, and nothing here ever touches
+		// pkgmodel.GeneratorIdentity (the drawing spec) or a drawn value —
+		// neither exists on Generator, and no generated value exists at
+		// plan/simulate time to marshal in the first place.
+		var generatorConfig, oldGeneratorConfig json.RawMessage
+		if gu.Generator != nil {
+			generatorConfig, _ = json.Marshal(gu.Generator)
+		}
+		if gu.ExistingGenerator != nil {
+			oldGeneratorConfig, _ = json.Marshal(gu.ExistingGenerator)
+		}
+
+		apiCommand.GeneratorUpdates = append(apiCommand.GeneratorUpdates, apimodel.GeneratorUpdate{
+			GeneratorLabel:     generatorLabel,
+			GeneratorType:      generatorType,
+			StackLabel:         gu.StackLabel,
+			Operation:          string(gu.Operation),
+			State:              string(gu.State),
+			Duration:           dur.Milliseconds(),
+			ErrorMessage:       gu.ErrorMessage,
+			GeneratorConfig:    generatorConfig,
+			OldGeneratorConfig: oldGeneratorConfig,
+			StartTs:            gu.StartTs,
+			ModifiedTs:         gu.ModifiedTs,
+		})
+	}
+
+	// The draws are projected from their own field, in their own loop, after
+	// the declared diff above. fa.GeneratorUpdates is what changes a
+	// generator's row; fa.DrawGeneratorUpdates is what draws a value, and a
+	// draw exists for generators the diff above says nothing about at all —
+	// a generator whose spec nobody edited still draws when a destination is
+	// added to it. Projecting only the diff leaves an apply that is about to
+	// rotate a credential reading as no generator activity whatsoever.
+	//
+	// A generator with both a declared change and a draw appears twice, once
+	// per operation, rather than as one merged entry. They are separate work
+	// with separate consequences: one rewrites the generator's row before the
+	// changeset starts, the other rotates the credential every bound
+	// destination holds. Merging them would force a single Operation string
+	// that either hides the rotation or hides the spec diff.
+	//
+	// On a declared entry the State, Duration and ErrorMessage carried here
+	// track the update as it runs. On a draw they are plan-time values and
+	// stay that way: DrawGeneratorUpdates is json:"-" and the changeset takes
+	// its own copy, so nothing writes back to the slice this reads. A draw's
+	// outcome reaches an operator through the destinations it cascades to,
+	// whose FailureReason carries the reason the draw could not produce a
+	// value.
+	//
+	// A draw carries no config, neither current nor old. It changes nothing
+	// about the declared spec: NewDrawGeneratorUpdate leaves ExistingGenerator
+	// nil, and its Generator is the spec the value will be drawn under, which
+	// is either this command's desired spec (already projected above, with its
+	// diff) or the unchanged stored one. Marshaling it here would present a
+	// non-diff as one. Nothing on this path marshals a generator at all, so it
+	// cannot leak a KSUID (json:"-" on the concrete type regardless), the
+	// drawing spec (pkgmodel.GeneratorIdentity, never on Generator) or a drawn
+	// value (none exists until the changeset runs).
+	for _, dgu := range fa.DrawGeneratorUpdates {
+		var dur time.Duration = 0
+		if !dgu.StartTs.IsZero() {
+			dur = dgu.ModifiedTs.Sub(dgu.StartTs)
+		}
+
+		var generatorLabel, generatorType string
+		if dgu.Generator != nil {
+			generatorLabel = dgu.Generator.GetLabel()
+			generatorType = dgu.Generator.GetType()
+		}
+
+		apiCommand.GeneratorUpdates = append(apiCommand.GeneratorUpdates, apimodel.GeneratorUpdate{
+			GeneratorLabel: generatorLabel,
+			GeneratorType:  generatorType,
+			StackLabel:     dgu.StackLabel,
+			Operation:      string(dgu.Operation),
+			State:          string(dgu.State),
+			Duration:       dur.Milliseconds(),
+			ErrorMessage:   dgu.ErrorMessage,
+			StartTs:        dgu.StartTs,
+			ModifiedTs:     dgu.ModifiedTs,
+		})
+	}
+
 	return apiCommand
 }
 
-func (m *Metastructure) DestroyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error) {
+func (m *Metastructure) DestroyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string, subject string, subjectName string) (*apimodel.SubmitCommandResponse, error) {
 	m.commandMu.Lock()
 	defer m.commandMu.Unlock()
 
 	// Check for conflicting commands before generating resource updates (same reasoning as ApplyForma).
 	if !config.Simulate {
-		stackLabels := stackLabelsFromForma(forma)
+		stackLabels := drift.StackLabelsFromForma(forma)
 
 		// For destroy commands, also check stacks affected by cascade deletes
 		cascadeStacks, err := m.findCascadeStackLabels(forma)
@@ -693,7 +1040,7 @@ func (m *Metastructure) DestroyForma(forma *pkgmodel.Forma, config *config.Forma
 		}
 	}
 
-	fa, err := FormaCommandFromForma(forma, config, pkgmodel.CommandDestroy, m.Datastore, clientID, resource_update.FormaCommandSourceUser)
+	fa, err := FormaCommandFromForma(forma, config, pkgmodel.CommandDestroy, m.Datastore, clientID, subject, subjectName, resource_update.FormaCommandSourceUser, m.Cfg.Agent.Synchronization.Interval)
 	if err != nil {
 		slog.Error("Failed to create destroy from forma", "error", err)
 		return nil, err
@@ -760,8 +1107,38 @@ func (m *Metastructure) DestroyForma(forma *pkgmodel.Forma, config *config.Forma
 		}
 	}
 
+	// The generators owned by the stacks this destroy empties. They must be
+	// removed BEFORE the changeset runs: DeleteGenerator resolves the stack
+	// label to a stack id, and cleanupEmptyStacks tombstones the stack as soon
+	// as its last resource is gone, after which the delete would find no stack
+	// and silently do nothing. No StackIDMap is needed — a delete is addressed
+	// by label and stack, the same way the policy deletes above are.
+	if len(fa.GeneratorUpdates) > 0 {
+		_, err = m.callActor(
+			gen.ProcessID{Name: actornames.ResourcePersister, Node: m.Node.Name()},
+			generator_update.PersistGeneratorUpdates{
+				GeneratorUpdates: fa.GeneratorUpdates,
+				CommandID:        fa.ID,
+				StackIDMap:       nil,
+			},
+		)
+		if err != nil {
+			slog.Error("Failed to persist generator updates", "error", err)
+			return nil, fmt.Errorf("failed to persist generator updates: %w", err)
+		}
+		m.Node.Log().Debug("Successfully persisted generator updates count=%d", len(fa.GeneratorUpdates))
+	}
+
 	if len(fa.ResourceUpdates) > 0 || len(fa.TargetUpdates) > 0 {
-		cs, err := changeset.NewChangeset(fa.ResourceUpdates, fa.TargetUpdates, fa.ID, pkgmodel.CommandDestroy)
+		synth, synthErr := target_update.SynthesizeResolveTargetUpdates(
+			resource_update.ReferencedTargetLabels(fa.ResourceUpdates),
+			resource_update.SourceTargetByKsuid(fa.ResourceUpdates),
+			fa.TargetUpdates, m.Datastore)
+		if synthErr != nil {
+			return nil, synthErr
+		}
+		// No generator draws: a destroy writes no property.
+		cs, err := changeset.NewChangeset(fa.ResourceUpdates, append(fa.TargetUpdates, synth...), nil, fa.ID, pkgmodel.CommandDestroy, config.Mode)
 		if err != nil {
 			return nil, err
 		}
@@ -797,7 +1174,7 @@ func (m *Metastructure) DestroyForma(forma *pkgmodel.Forma, config *config.Forma
 	}, nil
 }
 
-func (m *Metastructure) DestroyByQuery(query string, config *config.FormaCommandConfig, clientID string) (*apimodel.SubmitCommandResponse, error) {
+func (m *Metastructure) DestroyByQuery(query string, config *config.FormaCommandConfig, clientID string, subject string, subjectName string) (*apimodel.SubmitCommandResponse, error) {
 	q := querier.NewBlugeQuerier(m.Datastore)
 	resources, err := q.QueryResourcesForDestroy(query)
 	if err != nil {
@@ -814,11 +1191,11 @@ func (m *Metastructure) DestroyByQuery(query string, config *config.FormaCommand
 
 	forma := pkgmodel.FormaFromResources(managedResources)
 
-	return m.DestroyForma(forma, config, clientID)
+	return m.DestroyForma(forma, config, clientID, subject, subjectName)
 }
 
-func (m *Metastructure) CancelCommand(commandID string, clientID string) (*changeset.CancelResponse, error) {
-	slog.Info("Canceling command", "commandID", commandID, "clientID", clientID)
+func (m *Metastructure) CancelCommand(commandID string, force bool, clientID string) (*changeset.CancelResponse, error) {
+	slog.Info("Canceling command", "commandID", commandID, "force", force, "clientID", clientID)
 
 	changesetExecutorPID := gen.ProcessID{
 		Name: actornames.ChangesetExecutor(commandID),
@@ -827,6 +1204,7 @@ func (m *Metastructure) CancelCommand(commandID string, clientID string) (*chang
 
 	result, err := m.callActor(changesetExecutorPID, changeset.Cancel{
 		CommandID: commandID,
+		Force:     force,
 	})
 	if err != nil {
 		slog.Error("Failed to cancel command", "commandID", commandID, "error", err)
@@ -838,283 +1216,170 @@ func (m *Metastructure) CancelCommand(commandID string, clientID string) (*chang
 		return nil, fmt.Errorf("unexpected response type from changeset executor: %T", result)
 	}
 
+	// A --force cancel that failed to persist carries its error in-band (the executor
+	// stayed alive and terminated no actors). Surface it as a returned error.
+	if cancelResp.ErrorMessage != "" {
+		slog.Error("Force-cancel failed to persist", "commandID", commandID, "error", cancelResp.ErrorMessage)
+		return nil, fmt.Errorf("failed to force-cancel command: %s", cancelResp.ErrorMessage)
+	}
+
 	return &cancelResp, nil
 }
 
-func (m *Metastructure) CancelCommandsByQuery(query string, clientID string) (*apimodel.CancelCommandResponse, error) {
-	var commandsToCancel []*forma_command.FormaCommand
-	var err error
+// commandsForCancelQuery resolves the candidate FormaCommands for a
+// cancel-by-query request.
+//
+// Unlike ListFormaCommandStatus (a user-facing surface that hard-restricts
+// to Source=user), this deliberately does NOT restrict by Source: an
+// operator draining scheduler bookkeeping (sync, discovery) ahead of an
+// agent restart must still be able to target those commands by an explicit
+// query, e.g. `command:sync`.
+//
+// The one exclusion preserved here is the one QueryFormaCommands itself used
+// to apply implicitly, before Source-based filtering replaced it for the
+// status-listing path: an *unfiltered* query (no explicit `command:` term)
+// must not surface sync/discovery bookkeeping by accident, since both use
+// the "sync" command type. A caller who explicitly asks for `command:sync`
+// still reaches them — only the implicit, no-command-filter case is
+// protected.
+func (m *Metastructure) commandsForCancelQuery(query string, caller querier.Caller) ([]*forma_command.FormaCommand, error) {
+	if query == "" {
+		command, err := m.Datastore.GetMostRecentFormaCommandByClientID(caller.ClientID)
+		if err != nil {
+			return nil, err
+		}
+		if command == nil {
+			return nil, nil
+		}
+		return []*forma_command.FormaCommand{command}, nil
+	}
 
-	if query != "" {
-		// Cancel by query
-		q := querier.NewBlugeQuerier(m.Datastore)
-		commandsToCancel, err = q.QueryStatus(query, clientID, 100) // limit to 100 commands
-		if err != nil {
-			slog.Debug("Cannot get forma commands from query", "error", err)
-			return nil, err
+	q := querier.NewBlugeQuerier(m.Datastore)
+	statusQuery, err := q.BuildStatusQuery(query, caller, 100) // limit to 100 commands
+	if err != nil {
+		return nil, err
+	}
+	if statusQuery.Command == nil {
+		statusQuery.Command = &datastore.QueryItem[string]{
+			Item:       string(pkgmodel.CommandSync),
+			Constraint: datastore.Excluded,
 		}
-	} else {
-		// Cancel most recent command
-		command, err := m.Datastore.GetMostRecentFormaCommandByClientID(clientID)
-		if err != nil {
-			slog.Debug("Cannot get most recent forma command", "error", err)
-			return nil, err
-		}
-		commandsToCancel = []*forma_command.FormaCommand{command}
+	}
+
+	return m.Datastore.QueryFormaCommands(statusQuery)
+}
+
+func (m *Metastructure) CancelCommandsByQuery(query string, force bool, caller querier.Caller) (*apimodel.CancelCommandResponse, error) {
+	commandsToCancel, err := m.commandsForCancelQuery(query, caller)
+	if err != nil {
+		slog.Debug("Cannot get forma commands from query", "error", err)
+		return nil, err
 	}
 
 	// Filter to only InProgress commands
 	var canceledCommandIDs []string
+	var forceCancelFailures []string
 	allResourceStates := make(map[string]apimodel.CancelResourceState)
 	for _, cmd := range commandsToCancel {
 		if cmd.State == forma_command.CommandStateInProgress {
-			cancelResp, err := m.CancelCommand(cmd.ID, clientID)
+			cancelResp, err := m.CancelCommand(cmd.ID, force, caller.ClientID)
 			if err != nil {
 				slog.Warn("Failed to cancel command", "commandID", cmd.ID, "error", err)
-				// Continue with other commands even if one fails
+				// A --force cancel that fails left the command running: the executor
+				// terminated no actors and the command is still non-terminal. Record it
+				// so the caller is told to retry rather than seeing a success with the
+				// command silently dropped. A graceful (non-force) cancel of a command
+				// that has since vanished is benign, so keep skipping those.
+				if force {
+					forceCancelFailures = append(forceCancelFailures, fmt.Sprintf("%s: %v", cmd.ID, err))
+				}
 				continue
 			}
 			canceledCommandIDs = append(canceledCommandIDs, cmd.ID)
 			if cancelResp != nil {
+				forceCanceled := make(map[string]bool, len(cancelResp.ForceCanceledInProgress))
+				for _, uri := range cancelResp.ForceCanceledInProgress {
+					forceCanceled[uri] = true
+				}
 				for uri, state := range cancelResp.ResourceStates {
-					allResourceStates[uri] = apimodel.CancelResourceState{State: state}
+					allResourceStates[uri] = apimodel.CancelResourceState{
+						State:         state,
+						ForceCanceled: forceCanceled[uri],
+						CommandID:     cmd.ID,
+					}
 				}
 			}
 		}
 	}
 
+	if len(forceCancelFailures) > 0 {
+		return nil, fmt.Errorf("force-cancel failed for %d command(s): %s",
+			len(forceCancelFailures), strings.Join(forceCancelFailures, "; "))
+	}
+
 	return &apimodel.CancelCommandResponse{
 		CommandIDs:           canceledCommandIDs,
 		ResourceUpdateStates: allResourceStates,
+		Forced:               force,
 	}, nil
 }
 
-func (m *Metastructure) ListFormaCommandStatus(query string, clientID string, n int) (*apimodel.ListCommandStatusResponse, error) {
-	if query != "" {
-		q := querier.NewBlugeQuerier(m.Datastore)
-		formaCommands, err := q.QueryStatus(query, clientID, n)
-		if err != nil {
-			slog.Debug("Cannot get forma commands from query", "error", err)
-			return nil, err
-		}
-
-		res := &apimodel.ListCommandStatusResponse{}
-		for _, fa := range formaCommands {
-			res.Commands = append(res.Commands, translateToAPICommand(fa))
-		}
-
-		return res, nil
-	} else {
-		fa, err := m.Datastore.GetMostRecentFormaCommandByClientID(clientID)
+// ListFormaCommandStatus answers a command-status listing.
+//
+// An empty query is answered according to scope:
+//   - CommandScopeClient (the default) — the calling client's single most
+//     recent command, which is what a bare `formae command status` asks for.
+//   - CommandScopeAgent — every client's commands, newest first, bounded by
+//     n. This is what a bare `formae command list` asks for; it runs through
+//     the querier's unconstrained query rather than the client-scoped route.
+//
+// A non-empty query ignores scope: the query itself expresses the narrowing
+// (`client:me` for the caller's own commands).
+//
+// Every path is restricted to user-initiated commands. Source is applied
+// here, not parsed from the query grammar, so a caller cannot ask for
+// scheduler bookkeeping (sync, discovery, auto-reconcile, stack expiry) even
+// when it shares a command type with user work.
+func (m *Metastructure) ListFormaCommandStatus(query string, caller querier.Caller, n int, scope apimodel.CommandScope) (*apimodel.ListCommandStatusResponse, error) {
+	if query == "" && scope != apimodel.CommandScopeAgent {
+		fa, err := m.Datastore.GetMostRecentFormaCommandByClientID(caller.ClientID)
 		if err != nil {
 			slog.Debug("Cannot get forma command from client ID", "error", err)
 			return nil, err
+		}
+		if fa == nil {
+			return &apimodel.ListCommandStatusResponse{Commands: []apimodel.Command{}}, nil
 		}
 
 		return &apimodel.ListCommandStatusResponse{
 			Commands: []apimodel.Command{translateToAPICommand(fa)},
 		}, nil
 	}
-}
 
-func (m *Metastructure) ExtractResources(query string) (*pkgmodel.Forma, error) {
 	q := querier.NewBlugeQuerier(m.Datastore)
-	resources, err := q.QueryResources(query)
+	statusQuery, err := q.BuildStatusQuery(query, caller, n)
 	if err != nil {
-		slog.Debug("Cannot get resources from query", "error", err)
+		slog.Debug("Cannot get forma commands from query", "error", err)
 		return nil, err
 	}
 
-	if err := m.reverseTranslateKSUIDsToTriplets(resources); err != nil {
-		slog.Error("Failed to reverse translate KSUIDs to triplets", "error", err)
+	statusQuery.Source = &datastore.QueryItem[string]{
+		Item:       string(forma_command.SourceUser),
+		Constraint: datastore.Required,
+	}
+
+	formaCommands, err := m.Datastore.QueryFormaCommands(statusQuery)
+	if err != nil {
+		slog.Debug("Cannot get forma commands from query", "error", err)
 		return nil, err
 	}
 
-	targetNames := make([]string, 0)
-	uniqueTargets := make(map[string]struct{})
-	stackLabels := make([]string, 0)
-	uniqueStacks := make(map[string]struct{})
-
-	for _, resource := range resources {
-		if resource.Target != "" {
-			if _, exists := uniqueTargets[resource.Target]; !exists {
-				uniqueTargets[resource.Target] = struct{}{}
-				targetNames = append(targetNames, resource.Target)
-			}
-		}
-		if resource.Stack != "" {
-			if _, exists := uniqueStacks[resource.Stack]; !exists {
-				uniqueStacks[resource.Stack] = struct{}{}
-				stackLabels = append(stackLabels, resource.Stack)
-			}
-		}
+	res := &apimodel.ListCommandStatusResponse{}
+	for _, fa := range formaCommands {
+		res.Commands = append(res.Commands, translateToAPICommand(fa))
 	}
 
-	forma := pkgmodel.FormaFromResources(resources)
-
-	if len(targetNames) > 0 {
-		targets, err := m.Datastore.LoadTargetsByLabels(targetNames)
-		if err != nil {
-			slog.Error("Failed to load targets by names", "error", err)
-			return nil, err
-		}
-
-		forma.Targets = make([]pkgmodel.Target, 0, len(targets))
-		for _, t := range targets {
-			if t != nil {
-				forma.Targets = append(forma.Targets, *t)
-			}
-		}
-	}
-
-	if len(stackLabels) > 0 {
-		forma.Stacks = make([]pkgmodel.Stack, 0, len(stackLabels))
-		for _, label := range stackLabels {
-			stack, err := m.Datastore.GetStackByLabel(label)
-			if err != nil {
-				slog.Error("Failed to load stack by label", "label", label, "error", err)
-				continue
-			}
-			if stack != nil {
-				forma.Stacks = append(forma.Stacks, *stack)
-			} else {
-				// Stack not found in datastore (e.g., $unmanaged) - create a synthetic entry
-				forma.Stacks = append(forma.Stacks, pkgmodel.Stack{
-					Label:       label,
-					Description: "Unmanaged resources",
-				})
-			}
-		}
-	}
-
-	// Collect referenced standalone policy labels from stacks
-	uniquePolicyLabels := make(map[string]struct{})
-	for _, stack := range forma.Stacks {
-		for _, rawPolicy := range stack.Policies {
-			if pkgmodel.IsPolicyReference(rawPolicy) {
-				policyLabel, err := pkgmodel.ParsePolicyReference(rawPolicy)
-				if err != nil {
-					slog.Debug("Failed to parse policy reference", "error", err)
-					continue
-				}
-				uniquePolicyLabels[policyLabel] = struct{}{}
-			}
-		}
-	}
-
-	// Load standalone policies and add to forma
-	if len(uniquePolicyLabels) > 0 {
-		forma.Policies = make([]json.RawMessage, 0, len(uniquePolicyLabels))
-		for label := range uniquePolicyLabels {
-			policy, err := m.Datastore.GetStandalonePolicy(label)
-			if err != nil {
-				slog.Error("Failed to load standalone policy", "label", label, "error", err)
-				continue
-			}
-			if policy != nil {
-				policyJSON, err := json.Marshal(policy)
-				if err != nil {
-					slog.Error("Failed to marshal standalone policy", "label", label, "error", err)
-					continue
-				}
-				forma.Policies = append(forma.Policies, policyJSON)
-			}
-		}
-	}
-
-	return forma, nil
-}
-
-func (m *Metastructure) ExtractTargets(queryStr string) ([]*pkgmodel.Target, error) {
-	slog.Debug("ExtractTargets called", "queryStr", queryStr)
-	query := &datastore.TargetQuery{}
-
-	if queryStr != "" {
-		parts := strings.Fields(queryStr)
-		for _, part := range parts {
-			if strings.Contains(part, ":") {
-				kv := strings.SplitN(part, ":", 2)
-				key := strings.TrimSpace(kv[0])
-				value := strings.TrimSpace(kv[1])
-
-				switch key {
-				case "label":
-					query.Label = &datastore.QueryItem[string]{
-						Item:       value,
-						Constraint: datastore.Required,
-					}
-				case "namespace":
-					query.Namespace = &datastore.QueryItem[string]{
-						Item:       value,
-						Constraint: datastore.Required,
-					}
-				case "discoverable":
-					boolVal := value == "true"
-					query.Discoverable = &datastore.QueryItem[bool]{
-						Item:       boolVal,
-						Constraint: datastore.Required,
-					}
-				}
-			}
-		}
-	}
-
-	slog.Debug("Calling QueryTargets", "query", query)
-	targets, err := m.Datastore.QueryTargets(query)
-	if err != nil {
-		slog.Debug("Cannot get targets from query", "error", err)
-		return nil, err
-	}
-
-	slog.Debug("ExtractTargets returning", "count", len(targets))
-	return targets, nil
-}
-
-func (m *Metastructure) ExtractStacks() ([]*pkgmodel.Stack, error) {
-	slog.Debug("ExtractStacks called")
-	stacks, err := m.Datastore.ListAllStacks()
-	if err != nil {
-		slog.Debug("Cannot get stacks from datastore", "error", err)
-		return nil, err
-	}
-
-	// Build a lookup of last reconcile times per stack
-	reconcileInfos, err := m.Datastore.GetStacksWithAutoReconcilePolicy()
-	lastReconcileByStack := make(map[string]time.Time)
-	if err != nil {
-		slog.Warn("Failed to get auto-reconcile info", "error", err)
-	} else {
-		for _, info := range reconcileInfos {
-			lastReconcileByStack[info.StackLabel] = info.LastReconcileAt
-		}
-	}
-
-	// Populate policies for each stack
-	for _, stack := range stacks {
-		policies, err := m.Datastore.GetPoliciesForStack(stack.ID)
-		if err != nil {
-			slog.Warn("Failed to get policies for stack", "stack", stack.Label, "error", err)
-			continue
-		}
-		// Convert policies to json.RawMessage for the Stack.Policies field
-		for _, policy := range policies {
-			// Enrich auto-reconcile policies with last reconcile time
-			if arPolicy, ok := policy.(*pkgmodel.AutoReconcilePolicy); ok {
-				if lastRecon, found := lastReconcileByStack[stack.Label]; found {
-					arPolicy.LastReconcileAt = lastRecon
-				}
-			}
-			policyJSON, err := json.Marshal(policy)
-			if err != nil {
-				slog.Warn("Failed to marshal policy", "policy", policy.GetLabel(), "error", err)
-				continue
-			}
-			stack.Policies = append(stack.Policies, json.RawMessage(policyJSON))
-		}
-	}
-
-	slog.Debug("ExtractStacks returning", "count", len(stacks))
-	return stacks, nil
+	return res, nil
 }
 
 func (m *Metastructure) ExtractPolicies() ([]apimodel.PolicyInventoryItem, error) {
@@ -1147,7 +1412,16 @@ func (m *Metastructure) ExtractPolicies() ([]apimodel.PolicyInventoryItem, error
 	return items, nil
 }
 
-func (m *Metastructure) reverseTranslateKSUIDsToTriplets(resources []*pkgmodel.Resource) error {
+// reverseTranslateKSUIDsToTriplets rewrites the internal identifiers a stored
+// property document names things by back into the names an author writes them
+// with: a $ref's resource KSUID into the resource's triplet, and a $gen's
+// generator KSUID into the generator's label and stack.
+//
+// The generators the $gen envelopes named are returned, because a forma that
+// references a generator has to declare it and only this pass knows which
+// ones were referenced. A caller with nowhere to put a declaration ignores
+// them; the envelopes are authored either way.
+func (m *Metastructure) reverseTranslateKSUIDsToTriplets(resources []*pkgmodel.Resource) ([]pkgmodel.Generator, error) {
 	ksuidSet := make(map[string]struct{})
 	for _, resource := range resources {
 		if resource.Properties != nil {
@@ -1157,33 +1431,117 @@ func (m *Metastructure) reverseTranslateKSUIDsToTriplets(resources []*pkgmodel.R
 			extractKSUIDs(string(resource.ReadOnlyProperties), ksuidSet)
 		}
 	}
+	generatorKsuidSet := genEnvelopeGeneratorKSUIDs(resources)
 
-	if len(ksuidSet) == 0 {
-		return nil
+	if len(ksuidSet) == 0 && len(generatorKsuidSet) == 0 {
+		return nil, nil
 	}
 
-	ksuids := make([]string, 0, len(ksuidSet))
-	for ksuid := range ksuidSet {
-		ksuids = append(ksuids, ksuid)
+	ksuidToTriplet := make(map[string]pkgmodel.TripletKey)
+	if len(ksuidSet) > 0 {
+		ksuids := make([]string, 0, len(ksuidSet))
+		for ksuid := range ksuidSet {
+			ksuids = append(ksuids, ksuid)
+		}
+
+		var err error
+		ksuidToTriplet, err = m.Datastore.BatchGetTripletsByKSUIDs(ksuids)
+		if err != nil {
+			return nil, fmt.Errorf("failed to batch lookup triplets: %w", err)
+		}
 	}
 
-	ksuidToTriplet, err := m.Datastore.BatchGetTripletsByKSUIDs(ksuids)
+	generators, generatorKeyByKsuid, err := m.resolveReferencedGenerators(generatorKsuidSet)
 	if err != nil {
-		return fmt.Errorf("failed to batch lookup triplets: %w", err)
+		return nil, err
 	}
 
 	for i, resource := range resources {
 		if resource.Properties != nil {
-			translated := replaceKSUIDs(string(resource.Properties), ksuidToTriplet)
+			translated := replaceKSUIDs(string(resource.Properties), ksuidToTriplet, generatorKeyByKsuid)
 			resources[i].Properties = json.RawMessage(translated)
 		}
 		if resource.ReadOnlyProperties != nil {
-			translated := replaceKSUIDs(string(resource.ReadOnlyProperties), ksuidToTriplet)
+			translated := replaceKSUIDs(string(resource.ReadOnlyProperties), ksuidToTriplet, generatorKeyByKsuid)
 			resources[i].ReadOnlyProperties = json.RawMessage(translated)
 		}
 	}
 
-	return nil
+	return generators, nil
+}
+
+// genEnvelopeGeneratorKSUIDs collects the generator KSUID of every translated
+// $gen envelope in the resources' property documents.
+//
+// Only the structured envelopes are collected. A $gen framed inside an
+// interpolated string is not one of them: an opaque value assembled into a
+// larger string can no longer be redacted, so validateNoOpaqueEmbed refuses
+// such a forma at plan time and no resource row can hold one.
+func genEnvelopeGeneratorKSUIDs(resources []*pkgmodel.Resource) map[string]struct{} {
+	ksuids := make(map[string]struct{})
+	collect := func(document json.RawMessage) {
+		if len(document) == 0 {
+			return
+		}
+		for _, genObject := range pkgmodel.FindGenObjectsFromProperties(document) {
+			// An authored envelope names its generator by label and stack and
+			// carries no KSUID, so it contributes nothing to resolve.
+			if genObject.Generator != "" {
+				ksuids[genObject.Generator] = struct{}{}
+			}
+		}
+	}
+	for _, resource := range resources {
+		collect(resource.Properties)
+		collect(resource.ReadOnlyProperties)
+	}
+	return ksuids
+}
+
+// resolveReferencedGenerators resolves each generator KSUID to the live
+// generator holding it. It returns the generators themselves, so an extracted
+// forma can declare them, and the label/stack pair each KSUID stands for, so
+// the envelopes naming it can be written back in their authored shape.
+//
+// The generators are ordered by stack and then label, so the same extract
+// emits the same declarations every time.
+//
+// A KSUID that reaches no live generator is left out of both: there is no
+// label to name it by, and nothing to declare.
+func (m *Metastructure) resolveReferencedGenerators(
+	ksuids map[string]struct{},
+) ([]pkgmodel.Generator, map[string]pkgmodel.GeneratorKey, error) {
+	if len(ksuids) == 0 {
+		return nil, nil, nil
+	}
+
+	lookup := generatorLookup(m.Datastore)
+	keyByKsuid := make(map[string]pkgmodel.GeneratorKey, len(ksuids))
+	generators := make([]pkgmodel.Generator, 0, len(ksuids))
+	for ksuid := range ksuids {
+		generator, err := lookup(ksuid)
+		if err != nil {
+			return nil, nil, fmt.Errorf("failed to resolve generator %s: %w", ksuid, err)
+		}
+		if generator == nil {
+			slog.Warn("A generator-bound property names a generator that no longer exists",
+				"generator", ksuid)
+			continue
+		}
+		keyByKsuid[ksuid] = pkgmodel.GeneratorKey{
+			Label: generator.GetLabel(),
+			Stack: generator.GetStack(),
+		}
+		generators = append(generators, generator)
+	}
+
+	slices.SortFunc(generators, func(a, b pkgmodel.Generator) int {
+		return cmp.Or(
+			cmp.Compare(a.GetStack(), b.GetStack()),
+			cmp.Compare(a.GetLabel(), b.GetLabel()),
+		)
+	})
+	return generators, keyByKsuid, nil
 }
 
 func (m *Metastructure) ListDrift(stack string) (*apimodel.ModifiedStack, error) {
@@ -1195,14 +1553,14 @@ func (m *Metastructure) ListDrift(stack string) (*apimodel.ModifiedStack, error)
 
 	modifiedResources := make([]apimodel.ResourceModification, 0, len(modifications))
 	for _, modification := range modifications {
-		modifiedResources = append(modifiedResources, apimodel.ResourceModification(modification))
+		modifiedResources = append(modifiedResources, drift.ToAPIResourceModification(modification))
 	}
 
 	return &apimodel.ModifiedStack{ModifiedResources: modifiedResources}, nil
 }
 
 func (m *Metastructure) ForceSync() error {
-	if err := m.Node.Send(gen.Atom("Synchronizer"), Synchronize{Once: true}); err != nil {
+	if err := m.Node.Send(gen.Atom("Synchronizer"), Synchronize{}); err != nil {
 		slog.Error(fmt.Sprintf("Failed to send message to Synchronizer: %v", err))
 		return err
 	}
@@ -1211,7 +1569,7 @@ func (m *Metastructure) ForceSync() error {
 }
 
 func (m *Metastructure) ForceDiscovery() error {
-	if err := m.Node.Send(gen.Atom("Discovery"), discovery.Discover{Once: true}); err != nil {
+	if err := m.Node.Send(gen.Atom("Discovery"), discovery.Discover{}); err != nil {
 		slog.Error(fmt.Sprintf("Failed to send message to Discovery: %v", err))
 		return err
 	}
@@ -1219,7 +1577,21 @@ func (m *Metastructure) ForceDiscovery() error {
 	return nil
 }
 
-func (m *Metastructure) ForceAutoReconcile(stackLabel string) (*apimodel.ForceReconcileResponse, error) {
+// ForceReap triggers a single, immediate TargetReaper tick: it advances the
+// unreachability-accrual clock for every currently-unreachable target,
+// detects reap candidates, and (subject to the per-tick rate cap — see
+// TargetReaper) actually reaps them. Exists so workflow tests can drive a
+// deterministic tick without waiting for the reaper's interval to elapse.
+func (m *Metastructure) ForceReap() error {
+	if err := m.Node.Send(gen.Atom(actornames.TargetReaper), target_reaper.CheckUnreachableTargets{}); err != nil {
+		slog.Error(fmt.Sprintf("Failed to send message to TargetReaper: %v", err))
+		return err
+	}
+
+	return nil
+}
+
+func (m *Metastructure) ForceAutoReconcile(stackLabel string, subject string, subjectName string) (*apimodel.ForceReconcileResponse, error) {
 	m.commandMu.Lock()
 	defer m.commandMu.Unlock()
 
@@ -1265,7 +1637,11 @@ func (m *Metastructure) ForceAutoReconcile(stackLabel string) (*apimodel.ForceRe
 	}
 
 	// Prepare the reconcile command and changeset
-	result, err := prepareReconcile(m.Datastore, stackLabel, "force-reconcile")
+	// A force-reconcile is user-initiated: stamping it SourceUser is what
+	// keeps the CommandID returned below resolvable through the ordinary
+	// `command status` / get-command-status path, which only shows
+	// user-initiated commands.
+	result, err := prepareReconcile(m.Datastore, stackLabel, "force-reconcile", subject, subjectName, forma_command.SourceUser)
 	if err != nil {
 		return nil, err
 	}
@@ -1422,21 +1798,6 @@ func (m *Metastructure) ReRunIncompleteCommands() error {
 			continue
 		}
 
-		// If all resource updates already reached a terminal state, the command
-		// just needs its own state updated — no changeset execution needed.
-		// This happens when the agent crashed after all CRUD ops completed but
-		// before the command transitioned to a final state.
-		if len(pendingUpdates) == 0 {
-			_, err := m.callActor(
-				gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
-				forma_persister.FinalizeIncompleteCommand{CommandID: fa.ID},
-			)
-			if err != nil {
-				slog.Error("Failed to finalize incomplete command", "commandID", fa.ID, "error", err)
-			}
-			continue
-		}
-
 		var pendingTargetUpdates []target_update.TargetUpdate
 		for _, tu := range fa.TargetUpdates {
 			if tu.State == target_update.TargetUpdateStateNotStarted {
@@ -1447,7 +1808,32 @@ func (m *Metastructure) ReRunIncompleteCommands() error {
 		// Build the changeset from only the pending (non-terminal) resource
 		// updates. Terminal resources are excluded so they don't create
 		// phantom dependency links in the new changeset's pipeline.
-		cs, _ := changeset.NewChangeset(pendingUpdates, pendingTargetUpdates, fa.ID, pkgmodel.CommandApply)
+		synth, synthErr := target_update.SynthesizeResolveTargetUpdates(
+			resource_update.ReferencedTargetLabels(pendingUpdates),
+			resource_update.SourceTargetByKsuid(pendingUpdates),
+			pendingTargetUpdates, m.Datastore)
+		if synthErr != nil {
+			slog.Error("Failed to build changeset for incomplete forma command, skipping", "commandID", fa.ID, "error", synthErr)
+			continue
+		}
+		// A draw is meaningless outside the changeset it produced a value for:
+		// the value was never persisted, so an interrupted command cannot
+		// replay it and has to draw again for whatever it still owes. That is
+		// the same synthesis the planning path runs, over the surviving
+		// destinations, so the rule that suppresses a stable binding applies
+		// here unchanged and a credential the interrupted command never meant
+		// to touch is not rotated by the resume.
+		draws, drawErr := generator_update.SynthesizeDrawGeneratorUpdates(
+			pendingUpdates, nil, generatorLookup(m.Datastore))
+		if drawErr != nil {
+			slog.Error("Failed to build changeset for incomplete forma command, skipping", "commandID", fa.ID, "error", drawErr)
+			continue
+		}
+		cs, err := changeset.NewChangeset(pendingUpdates, append(pendingTargetUpdates, synth...), draws, fa.ID, pkgmodel.CommandApply, fa.Config.Mode)
+		if err != nil {
+			slog.Error("Failed to build changeset for incomplete forma command, skipping", "commandID", fa.ID, "error", err)
+			continue
+		}
 
 		m.Node.Log().Debug("Starting ChangesetExecutor of changeset from incomplete forma command commandID=%s", fa.ID)
 		_, err = m.callActor(
@@ -1471,6 +1857,160 @@ func (m *Metastructure) ReRunIncompleteCommands() error {
 	}
 
 	return nil
+}
+
+// generatorLookupByTranslation is the planning path's route from a $gen
+// envelope's KSUID to the generator holding its spec. Translation has just
+// resolved every $gen this command saw into genKeyToKsuid, so the label and
+// stack a datastore load needs are already in hand.
+func generatorLookupByTranslation(
+	genKeyToKsuid map[pkgmodel.GeneratorKey]string,
+	ds datastore.Datastore,
+) func(string) (pkgmodel.Generator, error) {
+	if ds == nil {
+		return nil
+	}
+	keyByKsuid := make(map[string]pkgmodel.GeneratorKey, len(genKeyToKsuid))
+	for key, ksuid := range genKeyToKsuid {
+		keyByKsuid[ksuid] = key
+	}
+	return func(ksuid string) (pkgmodel.Generator, error) {
+		key, ok := keyByKsuid[ksuid]
+		if !ok {
+			return nil, nil
+		}
+		stored, err := ds.GetGenerator(key.Label, key.Stack)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load generator %q in stack %q: %w", key.Label, key.Stack, err)
+		}
+		if stored == nil {
+			return nil, nil
+		}
+		// The stack the row was found under is authoritative for the draw op,
+		// whatever the serialized spec happens to carry.
+		stored.SetStack(key.Stack)
+		return stored, nil
+	}
+}
+
+// generatorLookup is the route to the same thing for every caller that holds
+// only a KSUID: resuming a command, whose translation map lived in the
+// planning call's stack frame and is long gone, and extracting a stored
+// document, whose $gen envelopes have never carried anything else.
+//
+// The KSUID is enough. GeneratorIdentity has no Label or Stack field, but its
+// GenerationSpec IS the serialized generator the current generation was drawn
+// under, and that carries both. So GetGeneratorIdentityByID gives the spec,
+// parsing it gives (label, stack), and GetGenerator on that pair gives the
+// generator as it stands NOW — which is what a draw must run under, not the
+// spec the last generation happened to use. Two existing interface methods,
+// no new datastore surface, one lookup per KSUID.
+//
+// GenerationSpec is nil until something has been drawn, so a generator that
+// has never drawn cannot be reached that way. For that case only, every stack
+// is enumerated and each generator's label resolved to its KSUID. A generator
+// belongs to one stack and is meant to be referenced from others, so the
+// search cannot be narrowed to the stacks the surviving destinations sit on:
+// that is precisely the cross-stack binding the design is built around, and
+// narrowing it leaves the destination refused at the provider boundary. The
+// index is built once, on the first miss, so the ordinary case pays nothing
+// for it.
+func generatorLookup(ds datastore.Datastore) func(string) (pkgmodel.Generator, error) {
+	if ds == nil {
+		return nil
+	}
+	var neverDrawnByKsuid map[string]pkgmodel.Generator
+	return func(ksuid string) (pkgmodel.Generator, error) {
+		generator, err := generatorByKsuid(ksuid, ds)
+		if err != nil || generator != nil {
+			return generator, err
+		}
+		if neverDrawnByKsuid == nil {
+			neverDrawnByKsuid, err = neverDrawnGeneratorsByKsuid(ds)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return neverDrawnByKsuid[ksuid], nil
+	}
+}
+
+// generatorByKsuid resolves a generator KSUID to the generator that holds it,
+// through the generation spec its identity carries. A nil generator and a nil
+// error mean the KSUID reaches no generator this way — either none exists, or
+// none has drawn yet and there is therefore no spec to read a label and stack
+// out of.
+func generatorByKsuid(ksuid string, ds datastore.Datastore) (pkgmodel.Generator, error) {
+	identity, err := ds.GetGeneratorIdentityByID(ksuid)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve the identity of generator %s: %w", ksuid, err)
+	}
+	if len(identity.GenerationSpec) == 0 {
+		return nil, nil
+	}
+	drawnUnder, err := pkgmodel.ParseGenerator(identity.GenerationSpec)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse the generation spec of generator %s: %w", ksuid, err)
+	}
+	label, stack := drawnUnder.GetLabel(), drawnUnder.GetStack()
+	if label == "" || stack == "" {
+		return nil, nil
+	}
+	// The CURRENT generator, not the spec the last generation was drawn
+	// under: an edited spec must be what the next value is drawn from.
+	stored, err := ds.GetGenerator(label, stack)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load generator %q in stack %q: %w", label, stack, err)
+	}
+	if stored == nil {
+		return nil, nil
+	}
+	stored.SetStack(stack)
+	return stored, nil
+}
+
+// neverDrawnGeneratorsByKsuid indexes every live generator by its KSUID. It
+// is the fallback for a generator that has never drawn, whose identity
+// therefore carries no spec to read a label and stack out of, and which no
+// (label, stack) pair in hand can name.
+//
+// The whole inventory is walked because the KSUID is all there is to go on: a
+// generator's stack is not derivable from its destinations', and the
+// cross-stack binding is the case this exists to serve. It costs one stack
+// listing plus a load and an identity read per generator, once per lookup
+// that has such a generator, which is a rare path over a small table.
+//
+// The stack the row was found under is stamped on each generator, since that
+// is what the draw op is filed under and a serialized spec need not carry it.
+func neverDrawnGeneratorsByKsuid(ds datastore.Datastore) (map[string]pkgmodel.Generator, error) {
+	stacks, err := ds.ListAllStacks()
+	if err != nil {
+		return nil, fmt.Errorf("failed to list the stacks to search for generators: %w", err)
+	}
+
+	byKsuid := make(map[string]pkgmodel.Generator)
+	for _, stack := range stacks {
+		if stack == nil || stack.Label == "" {
+			continue
+		}
+		generators, err := ds.LoadGeneratorsByStack(stack.Label)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load the generators of stack %q: %w", stack.Label, err)
+		}
+		for _, generator := range generators {
+			identity, err := ds.GetGeneratorIdentity(generator.GetLabel(), stack.Label)
+			if err != nil {
+				return nil, fmt.Errorf("failed to resolve the identity of generator %q in stack %q: %w",
+					generator.GetLabel(), stack.Label, err)
+			}
+			if identity.ID == "" {
+				continue
+			}
+			generator.SetStack(stack.Label)
+			byKsuid[identity.ID] = generator
+		}
+	}
+	return byKsuid, nil
 }
 
 func (m *Metastructure) checkForConflictingCommands(commandStackLabels []string) error {
@@ -1509,27 +2049,81 @@ func (m *Metastructure) checkForConflictingCommands(commandStackLabels []string)
 	return nil
 }
 
-// stackLabelsFromForma extracts unique stack labels from a forma's resources.
-func stackLabelsFromForma(forma *pkgmodel.Forma) []string {
-	seen := make(map[string]bool)
-	var labels []string
+// checkForReapedTargets rejects an apply that references a reaped target it does
+// not re-declare. It collects every target label the forma touches (via a
+// resource's Target or an explicit target declaration), asks the datastore which
+// of those are currently reaped, and rejects with a TargetReapedError for any
+// reaped target that the forma does not re-declare. Re-declared targets are the
+// recovery path and pass through untouched.
+func (m *Metastructure) checkForReapedTargets(forma *pkgmodel.Forma) error {
+	redeclared := make(map[string]bool)
+	for _, t := range forma.Targets {
+		redeclared[t.Label] = true
+	}
+
+	touched := make(map[string]bool)
+	var touchedLabels []string
+	addTouched := func(label string) {
+		if label == "" || touched[label] {
+			return
+		}
+		touched[label] = true
+		touchedLabels = append(touchedLabels, label)
+	}
 	for _, r := range forma.Resources {
-		if !seen[r.Stack] {
-			seen[r.Stack] = true
-			labels = append(labels, r.Stack)
+		addTouched(r.Target)
+	}
+	for _, t := range forma.Targets {
+		addTouched(t.Label)
+	}
+
+	if len(touchedLabels) == 0 {
+		return nil
+	}
+
+	reaped, err := m.Datastore.CheckTargetsReaped(touchedLabels)
+	if err != nil {
+		return fmt.Errorf("failed to check reaped targets: %w", err)
+	}
+
+	var unsafe []string
+	for _, label := range reaped {
+		if !redeclared[label] {
+			unsafe = append(unsafe, label)
 		}
 	}
-	return labels
+	if len(unsafe) > 0 {
+		return apimodel.TargetReapedError{TargetLabels: unsafe}
+	}
+
+	return nil
 }
 
 // findCascadeStackLabels returns stack labels that would be affected by cascade
 // deletes for the given forma's resources. It queries the datastore for
 // cross-stack dependents of resources being destroyed.
 func (m *Metastructure) findCascadeStackLabels(forma *pkgmodel.Forma) ([]string, error) {
+	// Client-submitted formas carry no ksuids, only (stack, label, type)
+	// triplets — resolve those against the datastore so the dependents walk
+	// actually has roots. Without this the walk is empty for every destroy
+	// that arrives over the API, and the admission conflict check never sees
+	// the stacks a cascade delete will touch.
 	currentLevel := make([]string, 0)
+	var unresolved []pkgmodel.TripletKey
 	for _, r := range forma.Resources {
 		if r.Ksuid != "" {
 			currentLevel = append(currentLevel, r.Ksuid)
+			continue
+		}
+		unresolved = append(unresolved, pkgmodel.TripletKey{Stack: r.Stack, Label: r.Label, Type: r.Type})
+	}
+	if len(unresolved) > 0 {
+		resolved, err := m.Datastore.BatchGetKSUIDsByTriplets(unresolved)
+		if err != nil {
+			return nil, err
+		}
+		for _, ksuid := range resolved {
+			currentLevel = append(currentLevel, ksuid)
 		}
 	}
 	if len(currentLevel) == 0 {
@@ -1704,64 +2298,6 @@ func findCascadeTargetDeletes(
 	return cascadeTargetUpdates, cascadeResourceUpdates, nil
 }
 
-// filterUnabsorbedModifications returns only those modifications that have NOT been
-// absorbed into the provided forma. A modification is considered absorbed when:
-//   - The forma contains a resource with matching stack, type, and label
-//   - No resource update was generated for that resource (i.e. its properties already
-//     match the current state in the datastore)
-//
-// This prevents false drift rejection when the user has already incorporated
-// out-of-band changes into their forma (e.g. via extract) before applying.
-func filterUnabsorbedModifications(
-	modifications []datastore.ResourceModification,
-	forma *pkgmodel.Forma,
-	fa *forma_command.FormaCommand,
-) []datastore.ResourceModification {
-	// Build a set of resources that have pending updates in the FormaCommand
-	type resourceKey struct {
-		stack    string
-		typeName string
-		label    string
-	}
-	resourcesWithUpdates := make(map[resourceKey]struct{})
-	for _, ru := range fa.ResourceUpdates {
-		resourcesWithUpdates[resourceKey{
-			stack:    ru.StackLabel,
-			typeName: ru.DesiredState.Type,
-			label:    ru.DesiredState.Label,
-		}] = struct{}{}
-	}
-
-	// Build a set of resources present in the forma
-	formaResources := make(map[resourceKey]struct{})
-	for _, r := range forma.Resources {
-		formaResources[resourceKey{
-			stack:    r.Stack,
-			typeName: r.Type,
-			label:    r.Label,
-		}] = struct{}{}
-	}
-
-	var unabsorbed []datastore.ResourceModification
-	for _, mod := range modifications {
-		key := resourceKey{
-			stack:    mod.Stack,
-			typeName: mod.Type,
-			label:    mod.Label,
-		}
-		// A modification is absorbed if:
-		// 1. The resource is present in the forma, AND
-		// 2. No resource update was generated for it (properties match current state)
-		_, inForma := formaResources[key]
-		_, hasUpdate := resourcesWithUpdates[key]
-		if inForma && !hasUpdate {
-			continue // absorbed
-		}
-		unabsorbed = append(unabsorbed, mod)
-	}
-	return unabsorbed
-}
-
 func formaTouchesStacks(forma *forma_command.FormaCommand, stackLabels []string) bool {
 	formaStackLabels := forma.GetStackLabels()
 	for _, formaStackLabel := range formaStackLabels {
@@ -1793,14 +2329,20 @@ func (m *Metastructure) checkIfPatchCanBeApplied(command *forma_command.FormaCom
 	return nil
 }
 
-// checkForEmptyStackCreation validates that no new stacks are being created without resources.
-// Empty stacks are automatically cleaned up when the last resource is removed, so creating
-// them manually is not allowed.
+// checkForEmptyStackCreation validates that no new stacks are being created without resources
+// or generators. Empty stacks are automatically cleaned up when the last resource is removed,
+// so creating them manually is not allowed — but a generator is content too: a stack whose
+// only declared member is a generator is exactly the case the generator lifecycle is meant to
+// support (see the GeneratorOnlyStackKeepsExistingResources regression test), so it must not
+// be rejected as empty.
 func checkForEmptyStackCreation(command *forma_command.FormaCommand) error {
-	// Build a set of stacks that have resources in this command
+	// Build a set of stacks that have resources or generators in this command
 	stacksWithResources := make(map[string]bool)
 	for _, ru := range command.ResourceUpdates {
 		stacksWithResources[ru.StackLabel] = true
+	}
+	for _, gu := range command.GeneratorUpdates {
+		stacksWithResources[gu.StackLabel] = true
 	}
 
 	// Check if any stack update is creating a new stack without resources
@@ -1825,7 +2367,10 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 	command pkgmodel.Command,
 	ds datastore.Datastore,
 	clientID string,
-	source resource_update.FormaCommandSource) (*forma_command.FormaCommand, error) {
+	subject string,
+	subjectName string,
+	source resource_update.FormaCommandSource,
+	syncInterval time.Duration) (*forma_command.FormaCommand, error) {
 
 	if formaCommandConfig.Mode == "" {
 		formaCommandConfig.Mode = pkgmodel.FormaApplyModePatch
@@ -1836,19 +2381,37 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 		return nil, fmt.Errorf("failed to load targets: %w", err)
 	}
 
+	// Reject opaque resolvables embedded in string fields before translation.
+	// Must run pre-translation because translation drops $visibility from $res
+	// envelopes, making a post-translation check unable to see the opaque flag.
+	if err := validateNoOpaqueEmbed(forma); err != nil {
+		return nil, err
+	}
+
 	// Translate $res triplet references to $ref KSUID URIs in both resource
 	// properties and target configs. Must happen before GenerateTargetUpdates
 	// so that target config resolvables can be extracted.
 	doTranslate := source != resource_update.FormaCommandSourceSynchronize &&
 		source != resource_update.FormaCommandSourceDiscovery &&
 		command != pkgmodel.CommandDestroy
+	// genKeyToKsuid carries the KSUIDs translation resolved for this
+	// command's own declared generators through to GenerateGeneratorUpdates
+	// below, so a generator created by this same command gets the exact
+	// KSUID any $gen reference to it was translated to, instead of
+	// CreateGenerator minting an independent one. Left nil on a path that
+	// skips translation (Sync/Discovery/Destroy never declare generators).
+	var genKeyToKsuid map[pkgmodel.GeneratorKey]string
 	if doTranslate {
-		if _, err := resource_update.TranslateFormaeReferencesToKsuid(forma, ds); err != nil {
+		var err error
+		if _, genKeyToKsuid, err = resource_update.TranslateFormaeReferencesToKsuid(forma, ds); err != nil {
 			return nil, fmt.Errorf("failed to translate references to KSUID: %w", err)
 		}
 	}
 
-	targetUpdates, err := target_update.NewTargetUpdateGenerator(ds).GenerateTargetUpdates(forma.Targets, command, len(forma.Resources) > 0)
+	minReapDuration := reaping.DeriveMinReapDuration(reaping.DeriveMaxBeatGap(syncInterval))
+	targetUpdates, err := target_update.NewTargetUpdateGenerator(ds).
+		WithMinReapDuration(minReapDuration).
+		GenerateTargetUpdates(forma.Targets, command, len(forma.Resources) > 0)
 	if err != nil {
 		return nil, err
 	}
@@ -1871,7 +2434,7 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 		}
 	}
 
-	resourceUpdates, err := resource_update.GenerateResourceUpdates(forma, command, formaCommandConfig.Mode, source, existingTargets, ds, replacedTargets, deletedTargets)
+	resourceUpdates, err := resource_update.GenerateResourceUpdates(forma, command, formaCommandConfig.Mode, source, existingTargets, ds, replacedTargets, deletedTargets, formaCommandConfig.Force)
 	if err != nil {
 		if requiredFieldsErr, ok := err.(apimodel.RequiredFieldMissingOnCreateError); ok {
 			return nil, requiredFieldsErr
@@ -1892,6 +2455,67 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 		if err != nil {
 			return nil, fmt.Errorf("failed to find cascade target deletes: %w", err)
 		}
+
+		// Default to abort: deleting a resource that a target's config references
+		// (e.g. a secret) would cascade-delete that target and its resources. Unless
+		// the command carries on-dependents=cascade, reject it and name the
+		// dependents — mirroring the resource/stack cascade-abort default. Simulation
+		// still surfaces the cascades so the client can show them and prompt the user.
+		if len(cascadeTargetUpdates) > 0 &&
+			!formaCommandConfig.Simulate &&
+			formaCommandConfig.OnDependents != "cascade" {
+			dependents := make([]apimodel.TargetDependent, 0, len(cascadeTargetUpdates))
+			for _, tu := range cascadeTargetUpdates {
+				dependents = append(dependents, apimodel.TargetDependent{
+					TargetLabel:   tu.Target.Label,
+					CascadeSource: tu.CascadeSource,
+				})
+			}
+			return nil, apimodel.FormaTargetHasDependentsError{Dependents: dependents}
+		}
+
+		// Same default-abort for resource-to-resource cascades: deleting a resource
+		// whose CreateOnly field another resource references cascade-deletes that
+		// dependent (possibly in another stack — findCascadeDeletes matches by ref
+		// URI across all managed stacks). These IsCascade deletes are already folded
+		// into resourceUpdates by the generator. Gate them server-side too, so a
+		// non-CLI caller cannot tear down dependents without on-dependents=cascade;
+		// the CLI still surfaces them via simulation and elevates on confirmation.
+		//
+		// Exclude the resource's own target being torn down: a resource deleted
+		// because its target is destroyed in this same command (the generator also
+		// marks that IsCascade, with CascadeSource = the target) is the expected
+		// consequence of an explicit target destroy, not a surprising dependency
+		// cascade, so it must not require opt-in.
+		if !formaCommandConfig.Simulate && formaCommandConfig.OnDependents != "cascade" {
+			targetsBeingDeleted := make(map[string]bool)
+			for i := range targetUpdates {
+				if targetUpdates[i].Operation == target_update.TargetOperationDelete {
+					targetsBeingDeleted[targetUpdates[i].Target.Label] = true
+				}
+			}
+			for i := range cascadeTargetUpdates {
+				targetsBeingDeleted[cascadeTargetUpdates[i].Target.Label] = true
+			}
+
+			var resourceDependents []apimodel.ResourceDependent
+			for i := range resourceUpdates {
+				ru := &resourceUpdates[i]
+				if ru.IsCascade && ru.Operation == resource_update.OperationDelete &&
+					!targetsBeingDeleted[ru.DesiredState.Target] {
+					resourceDependents = append(resourceDependents, apimodel.ResourceDependent{
+						ResourceLabel: ru.DesiredState.Label,
+						ResourceType:  ru.DesiredState.Type,
+						Stack:         ru.DesiredState.Stack,
+						CascadeSource: ru.CascadeSource,
+					})
+				}
+			}
+			if len(resourceDependents) > 0 {
+				return nil, apimodel.FormaResourceHasDependentsError{Dependents: resourceDependents}
+			}
+		}
+
 		targetUpdates = append(targetUpdates, cascadeTargetUpdates...)
 		resourceUpdates = append(resourceUpdates, cascadeResourceUpdates...)
 	}
@@ -1901,12 +2525,118 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 		return nil, err
 	}
 
-	policyUpdates, err := policy_update.NewPolicyUpdateGenerator(ds).GeneratePolicyUpdates(forma, command)
+	policyUpdates, err := policy_update.NewPolicyUpdateGenerator(ds).GeneratePolicyUpdates(forma, command, formaCommandConfig.Mode)
 	if err != nil {
 		return nil, err
 	}
 
-	return forma_command.NewFormaCommand(
+	generatorUpdates, err := generator_update.NewGeneratorUpdateGenerator(ds).GenerateGeneratorUpdates(forma, command, formaCommandConfig.Mode, genKeyToKsuid)
+	if err != nil {
+		return nil, err
+	}
+
+	// A destroy plans no generator work of its own — the generator diff has
+	// nothing to diff against, since a destroy's forma is a list of rows to
+	// remove — so the generators its stacks own are derived from the resource
+	// deletes instead. Doing it here, beside the reconcile-driven deletes the
+	// diff produced, is what lets one check below judge both arms.
+	if command == pkgmodel.CommandDestroy {
+		destroyGeneratorDeletes, err := generatorDeletesForDestroy(resourceUpdates, ds)
+		if err != nil {
+			return nil, err
+		}
+		generatorUpdates = append(generatorUpdates, destroyGeneratorDeletes...)
+	}
+
+	// The draws are derived from the DESTINATIONS that still need a value,
+	// not from the generator diff above: a generator whose spec is unchanged
+	// produces no GeneratorUpdate, yet a resource newly bound to it still
+	// needs a value drawn. genKeyToKsuid is what maps a translated $gen
+	// envelope's KSUID back to the generator it names.
+	//
+	// A destroy never draws: it writes no property, and its generators go
+	// with the stack. DestroyForma passes no draws to its changeset either,
+	// so computing them here would only cost a datastore read per referenced
+	// generator and leave a populated field on a command that must never use
+	// it.
+	var drawGeneratorUpdates []generator_update.GeneratorUpdate
+	if command != pkgmodel.CommandDestroy {
+		drawGeneratorUpdates, err = generator_update.SynthesizeDrawGeneratorUpdates(
+			resourceUpdates, generatorUpdates, generatorLookupByTranslation(genKeyToKsuid, ds))
+		if err != nil {
+			return nil, err
+		}
+
+		// A draw reaches the destinations that are nodes in the changeset and
+		// no others, so every live destination of a drawing generator that
+		// this forma declares must be planned — including the ones the
+		// ordinary pass suppressed because nothing about them moved. Without
+		// this the new destination takes the new generation and the applied
+		// one keeps the old, and no later apply can level them.
+		//
+		// The order here is what keeps the feedback loop open. The drawing set
+		// is derived from the planned updates, and co-planning ADDS updates,
+		// so re-deriving it over the widened plan could make a co-planned
+		// resource's other, stable bindings look like they need a draw and
+		// rotate a credential nobody touched. drawGeneratorUpdates is computed
+		// once, above, from the ordinary pass, and is never recomputed.
+		liveDestinations, err := liveGeneratorDestinations(drawGeneratorUpdates, ds)
+		if err != nil {
+			return nil, err
+		}
+		coPlanKsuids := generatorDestinationsToCoPlan(liveDestinations, resourceUpdates, forma)
+		coPlanned, err := resource_update.CoPlanGeneratorDestinations(
+			forma, coPlanKsuids, formaCommandConfig.Mode, source, existingTargets, ds, formaCommandConfig.Force)
+		if err != nil {
+			return nil, err
+		}
+		resourceUpdates = append(resourceUpdates, coPlanned...)
+
+		// What is left unreachable after co-planning is what the forma does
+		// not declare at all, which is what the refusal exists for.
+		if err := refuseUnreachableGeneratorDestinations(
+			drawGeneratorUpdates, liveDestinations, resourceUpdates); err != nil {
+			return nil, err
+		}
+
+		// A draw that CAN reach every destination can still be a draw nothing
+		// downstream will accept. This runs after the reach refusal so the
+		// graph it walks is the settled one: every live destination of a
+		// drawing generator is either planned or already refused above.
+		if err := refuseSetOnceGeneratorFields(
+			drawGeneratorUpdates, liveDestinations, resourceUpdates, ds); err != nil {
+			return nil, err
+		}
+	}
+
+	// Default to abort on a generator delete with dependents: a resource left
+	// bound to a deleted generator can never be given a value again, because
+	// formae keeps a hash of a drawn value and never the value. Unless the
+	// command carries on-dependents=cascade, reject it and name the
+	// dependents, mirroring the target and resource cascade-abort defaults
+	// above.
+	//
+	// A destroy's SIMULATION is let through carrying the cascade, exactly as
+	// those two are, so the CLI can render what would go and elevate to
+	// cascade on the operator's confirmation. An apply's is not: --on-dependents
+	// is a destroy flag, so there is no confirmation that could make the same
+	// plan applicable, and rendering a plan that can never be applied is worse
+	// than a refusal naming what is in the way.
+	generatorCascade, generatorDependents, err := planGeneratorDeleteCascade(
+		generatorUpdates, resourceUpdates, existingTargets, source, ds)
+	if err != nil {
+		return nil, err
+	}
+	if len(generatorDependents) > 0 {
+		elevated := formaCommandConfig.OnDependents == "cascade"
+		surfacing := formaCommandConfig.Simulate && command == pkgmodel.CommandDestroy
+		if !elevated && !surfacing {
+			return nil, apimodel.FormaGeneratorHasDependentsError{Dependents: generatorDependents}
+		}
+		resourceUpdates = append(resourceUpdates, generatorCascade...)
+	}
+
+	fc := forma_command.NewFormaCommand(
 		forma,
 		formaCommandConfig,
 		command,
@@ -1914,8 +2644,223 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 		targetUpdates,
 		stackUpdates,
 		policyUpdates,
+		generatorUpdates,
 		clientID,
-	), nil
+		subject,
+		subjectName,
+		forma_command.SourceUser,
+	)
+	fc.DrawGeneratorUpdates = drawGeneratorUpdates
+
+	return fc, nil
+}
+
+// liveGeneratorDestinations indexes, per drawing generator, the live resources
+// the datastore records as bound to it.
+//
+// The read is done once and handed to both passes that need it. Co-planning
+// and the refusal ask the same question of the same rows a moment apart —
+// which of a drawing generator's live destinations the command reaches — and
+// separating the read from the two decisions keeps each of them a decision
+// over data rather than a datastore round trip of its own.
+//
+// One draw exists per generator KSUID (SynthesizeDrawGeneratorUpdates derives
+// them from a deduplicated set), so the KSUID is a key. A generator with no
+// live destination at all is absent rather than present-and-empty: neither
+// caller has anything to say about it.
+func liveGeneratorDestinations(
+	draws []generator_update.GeneratorUpdate,
+	ds datastore.Datastore,
+) (map[string][]*pkgmodel.Resource, error) {
+	if len(draws) == 0 {
+		return nil, nil
+	}
+
+	destinations := make(map[string][]*pkgmodel.Resource, len(draws))
+	for i := range draws {
+		generator := draws[i].Generator
+		if generator == nil || generator.GetID() == "" {
+			continue
+		}
+		indexed, err := ds.FindResourcesReferencingGenerator(generator.GetID())
+		if err != nil {
+			return nil, fmt.Errorf("failed to find the resources bound to generator %q in stack %q: %w",
+				generator.GetLabel(), draws[i].StackLabel, err)
+		}
+		if len(indexed) == 0 {
+			continue
+		}
+		destinations[generator.GetID()] = indexed
+	}
+
+	return destinations, nil
+}
+
+// generatorDestinationsToCoPlan returns the KSUIDs of the resources this
+// command must plan on a draw's account: a live destination of a generator
+// that is going to draw, declared by the forma being applied, that the
+// ordinary planning pass produced no update for.
+//
+// The declaration test is by KSUID, which translation has already resolved on
+// both sides — a forma resource carries the KSUID of the row it matches, and
+// the index answers with the row. A destination the forma does not declare is
+// deliberately left out: it cannot be planned from a declaration that is not
+// there, and it is precisely what refuseUnreachableGeneratorDestinations
+// refuses the command for.
+//
+// A resource the ordinary pass already planned is never co-planned either.
+// The two passes emit whole ResourceUpdates and the changeset keeps one node
+// per operation URI, so a second update for one resource would be dropped on
+// the floor with nothing terminalizing it. That is the same reach question the
+// refusal asks, so both read it from resource_update.ResourceKsuidsInCommand.
+//
+// liveDestinations is indexed from the drawing set derived by the ORIGINAL
+// planning pass. Nothing here may recompute that set over the updates
+// co-planning adds; see the call site.
+func generatorDestinationsToCoPlan(
+	liveDestinations map[string][]*pkgmodel.Resource,
+	resourceUpdates []resource_update.ResourceUpdate,
+	forma *pkgmodel.Forma,
+) map[string]bool {
+	if len(liveDestinations) == 0 {
+		return nil
+	}
+
+	declared := make(map[string]bool, len(forma.Resources))
+	for i := range forma.Resources {
+		if ksuid := forma.Resources[i].Ksuid; ksuid != "" {
+			declared[ksuid] = true
+		}
+	}
+	if len(declared) == 0 {
+		return nil
+	}
+
+	inCommand := resource_update.ResourceKsuidsInCommand(resourceUpdates)
+
+	var coPlan map[string]bool
+	for _, indexed := range liveDestinations {
+		for _, destination := range indexed {
+			if destination == nil || inCommand[destination.Ksuid] || !declared[destination.Ksuid] {
+				continue
+			}
+			if coPlan == nil {
+				coPlan = make(map[string]bool)
+			}
+			coPlan[destination.Ksuid] = true
+		}
+	}
+
+	return coPlan
+}
+
+// refuseUnreachableGeneratorDestinations rejects a command that would draw a
+// generator's value while reaching only some of the resources bound to it.
+//
+// formae keeps a hash of a drawn value, never the value, so a destination
+// that was not in the command when the draw happened can never be brought
+// level afterwards: the only way to give it a value is to draw again, which
+// puts its siblings behind. That oscillation has no fixed point, so the
+// command is refused instead, naming the destinations it cannot reach.
+//
+// Reach is a property of the graph: a destination with a planned update is
+// reached by the command whatever its desired document now says about the
+// binding, which is why this reads resource_update.ResourceKsuidsInCommand
+// rather than the bindings. An apply that unbinds one destination while
+// drawing for another writes both of them, and refusing it would be a refusal
+// of something perfectly deliverable.
+//
+// Which STACKS the destinations sit on is irrelevant. A command carries all
+// of a forma's resource updates, so an apply spanning several stacks reaches
+// every destination in them; what is refused is an apply reaching only part
+// of a drawing generator's destination set.
+//
+// It runs AFTER co-planning, and that is what leaves it a narrow job. A
+// destination the applied forma declares is pulled into the command by
+// generatorDestinationsToCoPlan whether or not anything about it moved, so
+// what reaches this check is the destination the forma does not declare at
+// all — a consumer in another stack the operator did not apply. Running it
+// before co-planning would refuse an apply that merely adds a second
+// destination to a generator, since the applied destination beside it has
+// nothing to plan on its own account.
+//
+// The list is sorted before it goes into the error. It is read by an operator
+// who has to go and find each destination, and none of the datastore backends
+// order the rows they answer with, so two runs of the same refused apply would
+// otherwise name the same destinations in a different order.
+//
+// Two boundaries this deliberately does not cross:
+//
+//   - It is an admission check for a NEW command only. ReRunIncompleteCommands
+//     rebuilds a changeset from what a crashed command still owes, which is
+//     deliberately a SUBSET of the original destinations, so checking there
+//     would refuse every resumed command whose fan-out was partly done.
+//   - A destroy never draws, so its caller never computes draws to check.
+//
+// It DOES fire under simulation. The cascade aborts nearby skip simulation so
+// the CLI can render the cascade and the operator elevate on confirmation;
+// there is no confirmation that makes a split draw correct, and rendering a
+// plan that can never be applied is worse than a refusal naming what is
+// missing.
+func refuseUnreachableGeneratorDestinations(
+	draws []generator_update.GeneratorUpdate,
+	liveDestinations map[string][]*pkgmodel.Resource,
+	resourceUpdates []resource_update.ResourceUpdate,
+) error {
+	if len(liveDestinations) == 0 {
+		return nil
+	}
+
+	inCommand := resource_update.ResourceKsuidsInCommand(resourceUpdates)
+
+	var unreachable []apimodel.UnreachableGeneratorDestination
+	for i := range draws {
+		generator := draws[i].Generator
+		if generator == nil {
+			continue
+		}
+		for _, destination := range liveDestinations[generator.GetID()] {
+			if destination == nil || inCommand[destination.Ksuid] {
+				continue
+			}
+			unreachable = append(unreachable, apimodel.UnreachableGeneratorDestination{
+				GeneratorLabel: generator.GetLabel(),
+				GeneratorStack: draws[i].StackLabel,
+				Stack:          destination.Stack,
+				Label:          destination.Label,
+				Type:           destination.Type,
+			})
+		}
+	}
+	if len(unreachable) == 0 {
+		return nil
+	}
+	slices.SortFunc(unreachable, func(a, b apimodel.UnreachableGeneratorDestination) int {
+		return cmp.Or(
+			strings.Compare(a.GeneratorStack, b.GeneratorStack),
+			strings.Compare(a.GeneratorLabel, b.GeneratorLabel),
+			strings.Compare(a.Stack, b.Stack),
+			strings.Compare(a.Label, b.Label),
+			strings.Compare(a.Type, b.Type),
+		)
+	})
+	return apimodel.FormaGeneratorDestinationsUnreachableError{Unreachable: unreachable}
+}
+
+// RegisteredPlugins returns plugins currently registered with the
+// PluginCoordinator. Used by Stats() and by the plugins API handler to
+// surface plugins the agent has loaded but orbital has no record of
+// (the `make install` from a plugin repo case).
+func (m *Metastructure) RegisteredPlugins() ([]messages.RegisteredPluginInfo, error) {
+	result, err := m.callActor(gen.ProcessID{Name: actornames.PluginCoordinator, Node: m.Node.Name()}, messages.GetRegisteredPlugins{})
+	if err != nil {
+		return nil, err
+	}
+	r, ok := result.(messages.GetRegisteredPluginsResult)
+	if !ok {
+		return nil, fmt.Errorf("unexpected response type %T from PluginCoordinator", result)
+	}
+	return r.Plugins, nil
 }
 
 func (m *Metastructure) Stats() (*apimodel.Stats, error) {
@@ -1924,25 +2869,32 @@ func (m *Metastructure) Stats() (*apimodel.Stats, error) {
 		return nil, fmt.Errorf("failed to get stats from datastore: %w", err)
 	}
 
-	// Get registered plugins from PluginCoordinator
-	var plugins []apimodel.PluginInfo
-	result, err := m.callActor(gen.ProcessID{Name: actornames.PluginCoordinator, Node: m.Node.Name()}, messages.GetRegisteredPlugins{})
-	if err == nil {
-		if pluginsResult, ok := result.(messages.GetRegisteredPluginsResult); ok {
-			for _, p := range pluginsResult.Plugins {
-				plugins = append(plugins, apimodel.PluginInfo{
-					Namespace:               p.Namespace,
-					Version:                 p.Version,
-					NodeName:                p.NodeName,
-					MaxRequestsPerSecond:    p.MaxRequestsPerSecond,
-					ResourceCount:           p.ResourceCount,
-					ResourceTypesToDiscover: p.ResourceTypesToDiscover,
-					RetryConfig:             p.RetryConfig,
-					LabelConfig:             &p.LabelConfig,
-					DiscoveryFilters:        p.DiscoveryFilters,
-				})
-			}
-		}
+	registered, regErr := m.RegisteredPlugins()
+	if regErr != nil {
+		// A registry hiccup shouldn't take down /stats; the rest of the
+		// payload is still useful. Log and continue with no plugins.
+		slog.Warn("plugin registry lookup failed; stats response will omit plugins", "error", regErr)
+	}
+	plugins := make([]apimodel.PluginInfo, 0, len(registered))
+	for _, p := range registered {
+		plugins = append(plugins, apimodel.PluginInfo{
+			Namespace:               p.Namespace,
+			Version:                 p.Version,
+			NodeName:                p.NodeName,
+			MaxRequestsPerSecond:    p.MaxRequestsPerSecond,
+			ResourceCount:           p.ResourceCount,
+			ResourceTypesToDiscover: p.ResourceTypesToDiscover,
+			RetryConfig:             p.RetryConfig,
+			LabelConfig:             &p.LabelConfig,
+			DiscoveryFilters:        p.DiscoveryFilters,
+		})
+	}
+
+	reapPending, reaped, reapErr := m.reapTargetCounts()
+	if reapErr != nil {
+		// Same posture as the plugin registry lookup above: don't fail the
+		// whole /stats response over this, just omit the counts.
+		slog.Warn("failed to compute reap-pending/reaped target counts; stats response will report zero", "error", reapErr)
 	}
 
 	return &apimodel.Stats{
@@ -1956,9 +2908,37 @@ func (m *Metastructure) Stats() (*apimodel.Stats, error) {
 		UnmanagedResources: stats.UnmanagedResources,
 		Targets:            stats.Targets,
 		ResourceTypes:      stats.ResourceTypes,
-		ResourceErrors:     stats.ResourceErrors,
 		Plugins:            plugins,
+		ReapPendingTargets: reapPending,
+		ReapedTargets:      reaped,
 	}, nil
+}
+
+// reapTargetCounts derives the reap-pending and reaped target counts for the
+// stats surface directly from LoadAllTargets (implemented identically across
+// every datastore backend), so no per-backend Stats() query is needed. See
+// TargetReapStatus for what "reap-pending" means.
+func (m *Metastructure) reapTargetCounts() (reapPending, reaped int, err error) {
+	targets, err := m.Datastore.LoadAllTargets()
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to load targets: %w", err)
+	}
+
+	for _, target := range targets {
+		status, statusErr := target_reaper.TargetReapStatus(target)
+		if statusErr != nil {
+			slog.Warn("failed to resolve reap status for target; skipping from stats", "target", target.Label, "error", statusErr)
+			continue
+		}
+		switch status {
+		case pkgmodel.TargetHealthStateReapPending:
+			reapPending++
+		case pkgmodel.TargetHealthStateReaped:
+			reaped++
+		}
+	}
+
+	return reapPending, reaped, nil
 }
 
 func extractKSUIDs(jsonStr string, ksuidSet map[string]struct{}) {
@@ -1993,20 +2973,34 @@ func extractKSUIDs(jsonStr string, ksuidSet map[string]struct{}) {
 	})
 }
 
-// replaceKSUIDs recursively walks the JSON structure and replaces all $ref objects
-// (containing formae URIs) with $res objects (containing resolved resource metadata).
-func replaceKSUIDs(jsonStr string, ksuidToTriplet map[string]pkgmodel.TripletKey) string {
+// replaceKSUIDs recursively walks the JSON structure and replaces the internal
+// identifiers a stored document names things by with the names an author
+// writes: a $ref object (containing a formae URI) becomes a $res object
+// (containing resolved resource metadata), and a $gen envelope's generator
+// KSUID becomes the generator's label and stack.
+func replaceKSUIDs(
+	jsonStr string,
+	ksuidToTriplet map[string]pkgmodel.TripletKey,
+	generatorKeyByKsuid map[string]pkgmodel.GeneratorKey,
+) string {
 	var replace func(value any) any
 	replace = func(value any) any {
 		switch v := value.(type) {
 		case map[string]any:
+			// A $gen envelope is recognized before anything else: at rest it
+			// also carries $value, $visibility and $strategy, which is the
+			// shape of a recorded opaque value, and it must never be read as
+			// one.
+			if isGen, ok := v["$gen"].(bool); ok && isGen {
+				return authorGenEnvelope(v, generatorKeyByKsuid)
+			}
 			// Check if this is a $ref object that needs conversion
 			if ref, ok := v["$ref"].(string); ok {
 				formaeUri := pkgmodel.FormaeURI(ref)
 				if ksuid := formaeUri.KSUID(); ksuid != "" {
 					if triplet, ok := ksuidToTriplet[ksuid]; ok {
 						dollarValue, _ := v["$value"].(string)
-						return map[string]any{
+						rewritten := map[string]any{
 							"$res":      true,
 							"$label":    triplet.Label,
 							"$type":     triplet.Type,
@@ -2014,7 +3008,37 @@ func replaceKSUIDs(jsonStr string, ksuidToTriplet map[string]pkgmodel.TripletKey
 							"$property": formaeUri.PropertyPath(),
 							"$value":    dollarValue,
 						}
+						// The selector is part of what the reference means: it
+						// names the sub-key of the referenced property. Dropping
+						// it would extract a reference to the whole document, so
+						// re-applying the extracted forma would write that
+						// document where one of its members belongs. Provenance
+						// keys are deliberately not carried over: they record
+						// formae's own writes and are stripped from any incoming
+						// forma.
+						if selector, ok := v["$json"].(string); ok && selector != "" {
+							rewritten["$json"] = selector
+						}
+						return rewritten
 					}
+				}
+			}
+			// Rewrite framed envelopes inside $embed.$template spans
+			if isEmbed, _ := v["$embed"].(bool); isEmbed {
+				if tmpl, ok := v["$template"].(string); ok {
+					result := make(map[string]any, len(v))
+					for key, val := range v {
+						result[key] = replace(val)
+					}
+					result["$template"] = rewriteEmbedSpans(tmpl, func(env map[string]any) map[string]any {
+						rewritten, ok := replace(env).(map[string]any)
+						if !ok {
+							// defensive: replace returned a non-map; leave the span unchanged
+							return env
+						}
+						return rewritten
+					})
+					return result
 				}
 			}
 			// Recursively process all values in the map
@@ -2046,4 +3070,166 @@ func replaceKSUIDs(jsonStr string, ksuidToTriplet map[string]pkgmodel.TripletKey
 		return jsonStr
 	}
 	return string(result)
+}
+
+// authoredGenEnvelopeMembers are the members of a $gen envelope beyond the
+// $gen marker itself that a forma author writes. They are the fixed members
+// the PKL class formae.GeneratorOutput declares, and therefore the whole of
+// what an extracted envelope may carry. Everything else a stored envelope
+// holds — the $generator KSUID, the digest in $value, the $hashed marker, the
+// $resolvedFrom provenance and the $strategy — is agent-internal.
+var authoredGenEnvelopeMembers = []string{"$label", "$stack", "$output", "$visibility"}
+
+// authorGenEnvelope rewrites one $gen envelope into the shape an author wrote
+// it in: the generator named by label and stack, and none of the internal
+// parts translation and resolution added.
+//
+// An envelope that already names its generator by label and stack (one that
+// was never translated) passes through with those names intact, so the
+// rewrite is idempotent.
+//
+// A $generator KSUID that resolves to no live generator is kept. The envelope
+// is unauthorable either way, and the KSUID is then the only thing left that
+// says which generator it named. The internal members are dropped regardless:
+// none of them is authorable, and the digest must not reach a file the
+// operator commits.
+func authorGenEnvelope(envelope map[string]any, generatorKeyByKsuid map[string]pkgmodel.GeneratorKey) map[string]any {
+	authored := map[string]any{"$gen": true}
+	for _, member := range authoredGenEnvelopeMembers {
+		if value, ok := envelope[member]; ok {
+			authored[member] = value
+		}
+	}
+
+	ksuid, _ := envelope["$generator"].(string)
+	if ksuid == "" {
+		return authored
+	}
+	if key, ok := generatorKeyByKsuid[ksuid]; ok {
+		authored["$label"] = key.Label
+		authored["$stack"] = key.Stack
+		return authored
+	}
+	authored["$generator"] = ksuid
+	return authored
+}
+
+// rewriteEmbedSpans scans a $embed.$template string for framed RS<base64>US spans,
+// applies fn to each decoded envelope (as a map), re-encodes, and splices back.
+// Spans are replaced in reverse offset order so earlier offsets remain valid.
+// On scan error the original template is returned unchanged.
+func rewriteEmbedSpans(tmpl string, fn func(map[string]any) map[string]any) string {
+	spans, err := pkgmodel.ScanEmbedSpans(tmpl)
+	if err != nil || len(spans) == 0 {
+		return tmpl
+	}
+
+	// Work backwards so byte offsets of earlier spans stay valid.
+	for i := len(spans) - 1; i >= 0; i-- {
+		span := spans[i]
+		var env map[string]any
+		if jsonErr := json.Unmarshal([]byte(span.EnvelopeJSON), &env); jsonErr != nil {
+			continue
+		}
+		rewritten := fn(env)
+		rewrittenJSON, marshalErr := json.Marshal(rewritten)
+		if marshalErr != nil {
+			continue
+		}
+		framed := pkgmodel.FrameEnvelope(string(rewrittenJSON))
+		tmpl = tmpl[:span.Start] + framed + tmpl[span.End:]
+	}
+	return tmpl
+}
+
+// validateNoOpaqueEmbed rejects any forma whose resource properties or target
+// configs contain a $embed field whose $template carries a framed span for an
+// envelope with $visibility == "Opaque". Both a $res naming an opaque property
+// and a $gen bound to a generator carry that visibility, so the check covers
+// each of them without naming either: it reads $visibility and nothing else.
+//
+// v1 limitation: once an opaque value is assembled into a string the structured
+// span needed for redaction is lost, so we hard-reject it at plan time rather
+// than silently leaking secrets.
+//
+// This MUST run before translation (doTranslate) because translation replaces
+// $res envelopes with {"$ref":…} and drops $visibility.
+func validateNoOpaqueEmbed(forma *pkgmodel.Forma) error {
+	for i := range forma.Resources {
+		r := &forma.Resources[i]
+		if err := validateNoOpaqueEmbedInJSON(r.Properties, r.Label); err != nil {
+			return err
+		}
+	}
+	for i := range forma.Targets {
+		t := &forma.Targets[i]
+		if err := validateNoOpaqueEmbedInJSON(t.Config, t.Label); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateNoOpaqueEmbedInJSON walks all JSON objects in raw looking for
+// {"$embed":true, "$template":"…"} nodes, scans each template for framed
+// spans, and returns an error if any span envelope carries "$visibility":"Opaque".
+func validateNoOpaqueEmbedInJSON(raw json.RawMessage, label string) error {
+	if len(raw) == 0 {
+		return nil
+	}
+	result := gjson.ParseBytes(raw)
+	return walkForOpaqueEmbed(result, label, "")
+}
+
+func walkForOpaqueEmbed(val gjson.Result, label, path string) error {
+	if val.IsArray() {
+		// Recurse into each array element; mirror how the resolver's extractFromJson
+		// handles IsArray() so that embedded opaques nested in arrays are caught.
+		var childErr error
+		val.ForEach(func(key, child gjson.Result) bool {
+			childPath := key.String()
+			if path != "" {
+				childPath = path + "." + childPath
+			}
+			if err := walkForOpaqueEmbed(child, label, childPath); err != nil {
+				childErr = err
+				return false
+			}
+			return true
+		})
+		return childErr
+	}
+	if !val.IsObject() {
+		return nil
+	}
+	// Check if this object is an embed node.
+	if val.Get("$embed").Bool() {
+		tmpl := val.Get("$template")
+		if tmpl.Type == gjson.String {
+			spans, err := pkgmodel.ScanEmbedSpans(tmpl.String())
+			if err != nil {
+				return fmt.Errorf("corrupt embed template in field %q on %q: %w", path, label, err)
+			}
+			for _, span := range spans {
+				visibility := gjson.Get(span.EnvelopeJSON, "$visibility")
+				if visibility.String() == pkgmodel.VisibilityOpaque {
+					return fmt.Errorf("opaque values cannot be embedded in string fields (field %q on %q): a secret assembled into a larger string can no longer be redacted, so bind it to its own field instead", path, label)
+				}
+			}
+		}
+	}
+	// Recurse into all child values.
+	var childErr error
+	val.ForEach(func(key, child gjson.Result) bool {
+		childPath := key.String()
+		if path != "" {
+			childPath = path + "." + childPath
+		}
+		if err := walkForOpaqueEmbed(child, label, childPath); err != nil {
+			childErr = err
+			return false
+		}
+		return true
+	})
+	return childErr
 }

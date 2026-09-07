@@ -102,6 +102,7 @@ func (h *TestHarness) ResetAgentState(t *testing.T) {
 		forma, err := h.client.ExtractResources("managed:true")
 		if err != nil || forma == nil || len(forma.Resources) == 0 {
 			t.Logf("ResetAgentState: inventory clean (attempt %d)", attempt+1)
+			h.resetOutOfBandState(t)
 			return
 		}
 
@@ -130,7 +131,7 @@ func (h *TestHarness) ResetAgentState(t *testing.T) {
 			h.dumpRawResourceRows(t, forma.Resources, seen)
 		}
 
-		resp, err := h.client.DestroyForma(forma, false, clientID)
+		resp, err := h.client.DestroyForma(forma, false, "abort", clientID)
 		if err != nil {
 			t.Logf("ResetAgentState: destroy returned: %v (attempt %d)", err, attempt+1)
 			time.Sleep(500 * time.Millisecond)
@@ -166,13 +167,60 @@ func (h *TestHarness) ResetAgentState(t *testing.T) {
 		require.Fail(t, "ResetAgentState: inventory not empty after %d cleanup attempts", maxCleanupAttempts)
 	}
 
-	// Phase 3: Best-effort cleanup of orphaned cloud state entries.
-	// A partially-failed command can leave resources in the cloud that were
-	// never persisted to inventory. The agent destroy above only targets
-	// inventory-tracked resources, so orphans survive. Remove them directly.
+	// Phase 3: Best-effort cleanup of out-of-band leftovers.
 	// Note: stale ResourceUpdaters from a prior rapid iteration may create
 	// cloud resources AFTER this cleanup (see checkResourceInvariantsWithRetry).
-	h.cleanupOrphanedCloudState(t)
+	h.resetOutOfBandState(t)
+}
+
+// resetOutOfBandState clears everything a previous iteration's out-of-band
+// activity can leave behind, so each iteration starts from a clean slate:
+//
+//   - cloud entries with no managed inventory row: a partially-failed command
+//     can leave resources in the cloud that were never persisted, and an
+//     out-of-band create the iteration never discovered stays cloud-only. With
+//     discovery live, a leftover would otherwise be ingested next iteration as
+//     an unexpected unmanaged resource.
+//   - unmanaged inventory rows: discovery ingests out-of-band resources into
+//     the $unmanaged stack, and the managed-only destroy above cannot remove
+//     them. Their cloud entries were just swept, so a forced sync absorbs the
+//     deletions and drops the rows.
+func (h *TestHarness) resetOutOfBandState(t *testing.T) {
+	t.Helper()
+	h.cleanupOrphanedCloudState(t, nil)
+
+	const maxPurgeAttempts = 3
+	for attempt := range maxPurgeAttempts {
+		_, unmanaged, err := h.extractManagedAndUnmanagedInventory()
+		if err != nil {
+			t.Logf("resetOutOfBandState: could not read unmanaged inventory: %v", err)
+			return
+		}
+		if len(unmanaged) == 0 {
+			return
+		}
+		baseline := h.SyncCommandBaseline()
+		if err := h.client.ForceSync(); err != nil {
+			t.Logf("resetOutOfBandState: ForceSync failed: %v", err)
+			return
+		}
+		if _, ok := h.WaitForSyncCommandAfter(baseline, 10*time.Second, 30*time.Second); !ok {
+			t.Logf("resetOutOfBandState: no sync command observed (attempt %d)", attempt+1)
+		}
+		deadline := time.Now().Add(10 * time.Second)
+		for time.Now().Before(deadline) {
+			_, unmanaged, err = h.extractManagedAndUnmanagedInventory()
+			if err == nil && len(unmanaged) == 0 {
+				return
+			}
+			time.Sleep(150 * time.Millisecond)
+		}
+	}
+	_, unmanaged, _ := h.extractManagedAndUnmanagedInventory()
+	for _, res := range unmanaged {
+		t.Logf("  remaining unmanaged resource: %s (nativeID=%s)", res.Label, res.NativeID)
+	}
+	require.Fail(t, "ResetAgentState: unmanaged inventory not empty after purge attempts")
 }
 
 // cleanupOrphanedCloudState removes cloud state entries that have no
@@ -181,7 +229,14 @@ func (h *TestHarness) ResetAgentState(t *testing.T) {
 // leaves resources in the cloud that were never persisted to inventory (e.g.
 // a sibling failed after the plugin created the resource but before the
 // ResourcePersister stored it).
-func (h *TestHarness) cleanupOrphanedCloudState(t *testing.T) int {
+//
+// spareNativeIDs names cloud entries that are not in inventory by design and
+// must survive the sweep: out-of-band unmanaged resources the model tracks
+// and expects discovery to ingest later. ResetAgentState passes nil (a new
+// iteration starts clean); mid-iteration callers pass the model's tracked
+// set, or the sweep would delete resources a later discovery is expected to
+// find.
+func (h *TestHarness) cleanupOrphanedCloudState(t *testing.T, spareNativeIDs map[string]bool) int {
 	t.Helper()
 
 	cloudState, err := h.TryGetCloudStateSnapshot()
@@ -203,6 +258,9 @@ func (h *TestHarness) cleanupOrphanedCloudState(t *testing.T) int {
 	// Delete cloud state entries not in inventory
 	cleaned := 0
 	for nativeID := range cloudState {
+		if spareNativeIDs[nativeID] {
+			continue
+		}
 		if !inventoryNativeIDs[nativeID] {
 			h.DeleteCloudState(t, nativeID)
 			t.Logf("ResetAgentState: cleaned up orphaned cloud resource %s", nativeID)
@@ -212,48 +270,44 @@ func (h *TestHarness) cleanupOrphanedCloudState(t *testing.T) int {
 	return cleaned
 }
 
-// waitForAllCommandsTerminal polls until no commands (from any client) are
-// in a non-terminal state (InProgress, Pending). This prevents the next
-// rapid iteration from racing with leftover commands from a prior iteration
-// or background commands (auto-reconcile, sync).
+// waitForAllCommandsTerminal polls until no command is in a non-terminal
+// state. This prevents the next rapid iteration from racing with leftover
+// commands from a prior iteration or with background scheduler commands
+// (sync, discovery, auto-reconcile, stack expiry).
+//
+// It reads the agent's datastore rather than the command-status API on
+// purpose: the API shows only user-initiated commands, so an API-based check
+// would declare quiescence while a scheduler command is still mid-flight —
+// exactly the commands that conflict with cleanup.
 func (h *TestHarness) waitForAllCommandsTerminal(t *testing.T, timeout time.Duration) {
 	t.Helper()
 
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		// Check for ANY non-terminal commands, including background
-		// auto-reconcile and sync commands that can conflict with cleanup.
-		allDone := true
-		for _, status := range []string{"InProgress", "Pending"} {
-			resp, err := h.client.GetFormaCommandsStatus("status:"+status, clientID, 100)
-			if err != nil {
-				// API error — transient, retry.
-				allDone = false
-				break
-			}
-			if resp != nil && len(resp.Commands) > 0 {
-				allDone = false
-				break
-			}
-		}
-		if allDone {
+		inFlight, err := h.nonTerminalCommandsFromDB()
+		if err == nil && len(inFlight) == 0 {
 			return
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
 
 	// Log which commands are still running for diagnostics.
-	for _, status := range []string{"InProgress", "Pending"} {
-		resp, _ := h.client.GetFormaCommandsStatus("status:"+status, clientID, 100)
-		if resp != nil {
-			for _, cmd := range resp.Commands {
-				t.Logf("waitForAllCommandsTerminal: stuck command %s state=%s command=%s resourceUpdates=%d",
-					cmd.CommandID, cmd.State, cmd.Command, len(cmd.ResourceUpdates))
-				for _, ru := range cmd.ResourceUpdates {
-					t.Logf("  resource %s (%s/%s) operation=%s state=%s",
-						ru.ResourceID, ru.StackName, ru.ResourceLabel, ru.Operation, ru.State)
-				}
-			}
+	inFlight, err := h.nonTerminalCommandsFromDB()
+	if err != nil {
+		t.Logf("waitForAllCommandsTerminal: could not read in-flight commands: %v", err)
+	}
+	for _, stuck := range inFlight {
+		cmd, err := h.commandFromDB(stuck.CommandID)
+		if err != nil || cmd == nil {
+			t.Logf("waitForAllCommandsTerminal: stuck command %s state=%s command=%s",
+				stuck.CommandID, stuck.State, stuck.Command)
+			continue
+		}
+		t.Logf("waitForAllCommandsTerminal: stuck command %s state=%s command=%s resourceUpdates=%d",
+			cmd.CommandID, cmd.State, cmd.Command, len(cmd.ResourceUpdates))
+		for _, ru := range cmd.ResourceUpdates {
+			t.Logf("  resource %s (%s/%s) operation=%s state=%s",
+				ru.ResourceID, ru.StackName, ru.ResourceLabel, ru.Operation, ru.State)
 		}
 	}
 	require.Fail(t, "ResetAgentState: timed out waiting for all commands to reach terminal state")
@@ -326,20 +380,21 @@ func (h *TestHarness) reconcileCompletedAcceptedCommands(t *testing.T, model *St
 	var completed []completedCmd
 	remaining := make([]AcceptedCommand, 0, len(model.AcceptedCommands))
 	for _, ac := range model.AcceptedCommands {
-		statusResp, err := h.client.GetFormaCommandsStatus("id:"+ac.CommandID, clientID, 1)
-		if err != nil || statusResp == nil || len(statusResp.Commands) == 0 {
+		// Scheduler commands are absent from the user-command API. Use the
+		// same persisted outcomes as the final drain for every accepted command.
+		cmd, err := h.commandFromDB(ac.CommandID)
+		if err != nil || cmd == nil {
 			remaining = append(remaining, ac)
 			continue
 		}
 
-		cmd := statusResp.Commands[0]
 		h.ObserveCommandState(t, cmd.CommandID, cmd.State)
 		if cmd.State != "Success" && cmd.State != "Failed" && cmd.State != "Canceled" {
 			remaining = append(remaining, ac)
 			continue
 		}
 
-		completed = append(completed, completedCmd{ac: ac, cmd: cmd})
+		completed = append(completed, completedCmd{ac: ac, cmd: *cmd})
 	}
 
 	// Process completed commands in REVERSE order (most recent first) so
@@ -349,8 +404,7 @@ func (h *TestHarness) reconcileCompletedAcceptedCommands(t *testing.T, model *St
 	for i := len(completed) - 1; i >= 0; i-- {
 		cc := completed[i]
 		t.Logf("reconcileCompletedAcceptedCommands: command %s completed early (state=%s)", cc.ac.CommandID, cc.cmd.State)
-		correctModelFromCommandOutcome(t, &cc.cmd, model, model.Pool, cc.ac.Snapshots, corrected, cc.ac.IsReconcile)
-		h.reconcileManagedDriftOverriddenByCommand(t, model, &cc.cmd)
+		correctModelFromCommandOutcome(t, &cc.cmd, model, model.Pool, cc.ac.Snapshots, corrected, cc.ac.IsReconcile, cc.ac.SupersededSlots, cc.ac.Rename)
 	}
 
 	model.AcceptedCommands = remaining
@@ -393,11 +447,7 @@ func (h *TestHarness) AssertAllInvariants(t *testing.T, model ...*StateModel) {
 	// ResetAgentState, creating cloud resources that haven't been persisted
 	// to inventory yet. When orphans are found, we clean them up and
 	// re-check. If the orphan persists across retries, it's a real bug.
-	var ignoreManagedDriftNativeIDs map[string]bool
-	if len(model) > 0 && model[0] != nil {
-		ignoreManagedDriftNativeIDs = model[0].ManagedDriftNativeIDs()
-	}
-	resourceViolations := h.checkResourceInvariantsWithRetry(t, ignoreNativeIDs, ignoreManagedDriftNativeIDs)
+	resourceViolations := h.checkResourceInvariantsWithRetry(t, ignoreNativeIDs, model...)
 	violations = append(violations, resourceViolations...)
 	if opLog, err := h.TryGetOperationLog(); err == nil {
 		violations = append(violations, CheckOperationLogInvariants(opLog)...)
@@ -416,7 +466,6 @@ func (h *TestHarness) AssertAllInvariants(t *testing.T, model ...*StateModel) {
 		}
 		modelViolations := CheckModelVsInventory(model[0], inventory)
 		modelViolations = append(modelViolations, CheckUnmanagedModelVsInventory(model[0], unmanagedInventory)...)
-		modelViolations = append(modelViolations, CheckManagedDriftVsInventory(model[0], inventory)...)
 		if len(modelViolations) > 0 {
 			t.Logf("MODEL MISMATCH DEBUG: inventory has %d resources", len(inventory))
 			for _, res := range inventory {
@@ -427,6 +476,13 @@ func (h *TestHarness) AssertAllInvariants(t *testing.T, model ...*StateModel) {
 			}
 		}
 		violations = append(violations, modelViolations...)
+	}
+
+	// Violations detected while correcting the model from command outcomes
+	// (identity changes, dropped renames) surface here.
+	if len(model) > 0 && model[0] != nil {
+		violations = append(violations, model[0].PendingViolations...)
+		model[0].PendingViolations = nil
 	}
 
 	for _, v := range violations {
@@ -440,7 +496,7 @@ func (h *TestHarness) AssertAllInvariants(t *testing.T, model ...*StateModel) {
 // prior rapid iterations can create cloud resources after ResetAgentState;
 // these resolve themselves once the stale operations complete and the cloud
 // entries are cleaned. Genuine invariant bugs persist across retries.
-func (h *TestHarness) checkResourceInvariantsWithRetry(t *testing.T, ignoreNativeIDs map[string]bool, ignoreManagedDriftNativeIDs map[string]bool) []Violation {
+func (h *TestHarness) checkResourceInvariantsWithRetry(t *testing.T, ignoreNativeIDs map[string]bool, model ...*StateModel) []Violation {
 	t.Helper()
 
 	const maxRetries = 3
@@ -463,7 +519,13 @@ func (h *TestHarness) checkResourceInvariantsWithRetry(t *testing.T, ignoreNativ
 			h.RestartAgent(t, 30*time.Second)
 			continue
 		}
-		resourceViolations := CheckInvariants(inventory, cloudState, ignoreNativeIDs, ignoreManagedDriftNativeIDs)
+		resourceViolations := CheckInvariants(inventory, cloudState, ignoreNativeIDs)
+		// RFC-0041: also assert rename invariants whenever the model has
+		// recorded a rename. The check is a no-op when no PreviousLabel is
+		// set anywhere; cheap to run unconditionally.
+		if len(model) > 0 && model[0] != nil {
+			resourceViolations = append(resourceViolations, CheckRenameInvariants(model[0], inventory)...)
+		}
 
 		if len(resourceViolations) == 0 {
 			return nil
@@ -495,7 +557,7 @@ func (h *TestHarness) checkResourceInvariantsWithRetry(t *testing.T, ignoreNativ
 		// All violations are orphans — likely stale operations completing.
 		// Clean up and wait before retrying.
 		t.Logf("checkResourceInvariants: found %d orphans (attempt %d), cleaning up and retrying", len(resourceViolations), attempt+1)
-		h.cleanupOrphanedCloudState(t)
+		h.cleanupOrphanedCloudState(t, ignoreNativeIDs)
 		time.Sleep(3 * time.Second)
 	}
 
@@ -525,25 +587,21 @@ func (h *TestHarness) extractManagedAndUnmanagedInventory() ([]pkgmodel.Resource
 
 // waitAndCheckCommandCompleteness polls until all commands from this client are
 // in a terminal state, returning any remaining violations if the deadline expires.
+//
+// The query is spelled out as `client:me` rather than left empty: this check
+// is about the commands this client submitted, and an empty query means
+// something else entirely (the agent's whole command history, or a single
+// most-recent command, depending on scope). A client that has submitted
+// nothing yields an empty result, which is vacuously terminal.
 func (h *TestHarness) waitAndCheckCommandCompleteness(t *testing.T, timeout time.Duration) []Violation {
 	t.Helper()
 
 	deadline := time.Now().Add(timeout)
-	sawCommands := false
 	for time.Now().Before(deadline) {
-		statusResp, err := h.client.GetFormaCommandsStatus("", clientID, 100)
+		statusResp, err := h.client.GetFormaCommandsStatus("client:me", clientID, 100, apimodel.CommandScopeAgent)
 		if err != nil {
-			if !sawCommands {
-				// The API returns 500 when no commands exist for the client.
-				// Treat as vacuously terminal.
-				return nil
-			}
 			time.Sleep(200 * time.Millisecond)
 			continue
-		}
-
-		if len(statusResp.Commands) > 0 {
-			sawCommands = true
 		}
 
 		var commands []CommandState
@@ -562,7 +620,7 @@ func (h *TestHarness) waitAndCheckCommandCompleteness(t *testing.T, timeout time
 	}
 
 	// Timed out — dump details of stuck commands for diagnosis
-	statusResp, err := h.client.GetFormaCommandsStatus("", clientID, 100)
+	statusResp, err := h.client.GetFormaCommandsStatus("client:me", clientID, 100, apimodel.CommandScopeAgent)
 	if err != nil {
 		return nil // Can't query commands — assume terminal
 	}
@@ -649,10 +707,10 @@ func inventoryFingerprint(managed []pkgmodel.Resource, unmanaged []pkgmodel.Reso
 	return b.String()
 }
 
-func (h *TestHarness) waitForUnmanagedInventoryExpectations(t *testing.T, model *StateModel, timeout time.Duration) {
+func (h *TestHarness) waitForUnmanagedInventoryExpectations(t *testing.T, model *StateModel, timeout time.Duration) bool {
 	t.Helper()
 	if model == nil {
-		return
+		return true
 	}
 
 	hasExpected := false
@@ -663,18 +721,19 @@ func (h *TestHarness) waitForUnmanagedInventoryExpectations(t *testing.T, model 
 		}
 	}
 	if !hasExpected {
-		return
+		return true
 	}
 
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		_, unmanagedInventory, err := h.extractManagedAndUnmanagedInventory()
 		if err == nil && len(CheckUnmanagedModelVsInventory(model, unmanagedInventory)) == 0 {
-			return
+			return true
 		}
 		time.Sleep(150 * time.Millisecond)
 	}
 	t.Logf("waitForUnmanagedInventoryExpectations: timed out after %v", timeout)
+	return false
 }
 
 // applyCommandOutcomeToModel uses per-resource-update status from a completed
@@ -766,15 +825,14 @@ func resolveResourceUpdateSlot(model *StateModel, pool *ResourcePool, ru apimode
 		return -1, -1
 	}
 
+	// Use LabelForResource so a slot renamed via OpRename matches against the
+	// resource update's current label rather than the slot's index-derived
+	// default. Without this a post-rename outcome (destroy of renamed-X,
+	// update on renamed-X, etc.) never finds its slot and the model fails to
+	// transition.
 	slotIdx := -1
 	for idx := range model.Stack(stackIdx).Resources {
-		var label string
-		if pool != nil {
-			label = pool.LabelForStack(model.Stack(stackIdx).Label, idx)
-		} else {
-			label = resourceLabelForStack(model.Stack(stackIdx).Label, idx)
-		}
-		if label == ru.ResourceLabel {
+		if model.LabelForResource(stackIdx, idx) == ru.ResourceLabel {
 			slotIdx = idx
 			break
 		}
@@ -880,7 +938,7 @@ func applyReconcileGuarantee(model *StateModel, stackIdx int, reconcileIDs []int
 // first) by DrainPendingCommands. The corrected map tracks which resources
 // have already been corrected by a later command — earlier commands skip
 // those resources so the latest outcome wins.
-func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *StateModel, pool *ResourcePool, snapshots []ResourceSnapshot, corrected map[struct{ stackIdx, slotIdx int }]bool, isReconcile bool) {
+func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *StateModel, pool *ResourcePool, snapshots []ResourceSnapshot, corrected map[struct{ stackIdx, slotIdx int }]bool, isReconcile bool, superseded map[ResourceSlotRef]bool, rename *PendingRename) {
 	t.Helper()
 
 	if cmd == nil {
@@ -888,6 +946,31 @@ func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *
 	}
 
 	type slotKey = struct{ stackIdx, slotIdx int }
+
+	// RFC-0041: a successful command that carried a rename overlay must have
+	// performed it as an in-place UPDATE of the existing resource at its new
+	// label. A destroy+recreate shows up as a create RU at the new label
+	// instead, and a dropped alias makes the engine treat the new label as a
+	// brand-new resource (also a create). Identity stability of the update
+	// itself (NativeID/KSUID unchanged) is checked in the update case below.
+	if rename != nil && cmd.State == "Success" {
+		found := false
+		for _, ru := range cmd.ResourceUpdates {
+			if ru.State == "Success" && ru.Operation == "update" && ru.ResourceLabel == rename.NewLabel {
+				found = true
+				break
+			}
+		}
+		if !found {
+			model.AddPendingViolation(Violation{
+				Kind: ViolationRenameRecreatedResource,
+				Message: fmt.Sprintf(
+					"command %s succeeded but contains no update RU at the renamed label %q (was %q, stack %s) — the rename was dropped or executed as destroy+recreate",
+					cmd.CommandID, rename.NewLabel, rename.OldLabel, model.Stack(rename.StackIndex).Label,
+				),
+			})
+		}
+	}
 
 	// Log all resource updates for debugging.
 	t.Logf("correctModelFromCommandOutcome: cmd=%s state=%s has %d snapshots, %d resource updates",
@@ -912,6 +995,15 @@ func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *
 
 		key := slotKey{stackIdx, slotIdx}
 
+		// Skip slots whose outcome in this command was superseded by a later
+		// event (a TTL destroy observed outside the drain's command list).
+		if superseded[ResourceSlotRef{StackIndex: stackIdx, SlotIndex: slotIdx}] {
+			t.Logf("correctModelFromCommandOutcome: skipping stack=%s slot=%d (superseded by TTL destroy)",
+				model.Stack(stackIdx).Label, slotIdx)
+			delete(snapBySlot, key)
+			continue
+		}
+
 		// Skip if a later command already corrected this resource.
 		if corrected[key] {
 			t.Logf("correctModelFromCommandOutcome: skipping stack=%s slot=%d (already corrected by later command)",
@@ -923,6 +1015,16 @@ func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *
 		if ru.State == "Success" {
 			switch ru.Operation {
 			case "create":
+				// A delete can only succeed on an incarnation that already
+				// existed, so a create RU carrying the NativeID a folded
+				// delete removed predates that delete — regardless of which
+				// command completed first. Folding it would resurrect a slot
+				// the agent has already destroyed.
+				if ru.NativeID != "" && model.DeletedNativeID(stackIdx, slotIdx) == ru.NativeID {
+					t.Logf("correctModelFromCommandOutcome: skipping stale create stack=%s slot=%d (incarnation %s already deleted by a previously folded command)",
+						model.Stack(stackIdx).Label, slotIdx, ru.NativeID)
+					goto markDone
+				}
 				model.ClearAuthoritativeSlot(stackIdx, slotIdx)
 				props := ""
 				if ru.Properties != nil {
@@ -930,15 +1032,40 @@ func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *
 				}
 				model.ApplyCreated(stackIdx, []int{slotIdx}, props)
 				model.SetNativeID(stackIdx, slotIdx, ru.NativeID)
+				model.SetKsuid(stackIdx, slotIdx, ru.ResourceID)
 			case "delete":
 				model.ApplyDestroyed(stackIdx, []int{slotIdx})
 				model.MarkAuthoritativeSlot(stackIdx, slotIdx)
+				model.SetDeletedNativeID(stackIdx, slotIdx, ru.NativeID)
 				model.ClearNativeID(stackIdx, slotIdx)
+				model.ClearKsuid(stackIdx, slotIdx)
 			case "update":
 				// Don't let updates override authoritative slots (e.g. TTL destroy).
 				// Only creates can clear authoritative status.
 				if model.IsAuthoritativeSlot(stackIdx, slotIdx) {
 					goto markDone
+				}
+				// RFC-0041: an update never changes a resource's identity —
+				// that would be replace semantics. Check before adopting the
+				// RU's NativeID/KSUID so a rename that swapped the identity is
+				// caught rather than absorbed.
+				if tracked := model.GetNativeID(stackIdx, slotIdx); tracked != "" && ru.NativeID != "" && tracked != ru.NativeID {
+					model.AddPendingViolation(Violation{
+						Kind: ViolationRenameIdentityChanged,
+						Message: fmt.Sprintf(
+							"update RU for stack=%s label=%s changed NativeID %s → %s (cmd=%s)",
+							ru.StackName, ru.ResourceLabel, tracked, ru.NativeID, cmd.CommandID,
+						),
+					})
+				}
+				if tracked := model.GetKsuid(stackIdx, slotIdx); tracked != "" && ru.ResourceID != "" && tracked != ru.ResourceID {
+					model.AddPendingViolation(Violation{
+						Kind: ViolationRenameIdentityChanged,
+						Message: fmt.Sprintf(
+							"update RU for stack=%s label=%s changed KSUID %s → %s (cmd=%s)",
+							ru.StackName, ru.ResourceLabel, tracked, ru.ResourceID, cmd.CommandID,
+						),
+					})
 				}
 				if ru.Properties != nil {
 					props := model.NormalizePropertiesForResource(stackIdx, slotIdx, string(ru.Properties))
@@ -950,6 +1077,7 @@ func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *
 					}
 				}
 				model.SetNativeID(stackIdx, slotIdx, ru.NativeID)
+				model.SetKsuid(stackIdx, slotIdx, ru.ResourceID)
 			}
 		} else {
 			// Failed/Canceled — revert to pre-command snapshot state.
@@ -959,13 +1087,29 @@ func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *
 					model.Stack(stackIdx).Label, slotIdx, ru.State, ru.Operation)
 				goto markDone
 			}
-			if snap, ok := snapBySlot[key]; ok {
+			// A failed create produces no resource, so its terminal model state
+			// is deterministically NotExist — independent of any pre-command
+			// snapshot. Reverting to the snapshot here is wrong: in reverse-order
+			// draining an older command's stale snapshot (still holding an
+			// optimistic Exists) could otherwise overwrite a newer command's
+			// correct NotExist and resurrect a resource that was never created.
+			if ru.Operation == "create" {
 				res := model.Resource(stackIdx, slotIdx)
-				if res != nil && (res.State != snap.State || res.Properties != snap.Properties) {
+				if res != nil && res.State != StateNotExist {
+					t.Logf("correctModelFromCommandOutcome: forcing failed create stack=%s slot=%d to NotExist (ru.State=%s)",
+						model.Stack(stackIdx).Label, slotIdx, ru.State)
+					res.State = StateNotExist
+					res.Properties = ""
+				}
+			} else if snap, ok := snapBySlot[key]; ok {
+				res := model.Resource(stackIdx, slotIdx)
+				if res != nil && (res.State != snap.State || res.Properties != snap.Properties || res.CurrentLabel != snap.CurrentLabel || res.PreviousLabel != snap.PreviousLabel) {
 					t.Logf("correctModelFromCommandOutcome: reverting stack=%s slot=%d from %v to %v (ru.State=%s, op=%s)",
 						model.Stack(stackIdx).Label, slotIdx, res.State, snap.State, ru.State, ru.Operation)
 					res.State = snap.State
 					res.Properties = snap.Properties
+					res.CurrentLabel = snap.CurrentLabel
+					res.PreviousLabel = snap.PreviousLabel
 				}
 			} else {
 				// No snapshot — derive from operation semantics.
@@ -974,18 +1118,23 @@ func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *
 					goto markDone
 				}
 				switch ru.Operation {
-				case "create":
-					if res.State == StateExists {
-						t.Logf("correctModelFromCommandOutcome: reverting failed create stack=%s slot=%d to NotExist",
-							model.Stack(stackIdx).Label, slotIdx)
-						res.State = StateNotExist
-						res.Properties = ""
-					}
 				case "delete":
 					if res.State == StateNotExist {
 						t.Logf("correctModelFromCommandOutcome: reverting failed delete stack=%s slot=%d to Exists",
 							model.Stack(stackIdx).Label, slotIdx)
 						res.State = StateExists
+					}
+					// An implicit delete can target a resource missing from the
+					// optimistic model. Its persisted delete declaration contains
+					// the pre-delete properties even when we have no snapshot.
+					if res.Properties == "" && len(ru.Properties) > 0 {
+						res.Properties = model.NormalizePropertiesForResource(stackIdx, slotIdx, string(ru.Properties))
+					}
+					if model.GetNativeID(stackIdx, slotIdx) == "" {
+						model.SetNativeID(stackIdx, slotIdx, ru.NativeID)
+					}
+					if model.GetKsuid(stackIdx, slotIdx) == "" {
+						model.SetKsuid(stackIdx, slotIdx, ru.ResourceID)
 					}
 				}
 			}
@@ -1002,30 +1151,40 @@ func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *
 	}
 
 	// Step 2: Handle snapshotted slots not mentioned in the command response.
-	// If the command failed/canceled, unmentioned slots whose state changed
-	// from the snapshot must be reverted (implicit reconcile deletes or
-	// cascade descendants that never ran). Skip slots already corrected by a
-	// later command.
+	// If the command failed/canceled, an unmentioned slot was never touched
+	// by the agent, so every optimistic prediction for it (state from
+	// implicit reconcile deletes or cascade descendants that never ran, AND
+	// properties from a patch/update the agent never reached) must revert to
+	// its snapshot. Reverse-order processing makes stacked reverts converge
+	// on the oldest unmentioned snapshot, which is the last agent-confirmed
+	// state. Skip slots already corrected by a later command.
 	//
 	if cmd.State != "Success" {
 		for key, snap := range snapBySlot {
 			if corrected[key] {
 				continue
 			}
+			if superseded[ResourceSlotRef{StackIndex: key.stackIdx, SlotIndex: key.slotIdx}] {
+				continue
+			}
 			if model.IsAuthoritativeSlot(key.stackIdx, key.slotIdx) {
 				continue
 			}
-			// Cross-stack slots in failed/canceled commands: the agent's
-			// behavior for cross-stack resources is non-deterministic from
-			// the command response alone (creates may or may not persist,
-			// reconcile deletes may or may not complete before cancel).
-			// Skip model updates for cross-stack slots and rely on the
-			// model-vs-inventory check excluding them (see CheckModelVsInventory).
-			if pool != nil && pool.IsCrossStack(key.slotIdx) {
+			res := model.Resource(key.stackIdx, key.slotIdx)
+			if res == nil {
 				continue
 			}
-			res := model.Resource(key.stackIdx, key.slotIdx)
-			if res == nil || res.State == snap.State {
+			// A rename recorded optimistically for this command never reached
+			// the engine if the slot produced no RU — restore the snapshot's
+			// labels regardless of whether State changed, or the model keeps
+			// a label the engine never persisted.
+			if res.CurrentLabel != snap.CurrentLabel || res.PreviousLabel != snap.PreviousLabel {
+				t.Logf("correctModelFromCommandOutcome: reverting unmentioned slot labels stack=%s slot=%d %q → %q (command state=%s)",
+					model.Stack(key.stackIdx).Label, key.slotIdx, res.CurrentLabel, snap.CurrentLabel, cmd.State)
+				res.CurrentLabel = snap.CurrentLabel
+				res.PreviousLabel = snap.PreviousLabel
+			}
+			if res.State == snap.State && res.Properties == snap.Properties {
 				continue
 			}
 			t.Logf("correctModelFromCommandOutcome: reverting unmentioned slot stack=%s slot=%d from %v to %v (command state=%s)",
@@ -1045,7 +1204,7 @@ func (h *TestHarness) executeCrashAgent(t *testing.T, model *StateModel) {
 	t.Logf(">>> OpCrashAgent: killing agent")
 
 	h.KillAgent(t)
-	h.RestartAgent(t, 30*time.Second, model)
+	h.RestartAgent(t, 30*time.Second)
 
 	t.Logf(">>> OpCrashAgent: agent restarted, state re-injected")
 
@@ -1072,9 +1231,6 @@ func (h *TestHarness) executeCrashAgent(t *testing.T, model *StateModel) {
 		h.DrainPendingCommands(t, model, 60*time.Second)
 	}
 
-	// Pending managed drift stays pending after crash. The assertion skips
-	// slots with pending drift. Sync will resolve it in a future iteration.
-
 	// With StackExpirer disabled, TTL only fires via ForceCheckTTL.
 	// After crash, check if any TTL stacks are now expired and process them.
 	h.ForceCheckTTLAndWait(t, model)
@@ -1089,17 +1245,70 @@ func (h *TestHarness) executeApply(t *testing.T, op *Operation, model *StateMode
 	}
 
 	stackLabel := model.Stack(op.StackIndex).Label
+
+	// RFC-0041: optional rename overlay. The generator sets RenameSlotIndex
+	// when this apply should also rename one slot. Honoured only if the
+	// slot is currently StateExists — for a not-yet-existing slot a rename
+	// is meaningless (the apply will create it, no alias needed). When
+	// honoured, the rename is folded into the label overrides BEFORE the
+	// forma is built, so child `$res` references to the renamed slot carry
+	// the new label (the engine resolves intra-forma references against
+	// declared labels — a reference to the old label would not resolve).
+	// The renamed resource then gets Alias set to its previous label, and
+	// everything downstream (RecordRename on acceptance, snapshot revert
+	// on failure) flows through the standard apply path so an Update can
+	// model label-only, property-only, or both depending on whether the
+	// Properties template also changed.
+	performRename := false
+	var renameOldLabel string
+	if op.RenameSlotIndex >= 0 && op.RenameNewLabel != "" {
+		if res := model.Resource(op.StackIndex, op.RenameSlotIndex); res != nil && res.State == StateExists {
+			renameOldLabel = model.LabelForResource(op.StackIndex, op.RenameSlotIndex)
+			performRename = renameOldLabel != "" && renameOldLabel != op.RenameNewLabel
+		}
+	}
+
+	overrides := model.LabelOverrides(op.StackIndex)
+	if performRename {
+		if overrides == nil {
+			overrides = make(map[int]string)
+		}
+		overrides[op.RenameSlotIndex] = op.RenameNewLabel
+	}
+
 	var forma *pkgmodel.Forma
 	if model.Pool != nil {
-		forma = FormaFromPoolResources(model.Pool, stackLabel, model.ProviderStackLabel, op.ResourceIDs, op.Properties, op.ChildProperties)
+		forma = FormaFromPoolResources(model.Pool, stackLabel, model.ProviderStackLabel, op.ResourceIDs, op.Properties, op.ChildProperties, overrides, model.LabelOverrides(0))
 	} else {
-		forma = FormaFromStackResources(stackLabel, op.ResourceIDs, op.Properties)
+		forma = FormaFromStackResources(stackLabel, op.ResourceIDs, overrides, op.Properties)
 	}
+
+	if performRename {
+		found := false
+		for i := range forma.Resources {
+			if forma.Resources[i].Stack == stackLabel && forma.Resources[i].Label == op.RenameNewLabel {
+				forma.Resources[i].Alias = renameOldLabel
+				found = true
+				break
+			}
+		}
+		// A cross-stack slot on the provider stack is skipped by the forma
+		// builder; if the renamed slot produced no resource, drop the rename.
+		performRename = found
+	}
+
+	// Reconcile also deletes resources omitted from the declaration. Those
+	// operations have drawn outcomes just like explicitly requested updates.
+	var implicitDeletes cascadeDeletePlan
+	if op.ApplyMode == "reconcile" {
+		implicitDeletes = planDeletes(op, model, omittedResourceIDs(model, op.StackIndex, op.ResourceIDs), false)
+	}
+
 	// Program response sequences before submitting the command.
 	var programmedSeqs []testcontrol.PluginOpSequence
 	if op.DrawnOutcomes != nil {
-		nativeIDs := model.NativeIDsByLabel()
-		programmedSeqs = buildPluginOpSequences(op.DrawnOutcomes, op.StackIndex, stackLabel, op.ResourceIDs, model, nativeIDs, false, model.Pool)
+		programmedSeqs = buildPluginOpSequences(op.DrawnOutcomes, op.StackIndex, stackLabel, op.ResourceIDs, model, false, model.Pool)
+		programmedSeqs = append(programmedSeqs, implicitDeletes.sequences(op, model)...)
 		if len(programmedSeqs) > 0 {
 			h.ProgramResponses(t, programmedSeqs)
 		}
@@ -1157,23 +1366,48 @@ func (h *TestHarness) executeApply(t *testing.T, op *Operation, model *StateMode
 	}
 	snapshots := model.SnapshotResources(op.StackIndex, snapshotIDs)
 
+	// Record the rename BEFORE computing property predictions: the template's
+	// NAME resolves through LabelForResource, and the engine persists the
+	// renamed slot's Name as the new label. The snapshots above captured the
+	// pre-rename overlay, so a failed/canceled command reverts cleanly.
+	if performRename {
+		model.RecordRename(op.StackIndex, op.RenameSlotIndex, op.RenameNewLabel)
+	}
+
 	// Immediate model update: predict outcomes at submission time.
 	successIDs := successfulResourceIDs(op, op.StackIndex, op.ResourceIDs, model.Pool, false, model)
 	if len(successIDs) > 0 {
-		resolvedProps := model.ResolvePropertiesForResources(op.StackIndex, successIDs, op.Properties, op.ChildProperties)
+		// Reconcile declares complete state; patch is a per-field diff whose
+		// prediction must apply the agent's field semantics (a no-op patch
+		// yields no resource update, so a wrong prediction is never corrected).
+		var resolvedProps map[int]string
+		if op.ApplyMode == "reconcile" {
+			resolvedProps = model.ResolvePropertiesForResources(op.StackIndex, successIDs, op.Properties, op.ChildProperties)
+		} else {
+			resolvedProps = model.ResolvePatchPropertiesForResources(op.StackIndex, successIDs, op.Properties, op.ChildProperties)
+		}
 		model.ApplyCreatedResolved(op.StackIndex, resolvedProps)
 	}
 	if op.ApplyMode == "reconcile" {
-		// Reconcile guarantee: resources NOT in the forma are deleted by the
-		// agent. Implicit deletes have no failure injection programmed, so
-		// they always succeed. Apply the guarantee regardless of DrawnOutcomes.
-		applyReconcileGuarantee(model, op.StackIndex, op.ResourceIDs)
+		implicitDeletes.apply(model)
 		// Save the reconcile state for ForceReconcile prediction.
 		resolvedProps := model.ResolvePropertiesForResources(op.StackIndex, op.ResourceIDs, op.Properties, op.ChildProperties)
 		model.SaveLastReconcile(op.StackIndex, op.ResourceIDs, resolvedProps)
 	}
 	model.TrackAcceptedCommand(commandID, snapshots, requestedSlotRefs(op.StackIndex, op.ResourceIDs), h.currentOperationLogSize(t), mode == pkgmodel.FormaApplyModeReconcile)
-	t.Logf("[op %d] Apply (%s) stack=%s resources %v → accepted, model updated (success=%v)", op.SequenceNum, op.ApplyMode, stackLabel, op.ResourceIDs, successIDs)
+	if performRename {
+		h.RenamesAccepted++
+		model.AcceptedCommands[len(model.AcceptedCommands)-1].Rename = &PendingRename{
+			StackIndex: op.StackIndex,
+			SlotIndex:  op.RenameSlotIndex,
+			OldLabel:   renameOldLabel,
+			NewLabel:   op.RenameNewLabel,
+		}
+		t.Logf("[op %d] Apply (%s) stack=%s resources %v → accepted, model updated (success=%v) + rename slot=%d %q → %q",
+			op.SequenceNum, op.ApplyMode, stackLabel, op.ResourceIDs, successIDs, op.RenameSlotIndex, renameOldLabel, op.RenameNewLabel)
+	} else {
+		t.Logf("[op %d] Apply (%s) stack=%s resources %v → accepted, model updated (success=%v)", op.SequenceNum, op.ApplyMode, stackLabel, op.ResourceIDs, successIDs)
+	}
 }
 
 func (h *TestHarness) executeDestroy(t *testing.T, op *Operation, model *StateModel) {
@@ -1209,19 +1443,20 @@ func (h *TestHarness) executeDestroy(t *testing.T, op *Operation, model *StateMo
 func (h *TestHarness) executeDestroyDefault(t *testing.T, op *Operation, model *StateModel, stackLabel string, existingIDs []int) {
 	t.Helper()
 
-	forma := FormaFromStackResources(stackLabel, existingIDs)
+	forma := FormaFromStackResources(stackLabel, existingIDs, model.LabelOverrides(op.StackIndex))
+
+	plan := planDeletes(op, model, existingIDs, false)
 
 	// Program response sequences before submitting the command.
 	var programmedSeqs []testcontrol.PluginOpSequence
 	if op.DrawnOutcomes != nil {
-		nativeIDs := model.NativeIDsByLabel()
-		programmedSeqs = buildPluginOpSequences(op.DrawnOutcomes, op.StackIndex, stackLabel, existingIDs, model, nativeIDs, true, model.Pool)
+		programmedSeqs = plan.sequences(op, model)
 		if len(programmedSeqs) > 0 {
 			h.ProgramResponses(t, programmedSeqs)
 		}
 	}
 
-	resp, err := h.client.DestroyForma(forma, false, clientID)
+	resp, err := h.client.DestroyForma(forma, false, "abort", clientID)
 	if err != nil {
 		if len(programmedSeqs) > 0 {
 			h.UnprogramResponses(t, programmedSeqs)
@@ -1245,12 +1480,9 @@ func (h *TestHarness) executeDestroyDefault(t *testing.T, op *Operation, model *
 	snapshots := model.SnapshotResources(op.StackIndex, existingIDs)
 
 	// Immediate model update: predict outcomes at submission time.
-	successIDs := successfulResourceIDs(op, op.StackIndex, existingIDs, model.Pool, true, model)
-	if len(successIDs) > 0 {
-		model.ApplyDestroyed(op.StackIndex, successIDs)
-	}
+	plan.apply(model)
 	model.TrackAcceptedCommand(commandID, snapshots, requestedSlotRefs(op.StackIndex, existingIDs), h.currentOperationLogSize(t), false)
-	t.Logf("[op %d] Destroy stack=%s resources %v → accepted, model updated (success=%v)", op.SequenceNum, stackLabel, existingIDs, successIDs)
+	t.Logf("[op %d] Destroy stack=%s resources %v → accepted, model updated (success=%v)", op.SequenceNum, stackLabel, existingIDs, plan.successful)
 }
 
 // executeDestroyAbort handles destroy with on-dependents="abort". If any resource
@@ -1269,11 +1501,11 @@ func (h *TestHarness) executeDestroyAbort(t *testing.T, op *Operation, model *St
 		}
 	}
 
-	forma := FormaFromPoolResources(model.Pool, stackLabel, model.ProviderStackLabel, existingIDs, defaultDestroyParentProps, defaultDestroyChildProps)
+	forma := FormaFromPoolResources(model.Pool, stackLabel, model.ProviderStackLabel, existingIDs, defaultDestroyParentProps, defaultDestroyChildProps, model.LabelOverrides(op.StackIndex), model.LabelOverrides(0))
 
 	if hasDependents {
 		// Simulate to check whether the agent would create cascade deletes.
-		simResp, err := h.client.DestroyForma(forma, true, clientID)
+		simResp, err := h.client.DestroyForma(forma, true, "abort", clientID)
 		if err != nil {
 			t.Logf("[op %d] Destroy (abort) stack=%s resources %v → simulate error: %v", op.SequenceNum, stackLabel, existingIDs, err)
 			return
@@ -1292,17 +1524,18 @@ func (h *TestHarness) executeDestroyAbort(t *testing.T, op *Operation, model *St
 	}
 
 	// No dependents (or simulation confirmed no cascades) — proceed with real destroy.
+	plan := planDeletes(op, model, existingIDs, false)
+
 	// Program response sequences before submitting the command.
 	var programmedSeqs []testcontrol.PluginOpSequence
 	if op.DrawnOutcomes != nil {
-		nativeIDs := model.NativeIDsByLabel()
-		programmedSeqs = buildPluginOpSequences(op.DrawnOutcomes, op.StackIndex, stackLabel, existingIDs, model, nativeIDs, true, model.Pool)
+		programmedSeqs = plan.sequences(op, model)
 		if len(programmedSeqs) > 0 {
 			h.ProgramResponses(t, programmedSeqs)
 		}
 	}
 
-	resp, err := h.client.DestroyForma(forma, false, clientID)
+	resp, err := h.client.DestroyForma(forma, false, "abort", clientID)
 	if err != nil {
 		if len(programmedSeqs) > 0 {
 			h.UnprogramResponses(t, programmedSeqs)
@@ -1328,12 +1561,9 @@ func (h *TestHarness) executeDestroyAbort(t *testing.T, op *Operation, model *St
 	// Since the abort path only proceeds when simulation confirmed no cascades,
 	// only the explicitly drawn resources can be affected — descendants are safe.
 	// Immediate model update: predict outcomes at submission time.
-	successIDs := successfulResourceIDs(op, op.StackIndex, existingIDs, model.Pool, true, model)
-	if len(successIDs) > 0 {
-		model.ApplyDestroyed(op.StackIndex, successIDs)
-	}
+	plan.apply(model)
 	model.TrackAcceptedCommand(commandID, snapshots, requestedSlotRefs(op.StackIndex, existingIDs), h.currentOperationLogSize(t), false)
-	t.Logf("[op %d] Destroy (abort) stack=%s resources %v → accepted, model updated (success=%v)", op.SequenceNum, stackLabel, existingIDs, successIDs)
+	t.Logf("[op %d] Destroy (abort) stack=%s resources %v → accepted, model updated (success=%v)", op.SequenceNum, stackLabel, existingIDs, plan.successful)
 }
 
 // executeDestroyCascade handles destroy with on-dependents="cascade". The agent
@@ -1342,19 +1572,21 @@ func (h *TestHarness) executeDestroyAbort(t *testing.T, op *Operation, model *St
 func (h *TestHarness) executeDestroyCascade(t *testing.T, op *Operation, model *StateModel, stackLabel string, existingIDs []int) {
 	t.Helper()
 
-	forma := FormaFromPoolResources(model.Pool, stackLabel, model.ProviderStackLabel, existingIDs, defaultDestroyParentProps, defaultDestroyChildProps)
+	forma := FormaFromPoolResources(model.Pool, stackLabel, model.ProviderStackLabel, existingIDs, defaultDestroyParentProps, defaultDestroyChildProps, model.LabelOverrides(op.StackIndex), model.LabelOverrides(0))
 
-	// Program response sequences before submitting the command.
+	// Plan the complete deletion closure, including implicit cross-stack dependents.
+	plan := planCascadeDeletes(op, model, existingIDs)
+
+	// Program only operations the dependency graph can actually execute.
 	var programmedSeqs []testcontrol.PluginOpSequence
 	if op.DrawnOutcomes != nil {
-		nativeIDs := model.NativeIDsByLabel()
-		programmedSeqs = buildPluginOpSequences(op.DrawnOutcomes, op.StackIndex, stackLabel, existingIDs, model, nativeIDs, true, model.Pool)
+		programmedSeqs = plan.sequences(op, model)
 		if len(programmedSeqs) > 0 {
 			h.ProgramResponses(t, programmedSeqs)
 		}
 	}
 
-	resp, err := h.client.DestroyForma(forma, false, clientID)
+	resp, err := h.client.DestroyForma(forma, false, "cascade", clientID)
 	if err != nil {
 		if len(programmedSeqs) > 0 {
 			h.UnprogramResponses(t, programmedSeqs)
@@ -1374,26 +1606,16 @@ func (h *TestHarness) executeDestroyCascade(t *testing.T, op *Operation, model *
 	commandID := resp.CommandID
 	t.Logf("[op %d] Destroy (cascade) stack=%s resources %v → command %s", op.SequenceNum, stackLabel, existingIDs, commandID)
 
-	// Snapshot slots that will actually change: cascade destroys only affect
-	// Exists slots. Slots already NotExist can't be destroyed, and including
-	// them causes false reverts when concurrent commands create those slots.
 	var snapshots []ResourceSnapshot
-	for _, si := range model.ComputeAffectedStacks(op.StackIndex, existingIDs, op.OnDependents) {
-		for id, res := range model.Stack(si).Resources {
-			if res.State == StateExists {
-				snapshots = append(snapshots, model.SnapshotResources(si, []int{id})...)
-			}
-		}
+	for _, ref := range plan.affected {
+		snapshots = append(snapshots, model.SnapshotResources(ref.StackIndex, []int{ref.SlotIndex})...)
 	}
 
-	// Immediate model update: predict outcomes at submission time.
-	// For cascade destroy, successful resources and all their descendants are destroyed.
-	successIDs := successfulResourceIDs(op, op.StackIndex, existingIDs, model.Pool, true, model)
-	for _, idx := range successIDs {
-		model.ApplyCascadeDestroyed(op.StackIndex, idx)
-	}
+	// A failed dependent blocks its ancestors, but independent siblings can
+	// still be deleted. Preserve failed and blocked slots, including properties.
+	plan.apply(model)
 	model.TrackAcceptedCommand(commandID, snapshots, requestedSlotRefs(op.StackIndex, existingIDs), h.currentOperationLogSize(t), false)
-	t.Logf("[op %d] Destroy (cascade) stack=%s resources %v → accepted, model updated (success=%v)", op.SequenceNum, stackLabel, existingIDs, successIDs)
+	t.Logf("[op %d] Destroy (cascade) stack=%s resources %v → accepted, model updated (success=%v)", op.SequenceNum, stackLabel, existingIDs, plan.successful)
 }
 
 // allResourceIDs returns all resource indices for a stack.
@@ -1468,7 +1690,7 @@ func (h *TestHarness) executeCancel(t *testing.T, op *Operation, model *StateMod
 	// Cancel the most recent command (matches API behavior with no query).
 	target := model.AcceptedCommands[len(model.AcceptedCommands)-1]
 
-	resp, err := h.client.CancelCommands("", clientID)
+	resp, err := h.client.CancelCommands("", false, clientID)
 	if err != nil {
 		t.Logf("[op %d] Cancel command %s → error: %v", op.SequenceNum, target.CommandID, err)
 		return
@@ -1480,9 +1702,21 @@ func (h *TestHarness) executeCancel(t *testing.T, op *Operation, model *StateMod
 
 	t.Logf("[op %d] Cancel command %s → accepted", op.SequenceNum, target.CommandID)
 
+	// The canceled changeset's resources can stay registered as in-progress
+	// with the synchronizer for an unobservable time after the command reaches
+	// its terminal state, during which sync skips them. Drift injected on them
+	// could then never absorb, so take their stacks out of drift targeting for
+	// the rest of the iteration.
+	for _, ref := range target.RequestedSlots {
+		model.MarkDriftExcludedStack(ref.StackIndex)
+	}
+
 	// Wait for the canceled command to reach a terminal state so we can read
-	// per-resource-update outcomes.
-	cmd, ok := h.TryWaitForCommandDone(target.CommandID, defaultCommandTimeout)
+	// per-resource-update outcomes. The most recent accepted command may be
+	// a stack-expirer destroy tracked by executeCheckTTL, which never
+	// appears over the user-only command-status API, so observe it via the
+	// datastore instead.
+	cmd, ok := h.waitForCommandInDB(target.CommandID, defaultCommandTimeout)
 	if !ok {
 		t.Logf("[op %d] Cancel command %s → timed out waiting for completion", op.SequenceNum, target.CommandID)
 		return
@@ -1516,9 +1750,11 @@ func (h *TestHarness) executeCancel(t *testing.T, op *Operation, model *StateMod
 				}
 				model.ApplyCreated(stackIdx, []int{slotIdx}, props)
 				model.SetNativeID(stackIdx, slotIdx, ru.NativeID)
+				model.SetKsuid(stackIdx, slotIdx, ru.ResourceID)
 			case "delete":
 				model.ApplyDestroyed(stackIdx, []int{slotIdx})
 				model.ClearNativeID(stackIdx, slotIdx)
+				model.ClearKsuid(stackIdx, slotIdx)
 			}
 		}
 	}
@@ -1538,14 +1774,12 @@ func (h *TestHarness) executeCancel(t *testing.T, op *Operation, model *StateMod
 func buildLabelToSnapshotMap(snapshots []ResourceSnapshot, model *StateModel) map[string]ResourceSnapshot {
 	m := make(map[string]ResourceSnapshot, len(snapshots))
 	for _, snap := range snapshots {
-		stackLabel := model.Stack(snap.StackIndex).Label
-		var label string
-		if model.Pool != nil {
-			label = model.Pool.LabelForStack(stackLabel, snap.SlotIndex)
-		} else {
-			label = resourceLabelForStack(stackLabel, snap.SlotIndex)
-		}
-		m[label] = snap
+		// Key by the label the agent currently knows the slot by. The model
+		// carries the optimistic rename overlay, so a slot renamed by the
+		// canceled command itself resolves to the new label the RU reports;
+		// the snapshot's own labels are the pre-command state to revert TO,
+		// not the lookup key.
+		m[model.LabelForResource(snap.StackIndex, snap.SlotIndex)] = snap
 	}
 	return m
 }
@@ -1568,52 +1802,141 @@ func filterExistingResources(ids []int, stackIndex int, model *StateModel) []int
 
 func (h *TestHarness) executeTriggerSync(t *testing.T, model *StateModel) {
 	t.Helper()
-	// Fire-and-forget: sync runs concurrently with user commands. Resources
-	// in active changesets are excluded from sync (registered upfront in the
-	// ChangesetExecutor), so sync only touches idle resources.
-	err := h.client.ForceSync()
-	if err != nil {
-		t.Logf("TriggerSync error (may be expected): %v", err)
-		return
+	// Sync runs concurrently with user commands. Resources in active
+	// changesets are excluded from sync (registered upfront in the
+	// ChangesetExecutor), so sync only touches idle resources. Managed drift
+	// is always absorbed at the drift operation itself, so for managed
+	// resources this sync is a no-op; unmanaged rows absorb their cloud state.
+	//
+	// An unobserved sync is tolerable here: with no drift pending by
+	// construction, the sync's model transition is a no-op either way.
+	if h.forceSyncAndAwait(t, model, 2*time.Second) {
+		t.Logf("TriggerSync: fired")
+	} else {
+		t.Logf("TriggerSync: no sync command observed (nothing to synchronize)")
 	}
-	if cmd, ok := h.WaitForNextSyncCommand(2 * time.Second); !ok {
-		t.Logf("TriggerSync: no new sync command observed")
-		return
-	} else if model != nil {
-		model.ApplySyncCommand(cmd)
-	}
-	t.Logf("TriggerSync: fired")
 }
 
 // TriggerSyncAndWait fires a sync and waits for it to complete. Used before
 // final invariant checks to ensure inventory reflects cloud state after chaos
 // operations (cancel, crash, TTL) that can leave stale inventory entries.
-func (h *TestHarness) TriggerSyncAndWait(t *testing.T) {
+// As in executeTriggerSync, an unobserved sync is a model no-op.
+func (h *TestHarness) TriggerSyncAndWait(t *testing.T, model *StateModel) {
 	t.Helper()
-	err := h.client.ForceSync()
-	if err != nil {
-		t.Logf("TriggerSyncAndWait: error: %v", err)
-		return
+	if !h.forceSyncAndAwait(t, model, 2*time.Second) {
+		t.Logf("TriggerSyncAndWait: no sync command observed (nothing to synchronize)")
 	}
-	if _, ok := h.WaitForNextSyncCommand(10 * time.Second); !ok {
-		t.Logf("TriggerSyncAndWait: no sync command observed")
+}
+
+// forceSyncAndAwait triggers a sync and waits for its command to complete.
+// When observed, it applies the model's own predicted sync transition for
+// unmanaged rows (sync reads every idle inventory row, so out-of-band changes
+// to discovered unmanaged resources absorb at each sync) and returns true.
+//
+// It returns false when no sync command was observed within the appearance
+// window. That covers both a sync that never ran (empty inventory, transient
+// plugin-availability miss, synchronizer busy) and a no-change sync that
+// completed and was deleted between polls — the two are indistinguishable, so
+// callers may only treat false as tolerable where a no-op sync and no sync
+// are equivalent. The baseline is captured before the trigger so the
+// triggered command cannot be mistaken for a pre-existing one.
+func (h *TestHarness) forceSyncAndAwait(t *testing.T, model *StateModel, appearance time.Duration) bool {
+	t.Helper()
+	baseline := h.SyncCommandBaseline()
+	require.NoError(t, h.client.ForceSync(), "ForceSync failed")
+	_, ok := h.WaitForSyncCommandAfter(baseline, appearance, 30*time.Second)
+	if !ok {
+		return false
 	}
+	if model != nil {
+		model.ApplySyncToUnmanaged()
+	}
+	return true
 }
 
 func (h *TestHarness) executeTriggerDiscovery(t *testing.T, model *StateModel) {
 	t.Helper()
-	err := h.client.ForceDiscover()
-	if err != nil {
-		t.Logf("TriggerDiscovery error (may be expected): %v", err)
+	// The model knows exactly what discovery will ingest: cloud resources it
+	// created out-of-band that are not yet in inventory AND that discovery
+	// can reach (a child orphaned by a parent rename is not listable — see
+	// discoverableUnmanaged). Everything else the plugin lists is either
+	// already tracked (known native id) or absent.
+	expectIngest := false
+	if model != nil {
+		discoverable := model.discoverableUnmanaged()
+		for nativeID, res := range model.UnmanagedResources {
+			if res.PresentInCloud && !res.PresentInInventory && discoverable[nativeID] {
+				expectIngest = true
+				break
+			}
+		}
+	}
+
+	// Discovery ingests every cloud entry inventory does not know, which
+	// includes orphans a failed or canceled command left behind (created in
+	// the cloud, never persisted). An ingested orphan is not derivable from
+	// generated inputs, so discovery only runs when no commands are in
+	// flight, after sweeping every cloud entry that is neither in inventory
+	// nor a tracked out-of-band resource. What remains for discovery to find
+	// is then exactly the model's tracked set.
+	if model != nil && len(model.AcceptedCommands) > 0 {
+		t.Logf("TriggerDiscovery: skipped (commands in flight)")
 		return
 	}
-	if _, ok := h.WaitForNextSyncCommand(10 * time.Second); !ok {
-		t.Logf("TriggerDiscovery: no new discovery/sync command observed")
-		return
-	} else if model != nil {
-		model.ApplyDiscoveryToUnmanaged()
+	var spare map[string]bool
+	if model != nil {
+		spare = model.UnmanagedPresentInCloudNativeIDs()
 	}
-	t.Logf("TriggerDiscovery: fired")
+	h.waitForInventoryStabilization(t, 5*time.Second)
+	h.cleanupOrphanedCloudState(t, spare)
+
+	if !expectIngest {
+		// Nothing to ingest: discovery completes without a surviving command
+		// (a command that absorbs nothing is deleted on completion), and the
+		// model transition is a no-op either way.
+		baseline := h.SyncCommandBaseline()
+		if err := h.client.ForceDiscover(); err != nil {
+			t.Logf("TriggerDiscovery error (may be expected): %v", err)
+			return
+		}
+		if _, ok := h.WaitForSyncCommandAfter(baseline, 2*time.Second, 30*time.Second); ok {
+			t.Logf("TriggerDiscovery: fired")
+		} else {
+			t.Logf("TriggerDiscovery: fired (nothing to ingest)")
+		}
+		return
+	}
+
+	// Ingestion is expected and deterministic: discovery lists the cloud,
+	// ingests the native ids inventory does not know, and the command that
+	// absorbs them survives completion. Discovery pauses while a user
+	// changeset runs, so a trigger can be swallowed — retry until inventory
+	// converges on the model's expectations.
+	model.ApplyDiscoveryToUnmanaged()
+	const maxDiscoverAttempts = 3
+	for attempt := range maxDiscoverAttempts {
+		baseline := h.SyncCommandBaseline()
+		require.NoError(t, h.client.ForceDiscover(), "ForceDiscover failed")
+		// Command observation is a hint, not the success criterion: the
+		// ingestion command can land outside the appearance window, and a
+		// follow-up trigger that absorbs nothing is deleted unobservably.
+		// Inventory convergence decides — check it regardless.
+		if _, ok := h.WaitForSyncCommandAfter(baseline, 10*time.Second, 60*time.Second); !ok {
+			t.Logf("TriggerDiscovery: no ingestion command observed (attempt %d)", attempt+1)
+		}
+		if h.waitForUnmanagedInventoryExpectations(t, model, 10*time.Second) {
+			t.Logf("TriggerDiscovery: ingested")
+			return
+		}
+		t.Logf("TriggerDiscovery: inventory not converged (attempt %d)", attempt+1)
+	}
+	if _, unmanagedInventory, err := h.extractManagedAndUnmanagedInventory(); err == nil {
+		for _, v := range CheckUnmanagedModelVsInventory(model, unmanagedInventory) {
+			t.Logf("TriggerDiscovery: unconverged: %s", v.Message)
+		}
+	}
+	require.Failf(t, "discovery did not ingest",
+		"expected unmanaged resources were not ingested after %d attempts", maxDiscoverAttempts)
 }
 
 func (h *TestHarness) executeCloudModify(t *testing.T, op *Operation, model *StateModel) {
@@ -1627,8 +1950,14 @@ func (h *TestHarness) executeCloudModify(t *testing.T, op *Operation, model *Sta
 		t.Logf("[op %d] CloudModify: %s → skipped (resource does not exist in cloud)", op.SequenceNum, op.NativeID)
 		return
 	}
+	inInventory := res.PresentInInventory
 	h.putCloudStateWithRetry(t, op.NativeID, res.ResourceType, op.Properties)
 	model.ApplyUnmanagedCloudModify(op.NativeID, op.Properties)
+	// A discovered resource has an inventory row that sync reads, so the
+	// change must be absorbed before the next inventory-vs-cloud check.
+	if inInventory {
+		h.absorbUnmanagedDrift(t, model, op.NativeID, op.Properties, false)
+	}
 	t.Logf("[op %d] CloudModify: %s", op.SequenceNum, op.NativeID)
 }
 
@@ -1638,68 +1967,170 @@ func (h *TestHarness) executeCloudDelete(t *testing.T, op *Operation, model *Sta
 		h.executeManagedCloudDelete(t, op, model)
 		return
 	}
+	res := model.UnmanagedResources[op.NativeID]
+	inInventory := res != nil && res.PresentInInventory
 	h.deleteCloudStateWithRetry(t, op.NativeID)
 	model.ApplyUnmanagedCloudDelete(op.NativeID)
+	// A discovered resource has an inventory row; sync observes the deletion
+	// and drops the row, so absorb it before the next model-vs-inventory check.
+	if inInventory {
+		h.absorbUnmanagedDrift(t, model, op.NativeID, "", true)
+	}
 	t.Logf("[op %d] CloudDelete: %s", op.SequenceNum, op.NativeID)
 }
 
+// executeManagedCloudModify injects out-of-band drift into a managed
+// resource's cloud state and absorbs it immediately: it forces a sync, waits
+// for the inventory row to converge on the drifted properties, and records
+// that end state in the model. Absorption is deterministic because the target
+// is untouched by in-flight commands (FindDriftEligibleResource) and every
+// sync is harness-triggered.
 func (h *TestHarness) executeManagedCloudModify(t *testing.T, op *Operation, model *StateModel) {
 	t.Helper()
-	stackIdx, slotIdx, stackLabel, resLabel, resType, nativeID, ok := model.FindExistingResourceWithNativeID(op.SequenceNum)
+	stackIdx, slotIdx, _, resLabel, resType, nativeID, ok := model.FindDriftEligibleResource(op.SequenceNum)
 	if !ok {
 		t.Logf("[op %d] CloudModify managed → skipped (no eligible resource in model)", op.SequenceNum)
 		return
 	}
-	_ = stackIdx
-	_ = slotIdx
-	h.putCloudStateWithRetry(t, nativeID, resType, op.Properties)
-	model.ApplyManagedCloudModify(stackLabel, resLabel, resType, nativeID, op.Properties)
-	h.reconcileManagedDriftBeforeNextCommands(t, model)
+	props := driftPropertiesForSlot(model, stackIdx, slotIdx, op.Properties)
+	h.putCloudStateWithRetry(t, nativeID, resType, props)
+	model.ApplyManagedCloudModify(stackIdx, slotIdx, props)
+	h.absorbManagedDrift(t, model, nativeID, props, false)
+	// Inventory now carries the absorbed properties and is the restart
+	// re-injection source for this resource; a lingering mirror entry would
+	// overwrite later plugin writes with these stale properties after a crash.
+	delete(h.cloudStateMirror, nativeID)
 	t.Logf("[op %d] CloudModify managed: %s (%s)", op.SequenceNum, resLabel, nativeID)
 }
 
+// executeManagedCloudDelete injects an out-of-band delete of a managed
+// resource's cloud state and absorbs it immediately: the sync observes the
+// deletion and drops the resource from inventory, which the model records as
+// the end state.
 func (h *TestHarness) executeManagedCloudDelete(t *testing.T, op *Operation, model *StateModel) {
 	t.Helper()
-	stackIdx, slotIdx, stackLabel, resLabel, resType, nativeID, ok := model.FindExistingResourceWithNativeID(op.SequenceNum)
+	stackIdx, slotIdx, _, resLabel, _, nativeID, ok := model.FindDriftEligibleResource(op.SequenceNum)
 	if !ok {
 		t.Logf("[op %d] CloudDelete managed → skipped (no eligible resource in model)", op.SequenceNum)
 		return
 	}
-	_ = stackIdx
-	_ = slotIdx
 	h.deleteCloudStateWithRetry(t, nativeID)
-	model.ApplyManagedCloudDelete(stackLabel, resLabel, resType, nativeID)
-	h.reconcileManagedDriftBeforeNextCommands(t, model)
+	model.ApplyManagedCloudDelete(stackIdx, slotIdx)
+	h.absorbManagedDrift(t, model, nativeID, "", true)
 	t.Logf("[op %d] CloudDelete managed: %s (%s)", op.SequenceNum, resLabel, nativeID)
 }
 
-func (h *TestHarness) reconcileManagedDriftBeforeNextCommands(t *testing.T, model *StateModel) {
+// driftPropertiesForSlot shapes drawn out-of-band properties to the slot's
+// schema so sync absorption converges the inventory row onto exactly these
+// values. Keys outside the slot's schema would split into ReadOnlyProperties
+// and diverge inventory from cloud state, so child/grandchild/cross-stack
+// slots get the child shape with ParentId pointing at the current parent
+// identifier.
+func driftPropertiesForSlot(model *StateModel, stackIdx, slotIdx int, drawnProps string) string {
+	if model.Pool == nil || model.Pool.IsParent(slotIdx) {
+		return drawnProps
+	}
+	var drawn map[string]any
+	if err := json.Unmarshal([]byte(drawnProps), &drawn); err != nil {
+		return drawnProps
+	}
+	props := map[string]any{
+		"Name":     drawn["Name"],
+		"ParentId": model.parentIdentifierForResource(stackIdx, slotIdx),
+		"Value":    drawn["Value"],
+	}
+	b, err := json.Marshal(props)
+	if err != nil {
+		return drawnProps
+	}
+	return string(b)
+}
+
+// absorbManagedDrift forces syncs until the inventory row for nativeID reaches
+// the absorbed end state: gone when deleted, or property-converged when
+// modified. A single sync can miss the target when its read consumes a stale
+// programmed response left by an earlier canceled or failed command, so the
+// sync is retried; the retry's read then gets the plugin's default behavior.
+func (h *TestHarness) absorbManagedDrift(t *testing.T, model *StateModel, nativeID, expectedProps string, deleted bool) {
 	t.Helper()
-	if model == nil || len(model.ManagedDriftedResources) == 0 {
-		return
-	}
-	// Pending managed drift is an expected divergence until an explicit sync.
-	// Before subsequent command submissions, restore the main stack/slot model to
-	// its pre-drift snapshot so command snapshots remain based on the agent's
-	// current inventory rather than the unsynced cloud state.
-	for _, drift := range model.ManagedDriftedResources {
-		if !drift.PendingSync {
+	const maxSyncAttempts = 3
+	for attempt := range maxSyncAttempts {
+		if !h.forceSyncAndAwait(t, model, 10*time.Second) {
+			// The drifted row is in inventory, so a healthy sync must include
+			// it; an unobserved sync command here is a transient miss — retry.
+			t.Logf("absorbManagedDrift: no sync command observed (attempt %d)", attempt+1)
 			continue
 		}
-		stackIdx, slotIdx, ok := model.findResourceSlot(drift.StackLabel, drift.ResourceLabel)
-		if !ok {
+		if h.waitForAbsorbedInventory(t, "managed:true", nativeID, expectedProps, deleted, 10*time.Second) {
+			return
+		}
+		t.Logf("absorbManagedDrift: %s not absorbed after sync (attempt %d)", nativeID, attempt+1)
+	}
+	require.Failf(t, "managed drift not absorbed",
+		"resource %s did not reach its absorbed state (deleted=%v) after %d syncs", nativeID, deleted, maxSyncAttempts)
+}
+
+// absorbUnmanagedDrift forces syncs until the unmanaged inventory row for
+// nativeID reaches its absorbed end state, mirroring absorbManagedDrift.
+func (h *TestHarness) absorbUnmanagedDrift(t *testing.T, model *StateModel, nativeID, expectedProps string, deleted bool) {
+	t.Helper()
+	const maxSyncAttempts = 3
+	for attempt := range maxSyncAttempts {
+		if !h.forceSyncAndAwait(t, model, 10*time.Second) {
+			t.Logf("absorbUnmanagedDrift: no sync command observed (attempt %d)", attempt+1)
 			continue
 		}
-		if drift.SnapshotState == StateExists {
-			model.ApplyCreated(stackIdx, []int{slotIdx}, drift.SnapshotProperties)
-		} else {
-			model.ApplyDestroyed(stackIdx, []int{slotIdx})
+		if h.waitForAbsorbedInventory(t, "managed:false", nativeID, expectedProps, deleted, 10*time.Second) {
+			return
 		}
+		t.Logf("absorbUnmanagedDrift: %s not absorbed after sync (attempt %d)", nativeID, attempt+1)
 	}
+	require.Failf(t, "unmanaged drift not absorbed",
+		"unmanaged resource %s did not reach its absorbed state (deleted=%v) after %d syncs", nativeID, deleted, maxSyncAttempts)
+}
+
+// waitForAbsorbedInventory polls the inventory selected by query until the row
+// for nativeID is gone (deleted=true) or its properties json-equal
+// expectedProps.
+func (h *TestHarness) waitForAbsorbedInventory(t *testing.T, query, nativeID, expectedProps string, deleted bool, timeout time.Duration) bool {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		forma, err := h.client.ExtractResources(query)
+		if err == nil {
+			var row *pkgmodel.Resource
+			if forma != nil {
+				for i := range forma.Resources {
+					if forma.Resources[i].NativeID == nativeID {
+						row = &forma.Resources[i]
+						break
+					}
+				}
+			}
+			if deleted && row == nil {
+				return true
+			}
+			if !deleted && row != nil && jsonEqual(string(row.Properties), expectedProps) {
+				return true
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return false
 }
 
 func (h *TestHarness) executeCloudCreate(t *testing.T, op *Operation, model *StateModel) {
 	t.Helper()
+	// The generator draws native ids from a small pool, so an id can repeat
+	// within a sequence. Re-creating an entry the model already tracks as
+	// present is an out-of-band MODIFY of that resource, not a create:
+	// discovery only ingests unknown native ids, so it can never converge
+	// the model's fresh CloudProperties with the already-ingested row (that
+	// is sync absorption, which OpCloudModify exercises). Skip the op.
+	if res := model.UnmanagedResources[op.NativeID]; res != nil && (res.PresentInCloud || res.PresentInInventory) {
+		t.Logf("[op %d] CloudCreate: %s → skipped (already present out-of-band)", op.SequenceNum, op.NativeID)
+		return
+	}
 	h.putCloudStateWithRetry(t, op.NativeID, op.ResourceType, op.Properties)
 	model.ApplyUnmanagedCloudCreate(op.NativeID, op.ResourceType, op.Properties)
 	t.Logf("[op %d] CloudCreate: %s (%s)", op.SequenceNum, op.NativeID, op.ResourceType)
@@ -1914,9 +2345,13 @@ func (h *TestHarness) DrainPendingCommands(t *testing.T, model *StateModel, time
 	// Step 1: Collect all command outcomes. Commands marked Resolved were
 	// already handled by the cancel handler but are kept in AcceptedCommands
 	// so their corrections take precedence during reverse-order processing.
+	// AcceptedCommands can include a stack-expirer destroy tracked by
+	// executeCheckTTL alongside user commands, and that command never
+	// appears over the user-only command-status API, so observe every
+	// accepted command via the datastore instead.
 	var drained []drainedCommand
 	for _, ac := range model.AcceptedCommands {
-		cmd, ok := h.TryWaitForCommandDone(ac.CommandID, timeout)
+		cmd, ok := h.waitForCommandInDB(ac.CommandID, timeout)
 		if !ok {
 			t.Logf("DrainPendingCommands: command %s timed out", ac.CommandID)
 			drained = append(drained, drainedCommand{ac: ac, cmd: nil})
@@ -1935,8 +2370,7 @@ func (h *TestHarness) DrainPendingCommands(t *testing.T, model *StateModel, time
 	for i := len(drained) - 1; i >= 0; i-- {
 		dc := drained[i]
 		if dc.cmd != nil {
-			correctModelFromCommandOutcome(t, dc.cmd, model, model.Pool, dc.ac.Snapshots, corrected, dc.ac.IsReconcile)
-			h.reconcileManagedDriftOverriddenByCommand(t, model, dc.cmd)
+			correctModelFromCommandOutcome(t, dc.cmd, model, model.Pool, dc.ac.Snapshots, corrected, dc.ac.IsReconcile, dc.ac.SupersededSlots, dc.ac.Rename)
 		}
 	}
 	h.reconcileAmbiguousFailedCommands(t, model, drained)
@@ -1951,90 +2385,6 @@ func (h *TestHarness) DrainPendingCommands(t *testing.T, model *StateModel, time
 	// After all commands are drained, any TTL that was blocked by active
 	// commands is now unblocked. Do one final check to catch it.
 	h.ForceCheckTTLAndWait(t, model)
-
-	// If OOB changes were made during this iteration, fire a sync to let the
-	// agent reconcile them. The sync command's outcome updates the model via
-	// ApplySyncCommand. Any remaining unresolved drift stays pending — the
-	// assertion skips slots with pending drift.
-	if len(model.ManagedDriftedResources) > 0 {
-		h.executeTriggerSync(t, model)
-		// Restore cloud state for any drift the sync resolved (the plugin's
-		// Update/Delete already updated cloud state via the sync command).
-		// For unresolved drift, restore cloud state to match inventory so
-		// CheckInvariants doesn't see phantoms.
-		for nativeID, drift := range model.ManagedDriftedResources {
-			if !drift.PendingSync {
-				continue // already resolved by sync
-			}
-			if drift.PresentInCloud {
-				// OOB modify: restore cloud state to pre-drift properties
-				if drift.SnapshotProperties != "" {
-					h.TryPutCloudState(nativeID, drift.ResourceType, flattenPropertiesForCloud(json.RawMessage(drift.SnapshotProperties)))
-				}
-			} else {
-				// OOB delete: the resource is still in inventory (sync hasn't
-				// deleted it). Cloud state was already deleted by CloudDelete.
-				// Restore it so CheckInvariants doesn't see a phantom.
-				stackIdx, slotIdx, ok := model.findResourceSlot(drift.StackLabel, drift.ResourceLabel)
-				if ok {
-					res := model.Resource(stackIdx, slotIdx)
-					if res != nil && res.Properties != "" {
-						h.TryPutCloudState(nativeID, drift.ResourceType, flattenPropertiesForCloud(json.RawMessage(res.Properties)))
-					}
-				}
-			}
-		}
-	}
-}
-
-func (h *TestHarness) reconcileManagedDriftOverriddenByCommand(t *testing.T, model *StateModel, cmd *apimodel.Command) {
-	t.Helper()
-	if model == nil || cmd == nil {
-		return
-	}
-	for _, ru := range cmd.ResourceUpdates {
-		if ru.State != "Success" {
-			continue
-		}
-		if ru.Operation == "delete" {
-			// Use the drift entry's NativeID (or the command response NativeID)
-			// to clean up cloud state.
-			nativeID := ru.NativeID
-			if nativeID == "" {
-				// Fall back to drift entry if command response doesn't have it.
-				if _, drift, ok := model.managedDriftForResource(ru.StackName, ru.ResourceLabel); ok {
-					nativeID = drift.NativeID
-				}
-			}
-			if nativeID != "" {
-				if err := h.TryDeleteCloudState(nativeID); err != nil {
-					t.Logf("reconcileManagedDriftOverriddenByCommand: skipping DeleteCloudState for %s: %v", nativeID, err)
-				}
-			}
-			model.ClearManagedDriftForResource(ru.StackName, ru.ResourceLabel)
-			continue
-		}
-		// Create/Update: sync cloud state if this resource had a managed drift
-		// entry. The OOB drift operation may have deleted/modified cloud state,
-		// and the command restored the resource. The plugin's CRUD methods update
-		// cloud state with resolved properties, but for delete-drifted resources
-		// the NativeID may have changed. Use the model's NativeID tracking.
-		nativeID := ru.NativeID
-		if nativeID != "" {
-			if _, drift, ok := model.managedDriftForResource(ru.StackName, ru.ResourceLabel); ok {
-				// Restore cloud state: use command response properties flattened.
-				// This may contain partially resolved values but it's better than
-				// leaving the cloud state empty after an OOB delete.
-				if ru.Properties != nil {
-					if err := h.TryPutCloudState(nativeID, ru.ResourceType, flattenPropertiesForCloud(ru.Properties)); err != nil {
-						t.Logf("reconcileManagedDriftOverriddenByCommand: skipping PutCloudState for %s: %v", nativeID, err)
-					}
-				}
-				_ = drift // used for lookup only
-			}
-		}
-		model.ClearManagedDriftForResource(ru.StackName, ru.ResourceLabel)
-	}
 }
 
 func (h *TestHarness) reconcileAmbiguousFailedCommands(t *testing.T, model *StateModel, drained []drainedCommand) {
@@ -2070,13 +2420,14 @@ func (h *TestHarness) SetupStacks(t *testing.T, model *StateModel, config Proper
 	// slots authoritative, which must be cleared before the new iteration
 	// creates resources on those slots.
 	model.AuthoritativeSlots = make(map[string]bool)
+	model.DeletedNativeIDs = make(map[string]string)
 
 	// Create a single resource on each stack to ensure the stack exists.
 	for stackIdx := range model.Stacks {
 		stackLabel := model.Stack(stackIdx).Label
 		ids := []int{0} // just the first resource
 
-		forma := FormaFromStackResources(stackLabel, ids)
+		forma := FormaFromStackResources(stackLabel, ids, nil)
 		resp, err := h.client.ApplyForma(forma, pkgmodel.FormaApplyModeReconcile, false, clientID, false)
 		if err != nil {
 			t.Logf("SetupStacks: stack %s apply rejected: %v", stackLabel, err)
@@ -2135,8 +2486,10 @@ func (h *TestHarness) ForceCheckTTLAndWait(t *testing.T, model *StateModel) {
 			continue
 		}
 
-		// Wait for the destroy command and apply outcomes to the model.
-		cmd, ok := h.TryWaitForCommandDone(commandID, defaultCommandTimeout)
+		// Wait for the destroy command and apply outcomes to the model. This
+		// command is stack-expirer sourced, so it never appears over the
+		// user-only command-status API; observe it via the datastore instead.
+		cmd, ok := h.waitForCommandInDB(commandID, defaultCommandTimeout)
 		if !ok {
 			t.Logf("ForceCheckTTLAndWait: command %s timed out", commandID)
 			continue
@@ -2195,6 +2548,32 @@ func (h *TestHarness) ForceCheckTTLAndWait(t *testing.T, model *StateModel) {
 					}
 				}
 			}
+
+			// Every command still in AcceptedCommands was accepted before this
+			// destroy was observed, so its outcomes for the destroyed slots are
+			// stale. The drain's per-pass corrected map cannot express that (the
+			// TTL command is folded in here, not drained), and the authoritative
+			// mark alone does not survive a stale create-Success RU — the
+			// correction path lets creates clear authoritative status. Mark the
+			// destroyed slots superseded on the surviving commands so their
+			// corrections skip them.
+			var destroyedRefs []ResourceSlotRef
+			for slotIdx := range model.Stack(stackIdx).Resources {
+				destroyedRefs = append(destroyedRefs, ResourceSlotRef{StackIndex: stackIdx, SlotIndex: slotIdx})
+			}
+			if model.Pool != nil && expiredLabel == model.ProviderStackLabel {
+				for otherStackIdx := range model.Stacks {
+					if otherStackIdx == stackIdx {
+						continue
+					}
+					for slotIdx := range model.Stack(otherStackIdx).Resources {
+						if model.Pool.IsCrossStack(slotIdx) {
+							destroyedRefs = append(destroyedRefs, ResourceSlotRef{StackIndex: otherStackIdx, SlotIndex: slotIdx})
+						}
+					}
+				}
+			}
+			model.SupersedeSlots(destroyedRefs)
 		}
 		model.Stacks[stackIdx].TTLExpired = false
 		t.Logf("ForceCheckTTLAndWait: stack %s command %s completed: %s", expiredLabel, commandID, cmd.State)
@@ -2344,13 +2723,19 @@ func (h *TestHarness) dumpRawResourceRows(t *testing.T, resources []pkgmodel.Res
 // FormaFromResourceIDs builds a forma containing the resources at the given
 // pool indices on the default stack. Used by smoke tests and ResetAgentState.
 func FormaFromResourceIDs(ids []int) *pkgmodel.Forma {
-	return FormaFromStackResources("default", ids)
+	return FormaFromStackResources("default", ids, nil)
 }
 
 // FormaFromStackResources builds a forma containing the resources at the given
 // pool indices on the specified stack, using the given properties template.
 // The "NAME" placeholder in propsTemplate is replaced with each resource's label.
-func FormaFromStackResources(stackLabel string, ids []int, propsTemplate ...string) *pkgmodel.Forma {
+// FormaFromStackResources builds a forma containing the resources at the given
+// slot indices. labelOverrides, if non-nil, maps slot index -> custom label;
+// for slots present in the map, the override is used instead of the default
+// index-derived label. Used to support OpRename: after a rename, the slot's
+// label override flows into subsequent applies so the renamed resource is
+// addressed by its new label.
+func FormaFromStackResources(stackLabel string, ids []int, labelOverrides map[int]string, propsTemplate ...string) *pkgmodel.Forma {
 	template := `{"Name":"NAME","Value":"v1","SetTags":[],"EntityTags":[],"OrderedItems":[]}`
 	if len(propsTemplate) > 0 && propsTemplate[0] != "" {
 		template = propsTemplate[0]
@@ -2359,6 +2744,9 @@ func FormaFromStackResources(stackLabel string, ids []int, propsTemplate ...stri
 	resources := make([]pkgmodel.Resource, len(ids))
 	for i, id := range ids {
 		name := resourceLabelForStack(stackLabel, id)
+		if override, ok := labelOverrides[id]; ok && override != "" {
+			name = override
+		}
 		props := strings.Replace(template, `"NAME"`, `"`+name+`"`, 1)
 		resources[i] = pkgmodel.Resource{
 			Label:      name,
@@ -2378,8 +2766,9 @@ func FormaFromStackResources(stackLabel string, ids []int, propsTemplate ...stri
 		Resources: resources,
 		Targets: []pkgmodel.Target{
 			{
-				Label:     "test-target",
-				Namespace: "Test",
+				Label:        "test-target",
+				Namespace:    "Test",
+				Discoverable: true,
 			},
 		},
 	}
@@ -2389,14 +2778,23 @@ func FormaFromStackResources(stackLabel string, ids []int, propsTemplate ...stri
 // types, schemas, and resolvable ParentId references for child/grandchild slots.
 // parentProps is the properties template for Test::Generic::Resource (with "NAME" placeholder).
 // childProps is the properties template for child/grandchild types (with "NAME" and "PARENT_ID" placeholders).
+// labelOverrides, if non-nil, maps slot index -> custom label for slots on
+// this stack and takes priority over the pool's default LabelForStack
+// derivation. It applies both to a resource's own label and to the parent
+// labels in child `$res` references, so a renamed parent stays referenced
+// by its current label. providerLabelOverrides is the same map for the
+// provider stack (stack 0), consulted for cross-stack parent references.
 func FormaFromPoolResources(pool *ResourcePool, stackLabel string, providerStackLabel string, ids []int,
-	parentProps string, childProps string) *pkgmodel.Forma {
+	parentProps string, childProps string, labelOverrides map[int]string, providerLabelOverrides map[int]string) *pkgmodel.Forma {
 
 	resources := make([]pkgmodel.Resource, 0, len(ids))
 
 	for _, idx := range ids {
 		slot := pool.Slots[idx]
 		label := pool.LabelForStack(stackLabel, idx)
+		if override, ok := labelOverrides[idx]; ok && override != "" {
+			label = override
+		}
 
 		switch {
 		case pool.IsParent(idx):
@@ -2420,6 +2818,9 @@ func FormaFromPoolResources(pool *ResourcePool, stackLabel string, providerStack
 			}
 			props := strings.Replace(childProps, `"NAME"`, `"`+label+`"`, 1)
 			parentLabel := pool.CrossStackParentLabelForStack(providerStackLabel, idx)
+			if override, ok := providerLabelOverrides[pool.Slots[idx].CrossStackParentSlot]; ok && override != "" {
+				parentLabel = override
+			}
 			parentType := pool.CrossStackParentType(idx)
 			resObj, _ := json.Marshal(map[string]any{
 				"$res":      true,
@@ -2447,6 +2848,9 @@ func FormaFromPoolResources(pool *ResourcePool, stackLabel string, providerStack
 			// The metastructure expects {"$res":true, "$label":"...", "$type":"...",
 			// "$stack":"...", "$property":"..."} — NOT raw {"$ref":"formae://..."}.
 			parentLabel := pool.ParentLabelForStack(stackLabel, idx)
+			if override, ok := labelOverrides[pool.Slots[idx].ParentIndex]; ok && override != "" {
+				parentLabel = override
+			}
 			parentType := pool.ParentType(idx)
 			resObj, _ := json.Marshal(map[string]any{
 				"$res":      true,
@@ -2476,8 +2880,9 @@ func FormaFromPoolResources(pool *ResourcePool, stackLabel string, providerStack
 		Resources: resources,
 		Targets: []pkgmodel.Target{
 			{
-				Label:     "test-target",
-				Namespace: "Test",
+				Label:        "test-target",
+				Namespace:    "Test",
+				Discoverable: true,
 			},
 		},
 	}
@@ -2525,7 +2930,6 @@ func buildPluginOpSequences(
 	stackLabel string,
 	resourceIDs []int,
 	model *StateModel,
-	nativeIDs map[string]string,
 	isDestroy bool,
 	pool *ResourcePool,
 ) []testcontrol.PluginOpSequence {
@@ -2607,20 +3011,16 @@ func buildPluginOpSequences(
 			continue // no drawn outcome for this slot — will succeed by default
 		}
 
-		// Determine the resource label
-		var label string
-		if pool != nil {
-			label = pool.LabelForStack(stackLabel, slotIdx)
-		} else {
-			label = resourceLabelForStack(stackLabel, slotIdx)
-		}
+		// The label the forma carries for this slot — rename-overlay aware,
+		// so failure injection keeps working after a slot has been renamed.
+		label := model.LabelForResource(stackIndex, slotIdx)
 
 		res := model.Stack(stackIndex).Resources[slotIdx]
 		exists := res != nil && res.State == StateExists
 
 		if exists {
 			// Resource exists -> will be Read+Update or Read+Delete
-			nativeID := nativeIDs[stackLabel+":"+label]
+			nativeID := model.GetNativeID(stackIndex, slotIdx)
 			if nativeID == "" {
 				continue // can't program without NativeID
 			}
@@ -2650,7 +3050,7 @@ func buildPluginOpSequences(
 			// Resource doesn't exist -> will be a Create
 			// If the resource has resolvables, program the ResolveCache read of the
 			// referenced resource first. Only program Create if that read succeeds.
-			if resolveTarget, ok := resolveReadMatchKey(pool, model, stackIndex, stackLabel, slotIdx, nativeIDs); ok && len(outcome.ReadSteps) > 0 {
+			if resolveTarget, ok := resolveReadMatchKey(pool, model, stackIndex, slotIdx); ok && len(outcome.ReadSteps) > 0 {
 				sequences = append(sequences, testcontrol.PluginOpSequence{
 					MatchKey:  resolveTarget,
 					Operation: "Read",
@@ -2680,21 +3080,20 @@ func hasResolveReadPhase(pool *ResourcePool, slotIdx int) bool {
 	return pool.Slots[slotIdx].ParentIndex >= 0 || pool.IsCrossStack(slotIdx)
 }
 
-func resolveReadMatchKey(pool *ResourcePool, model *StateModel, stackIdx int, stackLabel string, slotIdx int, nativeIDs map[string]string) (string, bool) {
+func resolveReadMatchKey(pool *ResourcePool, model *StateModel, stackIdx int, slotIdx int) (string, bool) {
 	if pool == nil {
 		return "", false
 	}
 	if pool.IsCrossStack(slotIdx) {
-		parentLabel := pool.CrossStackParentLabelForStack(model.ProviderStackLabel, slotIdx)
-		nativeID := nativeIDs[model.ProviderStackLabel+":"+parentLabel]
+		// Cross-stack parents live on the provider stack (stack 0).
+		nativeID := model.GetNativeID(0, pool.Slots[slotIdx].CrossStackParentSlot)
 		return nativeID, nativeID != ""
 	}
 	parentIdx := pool.Slots[slotIdx].ParentIndex
 	if parentIdx < 0 {
 		return "", false
 	}
-	parentLabel := pool.ParentLabelForStack(stackLabel, slotIdx)
-	nativeID := nativeIDs[stackLabel+":"+parentLabel]
+	nativeID := model.GetNativeID(stackIdx, parentIdx)
 	return nativeID, nativeID != ""
 }
 
@@ -2743,11 +3142,30 @@ func (h *TestHarness) executeSetTTLPolicy(t *testing.T, op *Operation, model *St
 	policy := json.RawMessage(fmt.Sprintf(`{"Type":"ttl","TTLSeconds":%d,"OnDependents":"cascade"}`, ttlSeconds))
 
 	var forma *pkgmodel.Forma
+	overrides := model.LabelOverrides(model.StackIndexByLabel(stackLabel))
 	if model.Pool != nil {
 		forma = FormaFromPoolResources(model.Pool, stackLabel, model.ProviderStackLabel, existingIDs,
-			resourceProperties(stackLabel, existingIDs), defaultDestroyChildProps)
+			defaultDestroyParentProps, defaultDestroyChildProps, overrides, model.LabelOverrides(0))
 	} else {
-		forma = FormaFromStackResources(stackLabel, existingIDs, resourceProperties(stackLabel, existingIDs))
+		forma = FormaFromStackResources(stackLabel, existingIDs, overrides)
+	}
+	// Setting a policy must not rewrite resource names, values or collections.
+	// Keep each slot's predicted properties; the builders supply the reference
+	// envelopes that the normalized model intentionally stores as plain values.
+	for i := range forma.Resources {
+		res := &forma.Resources[i]
+		si, slot, found := model.findResourceSlot(res.Stack, res.Label)
+		require.True(t, found, "policy resource must have a model slot")
+		var props map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal([]byte(model.Resource(si, slot).Properties), &props))
+		if model.Pool != nil && !model.Pool.IsParent(slot) {
+			var declared map[string]json.RawMessage
+			require.NoError(t, json.Unmarshal(res.Properties, &declared))
+			props["ParentId"] = declared["ParentId"]
+		}
+		var err error
+		res.Properties, err = json.Marshal(props)
+		require.NoError(t, err)
 	}
 	for i := range forma.Stacks {
 		if forma.Stacks[i].Label == stackLabel {
@@ -2833,22 +3251,18 @@ func (h *TestHarness) executeCheckTTL(t *testing.T, op *Operation, model *StateM
 			continue
 		}
 
-		// Snapshot only Exists slots (TTL destroys all, NotExist can't change).
-		resourceIDs := allResourceIDs(model, stackIdx)
-		var existingForSnapshot []int
-		for _, idx := range resourceIDs {
-			if res := model.Resource(stackIdx, idx); res != nil && res.State == StateExists {
-				existingForSnapshot = append(existingForSnapshot, idx)
-			}
+		// TTL cascades can delete dependents on other stacks. Snapshot the
+		// complete closure before prediction clears any properties, so failed
+		// deletes can restore their original state on every affected stack.
+		resourceIDs := filterExistingResources(allResourceIDs(model, stackIdx), stackIdx, model)
+		plan := planCascadeDeletes(&Operation{StackIndex: stackIdx}, model, resourceIDs)
+		var snapshots []ResourceSnapshot
+		for _, ref := range plan.affected {
+			snapshots = append(snapshots, model.SnapshotResources(ref.StackIndex, []int{ref.SlotIndex})...)
 		}
-		snapshots := model.SnapshotResources(stackIdx, existingForSnapshot)
-
-		// Immediate model update: TTL expiry destroys all resources on the stack (cascade).
-		for _, idx := range resourceIDs {
-			model.ApplyCascadeDestroyed(stackIdx, idx)
-		}
+		plan.apply(model)
 		model.Stacks[stackIdx].TTLExpired = false
-		model.TrackAcceptedCommand(commandID, snapshots, requestedSlotRefs(op.StackIndex, resourceIDs), h.currentOperationLogSize(t), false)
+		model.TrackAcceptedCommand(commandID, snapshots, requestedSlotRefs(stackIdx, resourceIDs), h.currentOperationLogSize(t), false)
 		t.Logf("[op %d] CheckTTL stack=%s command %s → accepted, model updated (destroyed all)", op.SequenceNum, expiredLabel, commandID)
 	}
 }

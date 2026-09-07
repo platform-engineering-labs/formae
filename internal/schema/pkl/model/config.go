@@ -17,6 +17,9 @@ func init() {
 	pkl.RegisterMapping("formae.Config#LabelConfig", LabelConfig{})
 	pkl.RegisterMapping("formae.Config#MatchFilter", MatchFilter{})
 	pkl.RegisterMapping("formae.Config#FilterCondition", FilterCondition{})
+	pkl.RegisterMapping("formae.Config#Repository", Repository{})
+	pkl.RegisterMapping("formae.Config#Classic", ClassicConnection{})
+	pkl.RegisterMapping("formae.Config#Hosted", HostedConnection{})
 }
 
 // ResourcePlugin nested types used when decoding BaseResourcePluginConfig
@@ -59,6 +62,7 @@ type DatastoreConfig struct {
 	Sqlite        SqliteConfig        `pkl:"sqlite"`
 	Postgres      PostgresConfig      `pkl:"postgres"`
 	AuroraDataAPI AuroraDataAPIConfig `pkl:"auroraDataAPI"`
+	MSSQL         MSSQLConfig         `pkl:"mssql"`
 }
 
 type SqliteConfig struct {
@@ -66,13 +70,14 @@ type SqliteConfig struct {
 }
 
 type PostgresConfig struct {
-	Host             string `pkl:"host"`
-	Port             int32  `pkl:"port"`
-	User             string `pkl:"user"`
-	Password         string `pkl:"password"`
-	Database         string `pkl:"database"`
-	Schema           string `pkl:"schema"`
-	ConnectionParams string `pkl:"connectionParams"`
+	Host              string `pkl:"host"`
+	Port              int32  `pkl:"port"`
+	User              string `pkl:"user"`
+	Password          string `pkl:"password"`
+	PasswordSecretArn string `pkl:"passwordSecretArn"`
+	Database          string `pkl:"database"`
+	Schema            string `pkl:"schema"`
+	ConnectionParams  string `pkl:"connectionParams"`
 }
 
 type AuroraDataAPIConfig struct {
@@ -81,6 +86,20 @@ type AuroraDataAPIConfig struct {
 	Database   string `pkl:"database"`
 	Region     string `pkl:"region"`
 	Endpoint   string `pkl:"endpoint"`
+}
+
+type MSSQLConfig struct {
+	Host                   string        `pkl:"host"`
+	Port                   int32         `pkl:"port"`
+	Database               string        `pkl:"database"`
+	AuthMode               string        `pkl:"authMode"`
+	User                   string        `pkl:"user"`
+	Password               string        `pkl:"password"`
+	Encrypt                bool          `pkl:"encrypt"`
+	TrustServerCertificate bool          `pkl:"trustServerCertificate"`
+	ConnectionParams       string        `pkl:"connectionParams"`
+	MaxOpenConns           int32         `pkl:"maxOpenConns"`
+	ConnMaxLifetime        *pkl.Duration `pkl:"connMaxLifetime"`
 }
 
 type RetryConfig struct {
@@ -121,7 +140,6 @@ type User struct {
 type DiscoveryConfig struct {
 	Enabled                 bool          `pkl:"enabled"`
 	Interval                *pkl.Duration `pkl:"interval"`
-	LabelTagKeys            []string      `pkl:"labelTagKeys"`
 	ResourceTypesToDiscover []string      `pkl:"resourceTypesToDiscover"`
 }
 
@@ -145,10 +163,11 @@ type OTelConfig struct {
 }
 
 type TailscaleConfig struct {
-	TLS           bool     `pkl:"tls"`
-	AuthKey       string   `pkl:"authKey"`
-	Hostname      string   `pkl:"hostname"`
-	AdvertiseTags []string `pkl:"advertiseTags"`
+	TLS             bool     `pkl:"tls"`
+	AuthKey         string   `pkl:"authKey"`
+	Hostname        string   `pkl:"hostname"`
+	AdvertiseTags   []string `pkl:"advertiseTags"`
+	EgressProxyPort int32    `pkl:"egressProxyPort"`
 }
 
 type NetworkConfig struct {
@@ -167,6 +186,8 @@ type AgentConfig struct {
 	StackExpirer    StackExpirerConfig    `pkl:"stackExpirer"`
 	Auth            pkl.Object            `pkl:"auth"`
 	ResourcePlugins []pkl.Object          `pkl:"resourcePlugins"`
+
+	OidcCredentialPlugins []pkl.Object `pkl:"oidcCredentialPlugins"`
 }
 
 type APIConfig struct {
@@ -174,16 +195,42 @@ type APIConfig struct {
 	Port int32  `pkl:"port"`
 }
 
+// ClassicConnection decodes `formae.Config#Classic`.
+type ClassicConnection struct {
+	URL  string      `pkl:"url"`
+	Port int32       `pkl:"port"`
+	Auth *pkl.Object `pkl:"auth"`
+}
+
+// HostedConnection decodes `formae.Config#Hosted`.
+type HostedConnection struct {
+	Endpoint     string      `pkl:"endpoint"`
+	Installation string      `pkl:"installation"`
+	Auth         *pkl.Object `pkl:"auth"`
+}
+
+type Repository struct {
+	URI  url.URL `pkl:"uri"`
+	Type string  `pkl:"type"`
+}
+
 type ArtifactConfig struct {
-	URL      url.URL `pkl:"url"`
-	Username string  `pkl:"username"`
-	Password string  `pkl:"password"`
+	URL          url.URL       `pkl:"url"`
+	Username     string        `pkl:"username"`
+	Password     string        `pkl:"password"`
+	Repositories []*Repository `pkl:"repositories"`
 }
 
 type CliConfig struct {
-	API                   APIConfig  `pkl:"api"`
+	// Connection holds *ClassicConnection or *HostedConnection, or nil when
+	// the property is unset. pkl-go dispatches on the registered Pkl class
+	// name, so the decoder picks the concrete type.
+	Connection            any        `pkl:"connection"`
+	API                   *APIConfig `pkl:"api"`
 	DisableUsageReporting bool       `pkl:"disableUsageReporting"`
 	Auth                  pkl.Object `pkl:"auth"`
+	Theme                 string     `pkl:"theme"`
+	Appearance            string     `pkl:"appearance"`
 }
 
 // PluginConfig is deprecated. Use top-level pluginDir, network, and agent.auth / cli.auth.

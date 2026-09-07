@@ -1,0 +1,28 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+name = "oidc-credential-stub"
+type = "oidc-credential"
+version = "0.0.1"
+summary = "Stub oidc-credential broker for the e2e suite"
+license = "FSL-1.1-ALv2"
+
+/// The namespaces this broker serves, paired with each resource plugin's
+/// namespace by the agent's PluginCoordinator (which upper-cases on ingest).
+///
+/// AWS and GCP are the real plugins: under an `OidcAuth` target they mint
+/// through this broker and exchange the result themselves, which is what the
+/// suite is really here to prove. OidcEcho is the fixture that reports the
+/// token's own claims, and the one whose failure the unpaired case asserts on.
+namespaces {
+  "OidcEcho"
+  "AWS"
+  "GCP"
+}
+
+/// Must be at least pkg/credential.MinFormaeVersion, or the agent drops this
+/// broker as built against an unsupported SDK. Raise both together.
+minFormaeVersion = "0.89.0"

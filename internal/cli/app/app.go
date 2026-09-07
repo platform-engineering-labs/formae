@@ -5,7 +5,6 @@
 package app
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -13,12 +12,16 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/platform-engineering-labs/formae"
 	"github.com/platform-engineering-labs/formae/internal/api"
+	"github.com/platform-engineering-labs/formae/internal/cli/authmsg"
+	"github.com/platform-engineering-labs/formae/internal/cli/banner"
 	"github.com/platform-engineering-labs/formae/internal/cli/config"
-	"github.com/platform-engineering-labs/formae/internal/cli/display"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	"github.com/platform-engineering-labs/formae/internal/network"
 	_ "github.com/platform-engineering-labs/formae/internal/network/all"
 	"github.com/platform-engineering-labs/formae/internal/schema"
@@ -30,6 +33,7 @@ import (
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/discovery"
 	"github.com/tidwall/gjson"
+	"golang.org/x/sync/singleflight"
 )
 
 type App struct {
@@ -40,14 +44,92 @@ type App struct {
 
 	Usage usage.Sender
 
+	// memoMu guards authClient and netClient/netClientLoaded below. Both are
+	// lazily built on first use and then reused for the App's lifetime, and
+	// both are reachable from more than one goroutine in practice: Bubbletea
+	// (internal/cli/tui/statuswatch) batches a status fetch and the next
+	// tick's command together, and if one fetch hasn't returned before the
+	// next tick fires, two goroutines can race through AuthClient() or
+	// netHTTPClient() on the same App concurrently. The lock is held across
+	// the whole check-build-store sequence for each field, not just the
+	// store, so two concurrent first-callers share one client/transport
+	// instead of racing to build two.
+	memoMu sync.Mutex
+
 	authClient *pkgauth.Client
+
+	// netClient and netClientLoaded memoize the network plugin's *http.Client
+	// (e.g. Tailscale's tsnet-backed transport) for the lifetime of the App,
+	// the same way authClient memoizes the auth plugin subprocess. Building
+	// it is expensive (a Tailscale client stands up its own tsnet.Server and
+	// re-authenticates to the tailnet), so it must happen once per App, not
+	// once per withAuthRetry closure — unlike the auth header, which is
+	// meant to be re-fetched on a forced refresh, the transport underneath
+	// it is not. netClientLoaded distinguishes "not built yet" from "built,
+	// and nil because no network plugin is configured".
+	netClient       *http.Client
+	netClientLoaded bool
+
+	// refreshGroup coalesces concurrent forced-refresh requests into a
+	// single GetAuthHeader(true) call. Several operations can observe the
+	// same stale credential at once (the same Bubbletea overlap described
+	// above), and each independently forcing a refresh would be actively
+	// harmful for a plugin backed by rotating refresh tokens: one refresh
+	// would consume the token another is mid-use of, tripping reuse
+	// detection and killing the session. Its zero value is ready to use.
+	refreshGroup singleflight.Group
+
+	// authClientFactory returns the auth plugin client used to obtain and,
+	// on a 401, force-refresh the credential attached to outgoing API
+	// requests. Nil in the real constructor, where it defaults to
+	// a.AuthClient; tests inject a stub so they can drive withAuthRetry
+	// without spawning a plugin subprocess.
+	authClientFactory func() (authHeaderProvider, error)
+
+	// newAPIClient constructs the API client used for a single retried
+	// operation. Nil in the real constructor, where it defaults to
+	// api.NewClient against a.Config.Cli.Connection; tests inject a stub
+	// pointed at an httptest server.
+	newAPIClient func(authHeader http.Header, net *http.Client) *api.Client
+}
+
+// authHeaderProvider is the subset of *pkgauth.Client withAuthRetry needs to
+// obtain (and force-refresh) the header attached to outgoing API requests.
+// Depending on this narrow interface, rather than the concrete client, lets
+// tests exercise the retry logic against a stub with no plugin subprocess.
+type authHeaderProvider interface {
+	GetAuthHeader(forceRefresh bool) (*pkgauth.GetAuthHeaderResponse, error)
 }
 
 // Close cleans up resources held by the App, including any auth plugin subprocess.
 func (a *App) Close() {
-	if a.authClient != nil {
-		_ = a.authClient.Close()
+	a.memoMu.Lock()
+	client := a.authClient
+	a.memoMu.Unlock()
+
+	if client != nil {
+		_ = client.Close()
 	}
+}
+
+// NewClient creates a new API client using the App's configuration,
+// auth, and network settings.
+func (a *App) NewClient() (*api.Client, error) {
+	auth, net, err := a.getAuthAndNetHandlers()
+	if err != nil {
+		return nil, err
+	}
+	return api.NewClient(a.Config.Cli.Connection, auth, net), nil
+}
+
+// Theme resolves the active CLI theme from config, falling back to quiet when
+// config is absent. It is the single source of truth for command theming.
+func (a *App) Theme() *theme.Theme {
+	name := ""
+	if a != nil && a.Config != nil {
+		name = a.Config.Cli.Theme
+	}
+	return theme.New(name)
 }
 
 type Plugins struct{}
@@ -57,12 +139,15 @@ type Projects struct{}
 func NewApp() *App {
 	u, err := usage.NewPostHogSender()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, display.Red("Error: "+err.Error()))
+		_, _ = fmt.Fprintln(os.Stderr, lipgloss.NewStyle().Foreground(theme.New("formae").Palette.Error).Render("Error: "+err.Error()))
 		os.Exit(1)
 	}
 
 	app := &App{
-		Config:   &pkgmodel.Config{},
+		// Default PluginDir matches the PKL Config.pkl default so that CLI
+		// commands invoked without --config still get sane plugin discovery.
+		// LoadConfig overwrites this when a config file is present.
+		Config:   &pkgmodel.Config{PluginDir: "~/.pel/formae/plugins"},
 		Plugins:  Plugins{},
 		Projects: Projects{},
 		Usage:    u,
@@ -70,7 +155,7 @@ func NewApp() *App {
 
 	err = config.Config.EnsureClientID()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, display.Red("Error: "+err.Error()))
+		_, _ = fmt.Fprintln(os.Stderr, lipgloss.NewStyle().Foreground(theme.New("formae").Palette.Error).Render("Error: "+err.Error()))
 		os.Exit(1)
 	}
 
@@ -113,9 +198,9 @@ func (a *App) LoadConfig(path string, configPathPrefix string) error {
 				if strings.ToLower(fileExtension) == ".pkl" {
 					return fmt.Errorf("%w\n%s %s\n%s %s",
 						err,
-						display.Gold("Pkl documentation:"),
+						docLabelStyle().Render("Pkl documentation:"),
 						"https://pkl-lang.org/main/current/language-reference/index.html",
-						display.Gold("Pkl primer:"),
+						docLabelStyle().Render("Pkl primer:"),
 						"https://pkl.platform.engineering",
 					)
 				}
@@ -141,17 +226,28 @@ func (a *App) LoadConfig(path string, configPathPrefix string) error {
 	return nil
 }
 
+// docLabelStyle is the shared style for doc-link / callout labels (e.g.
+// "Getting started:", "Pkl documentation:", "Configuration documentation:") —
+// brand orange (SecondaryAccent), consistent with the banner "Docs:" and the
+// cmd help. Distinct from Warning (gold), which is reserved for genuine cautions.
+func docLabelStyle() lipgloss.Style {
+	return lipgloss.NewStyle().Foreground(theme.New("formae").Palette.SecondaryAccent)
+}
+
 // PrintBanner prints the formae banner followed by any config warnings
 // (e.g. deprecation notices for the old plugins block). Call this instead
-// of display.PrintBanner() in human-readable command flows so that
+// of banner.PrintBanner() in human-readable command flows so that
 // warnings are never emitted in machine-readable (JSON) output.
 func (a *App) PrintBanner() {
-	display.PrintBanner()
+	banner.SetTheme(a.Theme())
+	banner.PrintBanner()
 	if a.Config != nil && len(a.Config.Warnings) > 0 {
+		th := theme.New("formae")
+		goldStyle := lipgloss.NewStyle().Foreground(th.Palette.Warning)
 		for _, w := range a.Config.Warnings {
-			fmt.Fprintf(os.Stderr, "%s %s\n", display.Gold("Warning:"), w)
+			_, _ = fmt.Fprintf(os.Stderr, "%s %s\n", goldStyle.Render("Warning:"), w)
 		}
-		fmt.Fprintln(os.Stderr)
+		_, _ = fmt.Fprintln(os.Stderr)
 	}
 }
 
@@ -178,13 +274,7 @@ func (a *App) IsSupportedOutputSchema(contentType string) bool {
 }
 
 func (a *App) Apply(path string, props map[string]string, mode pkgmodel.FormaApplyMode, simulate bool, force bool) (*apimodel.SubmitCommandResponse, []string, error) {
-	auth, net, err := a.getAuthAndNetHandlers()
-	if err != nil {
-		return nil, nil, err
-	}
-	client := api.NewClient(a.Config.Cli.API, auth, net)
-
-	compatible, _, nags, err := a.runBeforeCommand(client, true)
+	compatible, _, nags, err := a.runBeforeCommand(true)
 	if !compatible {
 		return nil, nil, err
 	}
@@ -197,9 +287,9 @@ func (a *App) Apply(path string, props map[string]string, mode pkgmodel.FormaApp
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w\n%s %s\n%s %s",
 			err,
-			display.Gold("Pkl documentation:"),
+			docLabelStyle().Render("Pkl documentation:"),
 			"https://pkl-lang.org/main/current/language-reference/index.html",
-			display.Gold("Pkl primer:"),
+			docLabelStyle().Render("Pkl primer:"),
 			"https://pkl.platform.engineering",
 		)
 	}
@@ -207,7 +297,22 @@ func (a *App) Apply(path string, props map[string]string, mode pkgmodel.FormaApp
 	if err != nil {
 		return nil, nil, err
 	}
-	resp, err := client.ApplyForma(forma, mode, simulate, clientID, force)
+
+	// This is its own withAuthRetry closure, separate from the Stats
+	// preflight above: wrapping Apply as a whole would replay the preflight
+	// and re-submit the mutation on retry. The forma is []byte-marshaled
+	// fresh by ApplyForma on every call, so replaying just this closure is
+	// safe.
+	var resp *apimodel.SubmitCommandResponse
+	err = a.withAuthRetry(func(authHeader http.Header, net *http.Client) error {
+		client := a.apiClient(authHeader, net)
+		r, err := client.ApplyForma(forma, mode, simulate, clientID, force)
+		if err != nil {
+			return err
+		}
+		resp = r
+		return nil
+	})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -215,14 +320,8 @@ func (a *App) Apply(path string, props map[string]string, mode pkgmodel.FormaApp
 	return resp, nags, nil
 }
 
-func (a *App) Destroy(path string, query string, props map[string]string, simulate bool) (*apimodel.SubmitCommandResponse, []string, error) {
-	auth, net, err := a.getAuthAndNetHandlers()
-	if err != nil {
-		return nil, nil, err
-	}
-	client := api.NewClient(a.Config.Cli.API, auth, net)
-
-	compatible, _, nags, err := a.runBeforeCommand(client, true)
+func (a *App) Destroy(path string, query string, props map[string]string, simulate bool, onDependents string) (*apimodel.SubmitCommandResponse, []string, error) {
+	compatible, _, nags, err := a.runBeforeCommand(true)
 	if !compatible {
 		return nil, nil, err
 	}
@@ -242,19 +341,35 @@ func (a *App) Destroy(path string, query string, props map[string]string, simula
 		if err != nil {
 			return nil, nil, fmt.Errorf("%w\n%s %s\n%s %s",
 				err,
-				display.Gold("Pkl documentation:"),
+				docLabelStyle().Render("Pkl documentation:"),
 				"https://pkl-lang.org/main/current/language-reference/index.html",
-				display.Gold("Pkl primer:"),
+				docLabelStyle().Render("Pkl primer:"),
 				"https://pkl.platform.engineering",
 			)
 		}
 
-		resp, err = client.DestroyForma(forma, simulate, clientID)
+		err = a.withAuthRetry(func(authHeader http.Header, net *http.Client) error {
+			client := a.apiClient(authHeader, net)
+			r, err := client.DestroyForma(forma, simulate, onDependents, clientID)
+			if err != nil {
+				return err
+			}
+			resp = r
+			return nil
+		})
 		if err != nil {
 			return nil, nil, err
 		}
 	} else {
-		resp, err = client.DestroyByQuery(query, simulate, clientID)
+		err = a.withAuthRetry(func(authHeader http.Header, net *http.Client) error {
+			client := a.apiClient(authHeader, net)
+			r, err := client.DestroyByQuery(query, simulate, onDependents, clientID)
+			if err != nil {
+				return err
+			}
+			resp = r
+			return nil
+		})
 		if err != nil {
 			return nil, nil, err
 		}
@@ -263,14 +378,8 @@ func (a *App) Destroy(path string, query string, props map[string]string, simula
 	return resp, nags, nil
 }
 
-func (a *App) CancelCommand(query string) (*apimodel.CancelCommandResponse, error) {
-	auth, net, err := a.getAuthAndNetHandlers()
-	if err != nil {
-		return nil, err
-	}
-	client := api.NewClient(a.Config.Cli.API, auth, net)
-
-	compatible, _, _, err := a.runBeforeCommand(client, true)
+func (a *App) CancelCommand(query string, force bool) (*apimodel.CancelCommandResponse, error) {
+	compatible, _, _, err := a.runBeforeCommand(true)
 	if !compatible {
 		return nil, err
 	}
@@ -280,7 +389,16 @@ func (a *App) CancelCommand(query string) (*apimodel.CancelCommandResponse, erro
 		return nil, err
 	}
 
-	res, err := client.CancelCommands(query, clientID)
+	var res *apimodel.CancelCommandResponse
+	err = a.withAuthRetry(func(authHeader http.Header, net *http.Client) error {
+		client := a.apiClient(authHeader, net)
+		r, err := client.CancelCommands(query, force, clientID)
+		if err != nil {
+			return err
+		}
+		res = r
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -288,14 +406,22 @@ func (a *App) CancelCommand(query string) (*apimodel.CancelCommandResponse, erro
 	return res, nil
 }
 
+// GetCommandsStatus lists user-initiated commands matching query. An empty
+// query lists every client's commands, newest first, bounded by n. Callers
+// that specifically want the calling client's own most recent command (a
+// bare `formae command status`, a bare `formae cancel`) must use
+// GetCommandsStatusScoped with apimodel.CommandScopeClient.
+//
+// This signature is what the statuswatch TUI's Client interface requires, so
+// it stays three-argument.
 func (a *App) GetCommandsStatus(query string, n int, fromWatch bool) (*apimodel.ListCommandStatusResponse, []string, error) {
-	auth, net, err := a.getAuthAndNetHandlers()
-	if err != nil {
-		return nil, nil, err
-	}
-	client := api.NewClient(a.Config.Cli.API, auth, net)
+	return a.GetCommandsStatusScoped(query, n, fromWatch, apimodel.CommandScopeAgent)
+}
 
-	compatible, _, nags, err := a.runBeforeCommand(client, !fromWatch)
+// GetCommandsStatusScoped is GetCommandsStatus with an explicit scope for the
+// empty-query case; see apimodel.CommandScope.
+func (a *App) GetCommandsStatusScoped(query string, n int, fromWatch bool, scope apimodel.CommandScope) (*apimodel.ListCommandStatusResponse, []string, error) {
+	compatible, _, nags, err := a.runBeforeCommand(!fromWatch)
 	if !compatible {
 		return nil, nil, err
 	}
@@ -305,7 +431,16 @@ func (a *App) GetCommandsStatus(query string, n int, fromWatch bool) (*apimodel.
 		return nil, nil, err
 	}
 
-	res, err := client.GetFormaCommandsStatus(query, clientID, n)
+	var res *apimodel.ListCommandStatusResponse
+	err = a.withAuthRetry(func(authHeader http.Header, net *http.Client) error {
+		client := a.apiClient(authHeader, net)
+		r, err := client.GetFormaCommandsStatus(query, clientID, n, scope)
+		if err != nil {
+			return err
+		}
+		res = r
+		return nil
+	})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -319,20 +454,22 @@ func (a *App) GetCommandsStatus(query string, n int, fromWatch bool) (*apimodel.
 	return res, nags, nil
 }
 
-func (a *App) ExtractResources(query string) (*pkgmodel.Forma, []string, error) {
-	auth, net, err := a.getAuthAndNetHandlers()
-	if err != nil {
-		return nil, nil, err
-	}
-	client := api.NewClient(a.Config.Cli.API, auth, net)
-
-	compatible, _, nags, err := a.runBeforeCommand(client, true)
+func (a *App) ExtractResources(query string, fromTUI bool) (*pkgmodel.Forma, []string, error) {
+	compatible, _, nags, err := a.runBeforeCommand(!fromTUI)
 	if !compatible {
 		return nil, nil, err
 	}
 
-	f, err := client.ExtractResources(query)
-
+	var f *pkgmodel.Forma
+	err = a.withAuthRetry(func(authHeader http.Header, net *http.Client) error {
+		client := a.apiClient(authHeader, net)
+		res, err := client.ExtractResources(query)
+		if err != nil {
+			return err
+		}
+		f = res
+		return nil
+	})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -344,74 +481,281 @@ func (a *App) ExtractResources(query string) (*pkgmodel.Forma, []string, error) 
 		}
 	}
 
-	return f, nags, err
+	return f, nags, nil
+}
+
+// ListResourceSummaries fetches lightweight resource summaries from the agent,
+// alongside any nag messages from the compatibility gate. Detail is fetched
+// lazily by ksuid via ResourceDetailByKsuid.
+func (a *App) ListResourceSummaries(query string, fromTUI bool) ([]pkgmodel.ResourceSummary, []string, error) {
+	compatible, _, nags, err := a.runBeforeCommand(!fromTUI)
+	if !compatible {
+		return nil, nil, err
+	}
+
+	var summaries []pkgmodel.ResourceSummary
+	err = a.withAuthRetry(func(authHeader http.Header, net *http.Client) error {
+		client := a.apiClient(authHeader, net)
+		s, err := client.ListResourceSummaries(query)
+		if err != nil {
+			return err
+		}
+		summaries = s
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	if summaries == nil {
+		summaries = []pkgmodel.ResourceSummary{}
+	}
+	return summaries, nags, nil
+}
+
+// ResourceDetailByKsuid fetches a single resource by its ksuid from the agent.
+// Returns (nil, nags, nil) when the agent reports no resource for the ksuid.
+func (a *App) ResourceDetailByKsuid(ksuid string, fromTUI bool) (*pkgmodel.Resource, []string, error) {
+	compatible, _, nags, err := a.runBeforeCommand(!fromTUI)
+	if !compatible {
+		return nil, nil, err
+	}
+
+	var resource *pkgmodel.Resource
+	err = a.withAuthRetry(func(authHeader http.Header, net *http.Client) error {
+		client := a.apiClient(authHeader, net)
+		r, err := client.GetResourceByKsuid(ksuid)
+		if err != nil {
+			return err
+		}
+		resource = r
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return resource, nags, nil
 }
 
 func (a *App) ForceSync() error {
-	auth, net, err := a.getAuthAndNetHandlers()
-	if err != nil {
-		return err
-	}
-	client := api.NewClient(a.Config.Cli.API, auth, net)
-
-	if compatible, _, _, err := a.runBeforeCommand(client, true); !compatible {
+	if compatible, _, _, err := a.runBeforeCommand(true); !compatible {
 		return err
 	}
 
-	return client.ForceSync()
+	return a.withAuthRetry(func(authHeader http.Header, net *http.Client) error {
+		client := a.apiClient(authHeader, net)
+		return client.ForceSync()
+	})
 }
 
 func (a *App) ForceDiscover() error {
-	auth, net, err := a.getAuthAndNetHandlers()
+	if compatible, _, _, err := a.runBeforeCommand(true); !compatible {
+		return err
+	}
+
+	return a.withAuthRetry(func(authHeader http.Header, net *http.Client) error {
+		client := a.apiClient(authHeader, net)
+		return client.ForceDiscover()
+	})
+}
+
+func (a *App) InstallPlugins(req apimodel.InstallPluginsRequest) (*apimodel.InstallPluginsResponse, error) {
+	if compatible, _, _, err := a.runBeforeCommand(true); !compatible {
+		return nil, err
+	}
+
+	var resp *apimodel.InstallPluginsResponse
+	err := a.withAuthRetry(func(authHeader http.Header, net *http.Client) error {
+		client := a.apiClient(authHeader, net)
+		r, err := client.InstallPlugins(req)
+		if err != nil {
+			return err
+		}
+		resp = r
+		return nil
+	})
 	if err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
+func (a *App) UninstallPlugins(req apimodel.UninstallPluginsRequest) (*apimodel.UninstallPluginsResponse, error) {
+	if compatible, _, _, err := a.runBeforeCommand(true); !compatible {
+		return nil, err
+	}
+
+	var resp *apimodel.UninstallPluginsResponse
+	err := a.withAuthRetry(func(authHeader http.Header, net *http.Client) error {
+		client := a.apiClient(authHeader, net)
+		r, err := client.UninstallPlugins(req)
+		if err != nil {
+			return err
+		}
+		resp = r
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
+// InstalledResourcePluginVersions queries the agent for installed resource
+// plugins and returns a map of lowercase namespace to installed version. Used
+// by `formae extract` and `formae project init` to pin remote schema URIs
+// without scanning local plugin directories — orbital-installed plugins live
+// on the agent box, not on the CLI box, so the local-scan approach broke for
+// any deployment where agent and CLI are separate.
+func (a *App) InstalledResourcePluginVersions() (map[string]string, error) {
+	plugins, err := a.installedResourcePlugins()
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[string]string, len(plugins))
+	for ns, info := range plugins {
+		if info.Version != "" {
+			result[ns] = info.Version
+		}
+	}
+	return result, nil
+}
+
+// PluginInfo is a CLI-side view of an installed plugin, combining the
+// agent-reported version with its on-disk PklProject location (when the
+// agent and CLI share a filesystem). Used by the --schema-location local
+// flow to build local PKL import strings.
+type PluginInfo struct {
+	Version   string
+	LocalPath string
+}
+
+// InstalledResourcePlugins returns the agent's view of installed
+// resource plugins, keyed by lowercase namespace (falling back to
+// lowercase name when namespace is empty). Includes both version and
+// the agent-reported on-disk PklProject path so callers can pick
+// local vs remote URI emission.
+func (a *App) InstalledResourcePlugins() (map[string]PluginInfo, error) {
+	return a.installedResourcePlugins()
+}
+
+func (a *App) installedResourcePlugins() (map[string]PluginInfo, error) {
+	var resp *apimodel.ListPluginsResponse
+	err := a.withAuthRetry(func(authHeader http.Header, net *http.Client) error {
+		client := a.apiClient(authHeader, net)
+		r, err := client.ListPlugins("installed", "", "", "", "")
+		if err != nil {
+			return err
+		}
+		resp = r
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	result := make(map[string]PluginInfo, len(resp.Plugins))
+	for _, p := range resp.Plugins {
+		if p.Type != "resource" {
+			continue
+		}
+		key := strings.ToLower(p.Namespace)
+		if key == "" {
+			key = strings.ToLower(p.Name)
+		}
+		result[key] = PluginInfo{
+			Version:   p.InstalledVersion,
+			LocalPath: p.LocalPath,
+		}
+	}
+	return result, nil
+}
+
+func (a *App) UpdatePlugins(req apimodel.UpdatePluginsRequest) (*apimodel.UpdatePluginsResponse, error) {
+	if compatible, _, _, err := a.runBeforeCommand(true); !compatible {
+		return nil, err
+	}
+
+	var resp *apimodel.UpdatePluginsResponse
+	err := a.withAuthRetry(func(authHeader http.Header, net *http.Client) error {
+		client := a.apiClient(authHeader, net)
+		r, err := client.UpdatePlugins(req)
+		if err != nil {
+			return err
+		}
+		resp = r
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
+// Preflight verifies the agent is reachable and version-compatible before an
+// interactive (TUI) command takes over the screen, so connection, auth, and
+// version-mismatch errors surface as ordinary CLI errors instead of being
+// rendered inside the alt-screen TUI. transmitStats is false so a preflight
+// check doesn't double-report usage stats.
+func (a *App) Preflight() error {
+	if compatible, _, _, err := a.runBeforeCommand(false); !compatible {
 		return err
 	}
-	client := api.NewClient(a.Config.Cli.API, auth, net)
-
-	if compatible, _, _, err := a.runBeforeCommand(client, true); !compatible {
-		return err
-	}
-
-	return client.ForceDiscover()
+	return nil
 }
 
 func (a *App) Stats() (*apimodel.Stats, []string, error) {
-	auth, net, err := a.getAuthAndNetHandlers()
-	if err != nil {
+	compatible, stats, nags, err := a.runBeforeCommand(true)
+	if !compatible {
 		return nil, nil, err
 	}
-	client := api.NewClient(a.Config.Cli.API, auth, net)
-
-	if compatible, stats, nags, err := a.runBeforeCommand(client, true); !compatible {
-		return nil, nil, err
-	} else {
-		if err == syscall.ECONNREFUSED {
-			return nil, nil, fmt.Errorf("agent is not running; please start the agent and try again\n\n%s %s", display.Gold("Getting started:"), display.DocRoot)
-
-		} else if err != nil {
-			return nil, nil, fmt.Errorf("error fetching stats from agent: %v", err)
-		}
-
-		return stats, nags, nil
-	}
+	return stats, nags, nil
 }
 
-func (a *App) runBeforeCommand(client *api.Client, transmitStats bool) (bool, *apimodel.Stats, []string, error) {
-	stats, err := client.Stats()
+// runBeforeCommand fetches Stats as its own withAuthRetry closure — the one
+// enumerated conversion point that every command runs before its own work —
+// then checks version compatibility and reports usage. It no longer takes a
+// pre-built client: retrying Stats independently means a stale credential
+// caught here does not also poison whichever client the caller goes on to
+// build for its own operation.
+func (a *App) runBeforeCommand(transmitStats bool) (bool, *apimodel.Stats, []string, error) {
+	var stats *apimodel.Stats
+	err := a.withAuthRetry(func(authHeader http.Header, net *http.Client) error {
+		client := a.apiClient(authHeader, net)
+		s, err := client.Stats()
+		if err != nil {
+			return err
+		}
+		stats = s
+		return nil
+	})
 	if err != nil {
-		if err == syscall.ECONNREFUSED {
-			return false, nil, nil, fmt.Errorf("agent is not running; please start the agent and try again\n\n%s %s", display.Gold("Getting started:"), display.DocRoot)
+		th := theme.New("formae")
+		goldStyle := lipgloss.NewStyle().Foreground(th.Palette.Warning)
+		errStyle := lipgloss.NewStyle().Foreground(th.Palette.Error)
+		if errors.Is(err, syscall.ECONNREFUSED) {
+			return false, nil, nil, fmt.Errorf("agent is not running; please start the agent and try again\n\n%s %s", docLabelStyle().Render("Getting started:"), banner.DocRoot)
+		}
+		var denied api.AuthorizationDeniedError
+		if errors.As(err, &denied) {
+			// denied.Error()'s text is design-pinned and must not change; it
+			// already reads as a single headline+action sentence, so unlike
+			// the AuthenticationError branch below there is no natural place
+			// to split it into a separate two-tone headline/action pair
+			// without slicing the frozen string itself. Style it as one run
+			// instead, consistent in kind (though not in structure) with its
+			// siblings in this switch.
+			return false, nil, nil, fmt.Errorf("%s", errStyle.Render(denied.Error()))
 		}
 		if errors.Is(err, api.AuthenticationError{}) {
 			return false, nil, nil, fmt.Errorf("%s\n\n%s",
-				display.Red("authentication failed"),
-				display.Gold("Check your cli.auth and agent.auth configuration."))
+				errStyle.Render("authentication failed"),
+				goldStyle.Render("Check your cli.auth and agent.auth configuration."))
 		}
 		return false, nil, nil, fmt.Errorf("error fetching stats from agent: %v", err)
 	}
 
 	if stats.Version != formae.Version {
-		return false, nil, nil, fmt.Errorf("incompatible agent version: expected %s, got %s\n\n%s %s", formae.Version, stats.Version, display.Gold("Configuration documentation:"), display.DocRoot)
+		return false, nil, nil, fmt.Errorf("incompatible agent version: expected %s, got %s\n\n%s %s", formae.Version, stats.Version, docLabelStyle().Render("Configuration documentation:"), banner.DocRoot)
 	}
 
 	if transmitStats && !a.Config.Cli.DisableUsageReporting {
@@ -437,69 +781,259 @@ func (a *App) calculateNags(stats *apimodel.Stats) []string {
 		if totalUnmanaged == 1 {
 			plural = ""
 		}
-		nags = append(nags, fmt.Sprintf("You have %d unmanaged resource%s. You can extract them using %s, adjust and apply the changes.", totalUnmanaged, plural, display.LightBlue("formae extract --query='managed:false'")))
+		th := theme.New("formae")
+		nags = append(nags, fmt.Sprintf("You have %d unmanaged resource%s. You can extract them using %s, adjust and apply the changes.", totalUnmanaged, plural, lipgloss.NewStyle().Foreground(th.Palette.PrimaryAccent).Render("formae extract --query='managed:false'")))
 	}
 
 	return nags
 }
 
-func (a *App) getAuthAndNetHandlers() (http.Header, *http.Client, error) {
-	var authHeader http.Header
-	var net *http.Client
+// NoAuthPluginError indicates the active profile carries no cli.auth block,
+// so there is no auth plugin to discover or start.
+type NoAuthPluginError struct{}
 
-	if a.Config.Cli.Auth != nil {
-		if a.authClient == nil {
-			authType := gjson.GetBytes(a.Config.Cli.Auth, "type").String()
-			pluginDir := util.ExpandHomePath(a.Config.PluginDir)
-			authPlugins := discovery.DiscoverPlugins(pluginDir, discovery.Auth)
-			var matched *discovery.PluginInfo
-			for i, p := range authPlugins {
-				if p.Name == authType {
-					matched = &authPlugins[i]
-					break
-				}
+func (*NoAuthPluginError) Error() string {
+	return "no auth plugin configured for the active profile"
+}
+
+// AuthClient returns the App's auth plugin client, discovering and starting
+// the plugin subprocess on first use and caching it for subsequent calls.
+// It returns a *NoAuthPluginError when the active profile has no cli.auth
+// block, so callers that need a plugin outright — such as `formae login` —
+// can fail with a clear message instead of dereferencing a nil client.
+func (a *App) AuthClient() (*pkgauth.Client, error) {
+	if a.Config.Cli.AuthConfig() == nil {
+		return nil, &NoAuthPluginError{}
+	}
+
+	a.memoMu.Lock()
+	defer a.memoMu.Unlock()
+
+	if a.authClient == nil {
+		authType := gjson.GetBytes(a.Config.Cli.AuthConfig(), "type").String()
+		devPluginDir := util.ExpandHomePath(a.Config.PluginDir)
+		binPath, err := os.Executable()
+		if err != nil {
+			return nil, fmt.Errorf("failed to determine binary path: %w", err)
+		}
+		systemPluginDir := discovery.SystemPluginDir(binPath)
+		authPlugins := discovery.DiscoverPluginsMulti(
+			[]string{devPluginDir, systemPluginDir}, discovery.Auth,
+		)
+		var matched *discovery.PluginInfo
+		for i, p := range authPlugins {
+			if p.Name == authType {
+				matched = &authPlugins[i]
+				break
 			}
-			if matched == nil {
-				return nil, nil, fmt.Errorf("auth plugin %q not installed", authType)
-			}
-			client, err := pkgauth.NewClient(matched.BinaryPath, a.Config.Cli.Auth)
-			if err != nil {
-				return nil, nil, fmt.Errorf("failed to start auth plugin: %w", err)
-			}
-			a.authClient = client
+		}
+		if matched == nil {
+			return nil, fmt.Errorf("auth plugin %q not installed", authType)
+		}
+		client, err := pkgauth.NewClient(matched.BinaryPath, a.Config.Cli.AuthConfig())
+		if err != nil {
+			return nil, fmt.Errorf("failed to start auth plugin: %w", err)
+		}
+		a.authClient = client
+	}
+
+	return a.authClient, nil
+}
+
+// authProvider returns the auth plugin client used to obtain the request
+// header, preferring the injectable authClientFactory (set by tests) and
+// falling back to the real AuthClient.
+func (a *App) authProvider() (authHeaderProvider, error) {
+	if a.authClientFactory != nil {
+		return a.authClientFactory()
+	}
+	return a.AuthClient()
+}
+
+// apiClient constructs an API client for a single operation from the given
+// auth header and network client, preferring the injectable newAPIClient
+// (set by tests) and falling back to api.NewClient against
+// a.Config.Cli.Connection.
+func (a *App) apiClient(authHeader http.Header, net *http.Client) *api.Client {
+	if a.newAPIClient != nil {
+		return a.newAPIClient(authHeader, net)
+	}
+	return api.NewClient(a.Config.Cli.Connection, authHeader, net)
+}
+
+// withAuthRetry runs op once with the current auth header. When op fails
+// with api.AuthenticationError and an auth plugin is configured, it asks the
+// plugin to force-refresh the credential and retries op exactly once with
+// the refreshed header — recovering from a credential that looks fresh to
+// the CLI but is actually stale (e.g. a backward clock jump masking an
+// expired token, or a token signed by a just-revoked key) without treating a
+// genuine denial as a transient error. A non-auth error, or an auth error
+// with no auth plugin configured, is returned unchanged with no retry.
+//
+// op must perform exactly one HTTP operation with a replayable, []byte-backed
+// request body — never a whole command (e.g. a preflight followed by a
+// mutating submission). Retrying a multi-step sequence would replay every
+// step, which for a mutation means submitting it twice.
+func (a *App) withAuthRetry(op func(authHeader http.Header, net *http.Client) error) error {
+	authHeader, net, err := a.getAuthAndNetHandlers()
+	if err != nil {
+		return err
+	}
+
+	err = op(authHeader, net)
+	if err == nil {
+		return nil
+	}
+
+	var authErr api.AuthenticationError
+	if !errors.As(err, &authErr) || a.Config.Cli.AuthConfig() == nil {
+		return err
+	}
+
+	// From here on, a failure to obtain a fresh credential is a distinct
+	// class of problem from the AuthenticationError that triggered the
+	// retry, and must be surfaced as itself — not masked behind the
+	// now-stale original error, and not conflated with AuthorizationDenied,
+	// which means the agent saw and rejected a credential we did manage to
+	// get. Mirrors how the initial (unforced) fetch in
+	// getAuthAndNetHandlers reports the same two failure classes.
+	refreshedHeader, refreshErr := a.forceRefreshAuthHeader()
+	if refreshErr != nil {
+		return refreshErr
+	}
+
+	err = op(refreshedHeader, net)
+	if err == nil {
+		return nil
+	}
+	if errors.As(err, &authErr) {
+		return api.AuthorizationDeniedError{}
+	}
+	return err
+}
+
+// forceRefreshAuthHeader asks the auth plugin to force-refresh the
+// credential, coalescing concurrent callers into a single underlying
+// GetAuthHeader(true) call via refreshGroup: every caller that arrives
+// while a refresh is already in flight shares its result instead of
+// starting its own. The singleflight group's own lock is released before
+// the request function runs (see golang.org/x/sync/singleflight), so
+// calling into a.authProvider() — which takes memoMu — here cannot deadlock
+// against it.
+func (a *App) forceRefreshAuthHeader() (http.Header, error) {
+	v, err, _ := a.refreshGroup.Do("refresh", func() (any, error) {
+		provider, provErr := a.authProvider()
+		if provErr != nil {
+			return nil, provErr
 		}
 
-		resp, err := a.authClient.GetAuthHeader()
+		resp, headerErr := provider.GetAuthHeader(true)
+		if headerErr != nil {
+			return nil, fmt.Errorf("failed to get auth header: %w", headerErr)
+		}
+		if resp.ErrorCode != "" || resp.Error != "" {
+			return nil, errors.New(authmsg.DescribeAuthError(resp.ErrorCode, resp.Error))
+		}
+		if !hasCredential(resp.Headers) {
+			return nil, errors.New(noCredentialMessage)
+		}
+		return http.Header(resp.Headers), nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return v.(http.Header), nil
+}
+
+// noCredentialMessage is returned when the auth plugin reports success — no
+// ErrorCode, no Error — but the header it returned carries nothing usable.
+// Treating that as success would hand the API client an empty Authorization
+// header and send the request unauthenticated: an apparent success hiding a
+// real failure, exactly the shape this whole retry mechanism exists to
+// eliminate.
+const noCredentialMessage = "the auth plugin returned no credential"
+
+// hasCredential reports whether headers carries the credential the CLI will
+// actually transmit. internal/api.NewClient attaches exactly one outgoing
+// header — Authorization — read via http.Header.Get, which canonicalises
+// the key it looks up but not the keys already stored in the map (see
+// pkg/auth.GetAuthHeaderResponse.Headers: "the client attaches only the
+// canonical 'Authorization' header"). So a plugin that returns its
+// credential under a different name entirely, or even as a non-canonical
+// "authorization" key, produces a value this CLI can never send — the same
+// failure as an empty or absent header — and must fail closed the same way,
+// rather than being read as success by a scan that credits any non-empty
+// value under any key.
+func hasCredential(headers map[string][]string) bool {
+	return http.Header(headers).Get("Authorization") != ""
+}
+
+func (a *App) getAuthAndNetHandlers() (http.Header, *http.Client, error) {
+	var authHeader http.Header
+
+	if a.Config.Cli.AuthConfig() != nil {
+		client, err := a.authProvider()
+		if err != nil {
+			return nil, nil, err
+		}
+
+		resp, err := client.GetAuthHeader(false)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to get auth header: %w", err)
+		}
+		if resp.ErrorCode != "" || resp.Error != "" {
+			return nil, nil, errors.New(authmsg.DescribeAuthError(resp.ErrorCode, resp.Error))
+		}
+		if !hasCredential(resp.Headers) {
+			return nil, nil, errors.New(noCredentialMessage)
 		}
 		authHeader = http.Header(resp.Headers)
 	}
 
-	if a.Config.Network != nil {
-		netPlugin, err := network.DefaultRegistry.Get(a.Config.Network.Type)
-		if err != nil {
-			return nil, nil, err
-		}
-
-		var configJSON []byte
-		if len(a.Config.Network.LegacyRawJSON) > 0 {
-			configJSON = a.Config.Network.LegacyRawJSON
-		} else {
-			var marshalErr error
-			configJSON, marshalErr = json.Marshal(a.Config.Network.Tailscale)
-			if marshalErr != nil {
-				return nil, nil, fmt.Errorf("failed to marshal network config: %w", marshalErr)
-			}
-		}
-
-		net, err = netPlugin.Client(configJSON)
-		if err != nil {
-			return nil, nil, err
-		}
+	net, err := a.netHTTPClient()
+	if err != nil {
+		return nil, nil, err
 	}
 
 	return authHeader, net, nil
+}
+
+// netHTTPClient returns the App's network plugin transport, building and
+// caching it on first use. Every caller — including every withAuthRetry
+// closure — shares this single instance instead of each constructing its
+// own, so a Tailscale-backed profile stands up one tsnet.Server per App
+// rather than one per HTTP operation.
+func (a *App) netHTTPClient() (*http.Client, error) {
+	a.memoMu.Lock()
+	defer a.memoMu.Unlock()
+
+	if a.netClientLoaded {
+		return a.netClient, nil
+	}
+
+	if a.Config.Network == nil {
+		a.netClientLoaded = true
+		return nil, nil
+	}
+
+	netPlugin, err := network.DefaultRegistry.Get(a.Config.Network.Type)
+	if err != nil {
+		return nil, err
+	}
+
+	configJSON, err := a.Config.Network.PluginConfigJSON()
+	if err != nil {
+		return nil, err
+	}
+
+	net, err := netPlugin.Client(configJSON)
+	if err != nil {
+		return nil, err
+	}
+
+	a.netClient = net
+	a.netClientLoaded = true
+	return a.netClient, nil
 }
 
 func (a *App) Evaluate(path string, props map[string]string, mode pkgmodel.FormaApplyMode) (*pkgmodel.Forma, error) {
@@ -514,9 +1048,9 @@ func (a *App) Evaluate(path string, props map[string]string, mode pkgmodel.Forma
 	if err != nil {
 		return nil, fmt.Errorf("%w\n%s %s\n%s %s",
 			err,
-			display.Gold("Pkl documentation:"),
+			docLabelStyle().Render("Pkl documentation:"),
 			"https://pkl-lang.org/main/current/language-reference/index.html",
-			display.Gold("Pkl primer:"),
+			docLabelStyle().Render("Pkl primer:"),
 			"https://pkl.platform.engineering",
 		)
 	}
@@ -530,33 +1064,119 @@ func (a *App) SerializeForma(forma *pkgmodel.Forma, options *schema.SerializeOpt
 		return "", err
 	}
 
+	// Plain data renders (json, yaml) don't need the agent's installed-plugin
+	// list — they only walk the forma struct. Skip the agent round-trip so
+	// `formae eval --output-consumer machine --output-schema json` works
+	// without an agent (used by conformance discovery tests where eval runs
+	// before the agent is up).
+	if options.Schema == "pkl" {
+		deps, err := a.buildDependencyStrings(forma, options.SchemaLocation)
+		if err != nil {
+			return "", err
+		}
+		options.Dependencies = deps
+	}
+	if options.SchemaLocation == "" {
+		options.SchemaLocation = schema.SchemaLocationRemote
+	}
+
 	return schemaPlugin.SerializeForma(forma, options)
 }
 
-func (a *App) GenerateSourceCode(forma *pkgmodel.Forma, targetPath string, outputSchema string) (schema.GenerateSourcesResult, error) {
+func (a *App) GenerateSourceCode(forma *pkgmodel.Forma, targetPath string, outputSchema string, schemaLocation schema.SchemaLocation) (schema.GenerateSourcesResult, error) {
 	schemaPlugin, err := schema.DefaultRegistry.Get(outputSchema)
 	if err != nil {
 		return schema.GenerateSourcesResult{}, err
 	}
-	// Extract always uses local schema resolution
-	includes, _ := a.Projects.formatIncludes(outputSchema, []string{"aws@local"})
 
-	return schemaPlugin.GenerateSourceCode(forma, targetPath, includes, schema.SchemaLocationLocal)
+	deps, err := a.buildDependencyStrings(forma, schemaLocation)
+	if err != nil {
+		return schema.GenerateSourcesResult{}, err
+	}
+	if schemaLocation == "" {
+		schemaLocation = schema.SchemaLocationRemote
+	}
+
+	options := &schema.SerializeOptions{
+		Schema:         outputSchema,
+		SchemaLocation: schemaLocation,
+		Dependencies:   deps,
+	}
+	return schemaPlugin.GenerateSourceCode(forma, targetPath, nil, options)
 }
 
-func (a *App) ExtractTargets(query string) ([]*pkgmodel.Target, []string, error) {
-	auth, net, err := a.getAuthAndNetHandlers()
+// buildDependencyStrings asks the agent for installed plugin info and
+// emits PklProjectTemplate-formatted dep strings for every namespace
+// present in the forma, plus formae core.
+//
+// SchemaLocationRemote (default) emits `<plugin>.<name>@<version>` strings;
+// PKL fetches these from hub.platform.engineering. SchemaLocationLocal
+// emits `local:<name>:<path>` strings pointing at the agent's on-disk
+// PklProject; PKL imports them directly. Formae core is always remote
+// (the agent does not surface its own PKL schema as a local path).
+//
+// SchemaLocationLocal requires the CLI and agent to share a filesystem.
+// Each agent-reported localPath is statted; the first unreadable path
+// (or first plugin missing from the agent's local view entirely) fails
+// the call with a clear error pointing the operator at the same-box
+// constraint.
+func (a *App) buildDependencyStrings(forma *pkgmodel.Forma, location schema.SchemaLocation) ([]string, error) {
+	plugins, err := a.InstalledResourcePlugins()
 	if err != nil {
-		return nil, nil, err
+		return nil, fmt.Errorf("listing installed plugins: %w", err)
 	}
-	client := api.NewClient(a.Config.Cli.API, auth, net)
 
-	compatible, _, nags, err := a.runBeforeCommand(client, true)
+	var deps []string
+	if formae.Version != "0.0.0" {
+		deps = append(deps, "pkl.formae@"+formae.Version)
+	}
+
+	seen := make(map[string]bool)
+	for _, r := range forma.Resources {
+		ns := strings.ToLower(r.Namespace())
+		if ns == "" || seen[ns] {
+			continue
+		}
+		seen[ns] = true
+
+		info, ok := plugins[ns]
+		if !ok || info.Version == "" {
+			return nil, fmt.Errorf("resource type %q requires plugin namespace %q, but the agent does not report it installed. Install it with `formae plugin install %s` and retry", r.Type, ns, ns)
+		}
+
+		if location == schema.SchemaLocationLocal {
+			if info.LocalPath == "" {
+				return nil, fmt.Errorf("--schema-location local requires plugin %q to be installed on the agent's local filesystem; the agent reports no on-disk path. Install with `formae plugin install %s` and retry, or omit --schema-location to use remote schemas", ns, ns)
+			}
+			if _, statErr := os.Stat(info.LocalPath); statErr != nil {
+				return nil, fmt.Errorf("--schema-location local requires the CLI and agent to share a filesystem; the agent reports plugin %q at %s but that path is not readable from the CLI host (%v). Run the CLI on the agent's host, or omit --schema-location to use remote schemas", ns, info.LocalPath, statErr)
+			}
+			deps = append(deps, fmt.Sprintf("local:%s:%s", ns, info.LocalPath))
+		} else {
+			deps = append(deps, fmt.Sprintf("%s.%s@%s", ns, ns, info.Version))
+		}
+	}
+
+	sort.Strings(deps)
+	return deps, nil
+}
+
+func (a *App) ExtractTargets(query string, fromTUI bool) ([]*pkgmodel.Target, []string, error) {
+	compatible, _, nags, err := a.runBeforeCommand(!fromTUI)
 	if !compatible {
 		return nil, nil, err
 	}
 
-	targets, err := client.ListTargets(query)
+	var targets []*pkgmodel.Target
+	err = a.withAuthRetry(func(authHeader http.Header, net *http.Client) error {
+		client := a.apiClient(authHeader, net)
+		t, err := client.ListTargets(query)
+		if err != nil {
+			return err
+		}
+		targets = t
+		return nil
+	})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -568,19 +1188,22 @@ func (a *App) ExtractTargets(query string) ([]*pkgmodel.Target, []string, error)
 	return targets, nags, nil
 }
 
-func (a *App) ExtractStacks() ([]*pkgmodel.Stack, []string, error) {
-	auth, net, err := a.getAuthAndNetHandlers()
-	if err != nil {
-		return nil, nil, err
-	}
-	client := api.NewClient(a.Config.Cli.API, auth, net)
-
-	compatible, _, nags, err := a.runBeforeCommand(client, true)
+func (a *App) ExtractStacks(fromTUI bool) ([]*pkgmodel.Stack, []string, error) {
+	compatible, _, nags, err := a.runBeforeCommand(!fromTUI)
 	if !compatible {
 		return nil, nil, err
 	}
 
-	stacks, err := client.ListStacks()
+	var stacks []*pkgmodel.Stack
+	err = a.withAuthRetry(func(authHeader http.Header, net *http.Client) error {
+		client := a.apiClient(authHeader, net)
+		s, err := client.ListStacks()
+		if err != nil {
+			return err
+		}
+		stacks = s
+		return nil
+	})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -592,19 +1215,52 @@ func (a *App) ExtractStacks() ([]*pkgmodel.Stack, []string, error) {
 	return stacks, nags, nil
 }
 
-func (a *App) ExtractPolicies() ([]apimodel.PolicyInventoryItem, []string, error) {
-	auth, net, err := a.getAuthAndNetHandlers()
-	if err != nil {
-		return nil, nil, err
-	}
-	client := api.NewClient(a.Config.Cli.API, auth, net)
-
-	compatible, _, nags, err := a.runBeforeCommand(client, true)
+// ExtractGenerators fetches the generator inventory from the agent. Mirrors
+// ExtractPolicies: a nil list becomes an empty one so callers never have to
+// distinguish "no generators" from "no answer".
+func (a *App) ExtractGenerators(fromTUI bool) ([]apimodel.GeneratorInventoryItem, []string, error) {
+	compatible, _, nags, err := a.runBeforeCommand(!fromTUI)
 	if !compatible {
 		return nil, nil, err
 	}
 
-	policies, err := client.ListPolicies()
+	var generators []apimodel.GeneratorInventoryItem
+	err = a.withAuthRetry(func(authHeader http.Header, net *http.Client) error {
+		client := a.apiClient(authHeader, net)
+		g, err := client.ListGenerators()
+		if err != nil {
+			return err
+		}
+		generators = g
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if generators == nil {
+		generators = []apimodel.GeneratorInventoryItem{}
+	}
+
+	return generators, nags, nil
+}
+
+func (a *App) ExtractPolicies(fromTUI bool) ([]apimodel.PolicyInventoryItem, []string, error) {
+	compatible, _, nags, err := a.runBeforeCommand(!fromTUI)
+	if !compatible {
+		return nil, nil, err
+	}
+
+	var policies []apimodel.PolicyInventoryItem
+	err = a.withAuthRetry(func(authHeader http.Header, net *http.Client) error {
+		client := a.apiClient(authHeader, net)
+		p, err := client.ListPolicies()
+		if err != nil {
+			return err
+		}
+		policies = p
+		return nil
+	})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -624,12 +1280,12 @@ func (p *Plugins) SupportedSchemas() []string {
 
 // Projects
 
-func (p *Projects) Init(path string, format string, include []string) error {
+func (p *Projects) Init(path string, format string, include []string, pluginsDir string, installedVersions map[string]string) error {
 	// TODO(discount-elf) think about this namespace issue, since different packages can be included in plugins we currently
 	// need plugin.package for download delivery
 	switch format {
 	case "pkl":
-		includes, err := p.formatIncludes(format, include)
+		includes, err := p.formatIncludes(format, include, pluginsDir, installedVersions)
 		if err != nil {
 			return err
 		}
@@ -665,7 +1321,7 @@ func (p *Projects) Init(path string, format string, include []string) error {
 	return nil
 }
 
-func (p *Projects) formatIncludes(format string, include []string) ([]string, error) {
+func (p *Projects) formatIncludes(format string, include []string, pluginsDir string, installedVersions map[string]string) ([]string, error) {
 	var includes []string
 	switch format {
 	case "pkl":
@@ -678,25 +1334,27 @@ func (p *Projects) formatIncludes(format string, include []string) ([]string, er
 		for _, inc := range include {
 			ns, isLocal := parseIncludeSpec(inc)
 
-			// Find installed plugin info (handles case-insensitive lookup)
-			localPath, installedVersion := p.findInstalledPlugin(ns)
-
-			// If @local suffix specified, must resolve locally
+			// @local: must resolve locally — pluginsDir is the dev plugin
+			// install dir (typically ~/.pel/formae/plugins, populated by
+			// `make install` in plugin repos).
 			if isLocal {
+				localPath, _ := p.findInstalledPlugin(ns, pluginsDir)
 				if localPath == "" {
-					return nil, fmt.Errorf("plugin %q not installed locally. Install with: formae plugin install %s", ns, ns)
+					return nil, fmt.Errorf("plugin %q not installed locally for @local resolution. Install it from a plugin repo with `make install`", ns)
 				}
 				includes = append(includes, fmt.Sprintf("local:%s:%s", ns, localPath))
 				continue
 			}
 
-			// Default: resolve from hub (remote)
-			if installedVersion != "" {
-				includes = append(includes, fmt.Sprintf("%s.%s@%s", ns, ns, installedVersion))
-			} else {
-				// No version info available, add as plain namespace (will fail at resolve time)
-				includes = append(includes, ns)
+			// Default: resolve from hub (remote). Version comes from the
+			// agent's installed-plugins view rather than scanning local
+			// disk, since orbital-installed plugins live with the agent
+			// and may not be present on the CLI box.
+			version, ok := installedVersions[ns]
+			if !ok || version == "" {
+				return nil, fmt.Errorf("plugin %q not installed on the agent. Install it with: formae plugin install %s", ns, ns)
 			}
+			includes = append(includes, fmt.Sprintf("%s.%s@%s", ns, ns, version))
 		}
 	default:
 		return nil, nil
@@ -720,8 +1378,10 @@ func parseIncludeSpec(include string) (namespace string, isLocal bool) {
 // It performs case-insensitive directory lookup.
 // Returns (schemaPath, version) where schemaPath is the path to PklProject (empty if no schema),
 // and version is the highest installed version (empty if plugin not installed).
-func (p *Projects) findInstalledPlugin(namespace string) (schemaPath string, version string) {
-	pluginsDir := util.ExpandHomePath("~/.pel/formae/plugins")
+func (p *Projects) findInstalledPlugin(namespace, pluginsDir string) (schemaPath string, version string) {
+	if pluginsDir == "" {
+		return "", ""
+	}
 
 	// Case-insensitive lookup: list plugins dir and find matching name
 	pluginEntries, err := os.ReadDir(pluginsDir)

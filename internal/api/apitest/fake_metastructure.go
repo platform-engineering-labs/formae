@@ -1,0 +1,336 @@
+// © 2025 Platform Engineering Labs Inc.
+//
+// SPDX-License-Identifier: FSL-1.1-ALv2
+
+//go:build unit
+
+package apitest
+
+import (
+	formae "github.com/platform-engineering-labs/formae"
+	"github.com/platform-engineering-labs/formae/internal/metastructure"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/changeset"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/querier"
+	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
+	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
+)
+
+// Compile-time guard: FakeMetastructure must implement MetastructureAPI.
+var _ metastructure.MetastructureAPI = (*FakeMetastructure)(nil)
+
+type WrappedCommandResponse struct {
+	SubmitCommandResponse *apimodel.SubmitCommandResponse
+	Error                 error
+}
+
+// RecordedSubject captures the subject and subjectName a command-creating
+// method was called with, so seam tests can assert the request's
+// authenticated identity actually reached the metastructure call.
+type RecordedSubject struct {
+	Subject     string
+	SubjectName string
+}
+
+type WrappedExtractResponse struct {
+	Forma *pkgmodel.Forma
+	Error error
+}
+
+type WrappedListResponse struct {
+	ListCommandStatusResponse *apimodel.ListCommandStatusResponse
+	Error                     error
+}
+
+type WrappedCancelResponse struct {
+	CancelCommandResponse *apimodel.CancelCommandResponse
+	Error                 error
+}
+
+type WrappedTargetResponse struct {
+	Targets []*pkgmodel.Target
+	Error   error
+}
+
+type WrappedDriftResponse struct {
+	Drift apimodel.ModifiedStack
+	Error error
+}
+
+type WrappedReconcileResponse struct {
+	Response *apimodel.ForceReconcileResponse
+	Error    error
+}
+
+type WrappedCheckTTLResponse struct {
+	Response *apimodel.ForceCheckTTLResponse
+	Error    error
+}
+
+type WrappedStackResponse struct {
+	Stacks []*pkgmodel.Stack
+	Error  error
+}
+
+type WrappedPolicyResponse struct {
+	Policies []apimodel.PolicyInventoryItem
+	Error    error
+}
+
+type WrappedGeneratorResponse struct {
+	Generators []apimodel.GeneratorInventoryItem
+	Error      error
+}
+
+type WrappedSummaryResponse struct {
+	Summaries []pkgmodel.ResourceSummary
+	Error     error
+}
+
+type WrappedResourceResponse struct {
+	Resource *pkgmodel.Resource
+	Error    error
+}
+
+type FakeMetastructure struct {
+	ApplyResponses           []WrappedCommandResponse
+	DestroyResponses         []WrappedCommandResponse
+	ExtractResponses         []WrappedExtractResponse
+	SummaryResponses         []WrappedSummaryResponse
+	ResourceByKsuidResponses []WrappedResourceResponse
+	TargetResponses          []WrappedTargetResponse
+	ListResponses            []WrappedListResponse
+	CancelResponses          []WrappedCancelResponse
+	DriftResponses           []WrappedDriftResponse
+	ReconcileResponses       []WrappedReconcileResponse
+	CheckTTLResponses        []WrappedCheckTTLResponse
+	StackResponses           []WrappedStackResponse
+	PolicyResponses          []WrappedPolicyResponse
+	GeneratorResponses       []WrappedGeneratorResponse
+	RecordedCancelQueries    []string
+	RecordedExtractQueries   []string
+	RecordedSummaryQueries   []string
+	RecordedKsuidLookups     []string
+	// RecordedListN captures the n (max results) each ListFormaCommandStatus
+	// call was made with, one entry appended per call, so tests can assert
+	// what the server actually asked the datastore for after clamping.
+	RecordedListN []int
+	// RecordedListScopes captures the scope each ListFormaCommandStatus call
+	// was made with, one entry appended per call, so tests can assert which
+	// commands the server asked for.
+	RecordedListScopes []apimodel.CommandScope
+
+	// RecordedApplySubjects, RecordedDestroySubjects, RecordedDestroyByQuerySubjects,
+	// and RecordedReconcileSubjects capture the subject/subjectName each
+	// command-creating call was made with, one entry appended per call.
+	RecordedApplySubjects          []RecordedSubject
+	RecordedDestroySubjects        []RecordedSubject
+	RecordedDestroyByQuerySubjects []RecordedSubject
+	RecordedReconcileSubjects      []RecordedSubject
+}
+
+func (m *FakeMetastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string, subject string, subjectName string) (*apimodel.SubmitCommandResponse, error) {
+	m.RecordedApplySubjects = append(m.RecordedApplySubjects, RecordedSubject{Subject: subject, SubjectName: subjectName})
+	nextResponse := m.ApplyResponses[0]
+	m.ApplyResponses = m.ApplyResponses[1:]
+
+	return nextResponse.SubmitCommandResponse, nextResponse.Error
+}
+
+func (m *FakeMetastructure) DestroyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string, subject string, subjectName string) (*apimodel.SubmitCommandResponse, error) {
+	m.RecordedDestroySubjects = append(m.RecordedDestroySubjects, RecordedSubject{Subject: subject, SubjectName: subjectName})
+	nextResponse := m.DestroyResponses[0]
+	m.DestroyResponses = m.DestroyResponses[1:]
+
+	return nextResponse.SubmitCommandResponse, nextResponse.Error
+}
+
+func (m *FakeMetastructure) DestroyByQuery(query string, config *config.FormaCommandConfig, clientID string, subject string, subjectName string) (*apimodel.SubmitCommandResponse, error) {
+	m.RecordedDestroyByQuerySubjects = append(m.RecordedDestroyByQuerySubjects, RecordedSubject{Subject: subject, SubjectName: subjectName})
+	nextResponse := m.DestroyResponses[0]
+	m.DestroyResponses = m.DestroyResponses[1:]
+
+	return nextResponse.SubmitCommandResponse, nextResponse.Error
+}
+
+func (m *FakeMetastructure) CancelCommand(commandID string, force bool, clientID string) (*changeset.CancelResponse, error) {
+	return nil, nil
+}
+
+func (m *FakeMetastructure) CancelCommandsByQuery(query string, force bool, caller querier.Caller) (*apimodel.CancelCommandResponse, error) {
+	m.RecordedCancelQueries = append(m.RecordedCancelQueries, query)
+	nextResponse := m.CancelResponses[0]
+	m.CancelResponses = m.CancelResponses[1:]
+
+	return nextResponse.CancelCommandResponse, nextResponse.Error
+}
+
+func (m *FakeMetastructure) ListFormaCommandStatus(commandID string, caller querier.Caller, n int, scope apimodel.CommandScope) (*apimodel.ListCommandStatusResponse, error) {
+	m.RecordedListN = append(m.RecordedListN, n)
+	m.RecordedListScopes = append(m.RecordedListScopes, scope)
+
+	// Handle empty queue: return nil response + nil error (safe zero behavior).
+	if len(m.ListResponses) == 0 {
+		return nil, nil
+	}
+
+	nextResponse := m.ListResponses[0]
+
+	// Pop the response if there's more than one in the queue (FIFO for multi-response tests).
+	// If this is the last one, keep it (sticky tail) so subsequent polls don't panic.
+	if len(m.ListResponses) > 1 {
+		m.ListResponses = m.ListResponses[1:]
+	}
+
+	return nextResponse.ListCommandStatusResponse, nextResponse.Error
+}
+
+func (m *FakeMetastructure) ExtractResources(query string) (*pkgmodel.Forma, error) {
+	m.RecordedExtractQueries = append(m.RecordedExtractQueries, query)
+	if len(m.ExtractResponses) == 0 {
+		return &pkgmodel.Forma{}, nil
+	}
+	next := m.ExtractResponses[0]
+	if len(m.ExtractResponses) > 1 {
+		m.ExtractResponses = m.ExtractResponses[1:]
+	}
+	return next.Forma, next.Error
+}
+
+func (m *FakeMetastructure) ListResourceSummaries(query string) ([]pkgmodel.ResourceSummary, error) {
+	m.RecordedSummaryQueries = append(m.RecordedSummaryQueries, query)
+	if m.SummaryResponses == nil && len(m.ExtractResponses) > 0 {
+		// Derive summaries from the head ExtractResponses entry without consuming it.
+		resources := m.ExtractResponses[0].Forma.Resources
+		summaries := make([]pkgmodel.ResourceSummary, len(resources))
+		for i, r := range resources {
+			summaries[i] = pkgmodel.ResourceSummary{
+				Label:    r.Label,
+				Stack:    r.Stack,
+				Type:     r.Type,
+				NativeID: r.NativeID,
+				Ksuid:    r.Ksuid,
+			}
+		}
+		return summaries, nil
+	}
+	if len(m.SummaryResponses) == 0 {
+		return []pkgmodel.ResourceSummary{}, nil
+	}
+	next := m.SummaryResponses[0]
+	if len(m.SummaryResponses) > 1 {
+		m.SummaryResponses = m.SummaryResponses[1:]
+	}
+	return next.Summaries, next.Error
+}
+
+func (m *FakeMetastructure) ExtractResourceByKsuid(ksuid string) (*pkgmodel.Resource, error) {
+	m.RecordedKsuidLookups = append(m.RecordedKsuidLookups, ksuid)
+	if m.ResourceByKsuidResponses == nil && len(m.ExtractResponses) > 0 {
+		// Resolve from the head ExtractResponses entry without consuming it.
+		for i := range m.ExtractResponses[0].Forma.Resources {
+			r := &m.ExtractResponses[0].Forma.Resources[i]
+			if r.Ksuid == ksuid {
+				return r, nil
+			}
+		}
+		return nil, nil
+	}
+	if len(m.ResourceByKsuidResponses) == 0 {
+		return nil, nil
+	}
+	next := m.ResourceByKsuidResponses[0]
+	if len(m.ResourceByKsuidResponses) > 1 {
+		m.ResourceByKsuidResponses = m.ResourceByKsuidResponses[1:]
+	}
+	return next.Resource, next.Error
+}
+
+func (m *FakeMetastructure) ExtractTargets(query string) ([]*pkgmodel.Target, error) {
+	if len(m.TargetResponses) == 0 {
+		return []*pkgmodel.Target{}, nil
+	}
+	next := m.TargetResponses[0]
+	if len(m.TargetResponses) > 1 {
+		m.TargetResponses = m.TargetResponses[1:]
+	}
+	return next.Targets, next.Error
+}
+
+func (m *FakeMetastructure) ExtractStacks() ([]*pkgmodel.Stack, error) {
+	if len(m.StackResponses) == 0 {
+		return []*pkgmodel.Stack{}, nil
+	}
+	next := m.StackResponses[0]
+	if len(m.StackResponses) > 1 {
+		m.StackResponses = m.StackResponses[1:]
+	}
+	return next.Stacks, next.Error
+}
+
+func (m *FakeMetastructure) ExtractGenerators() ([]apimodel.GeneratorInventoryItem, error) {
+	if len(m.GeneratorResponses) == 0 {
+		return []apimodel.GeneratorInventoryItem{}, nil
+	}
+	next := m.GeneratorResponses[0]
+	if len(m.GeneratorResponses) > 1 {
+		m.GeneratorResponses = m.GeneratorResponses[1:]
+	}
+	return next.Generators, next.Error
+}
+
+func (m *FakeMetastructure) ExtractPolicies() ([]apimodel.PolicyInventoryItem, error) {
+	if len(m.PolicyResponses) == 0 {
+		return []apimodel.PolicyInventoryItem{}, nil
+	}
+	next := m.PolicyResponses[0]
+	if len(m.PolicyResponses) > 1 {
+		m.PolicyResponses = m.PolicyResponses[1:]
+	}
+	return next.Policies, next.Error
+}
+
+func (m *FakeMetastructure) ForceSync() error {
+	return nil
+}
+
+func (m *FakeMetastructure) ForceDiscovery() error {
+	return nil
+}
+
+func (m *FakeMetastructure) ForceReap() error {
+	return nil
+}
+
+func (m *FakeMetastructure) ForceAutoReconcile(stackLabel string, subject string, subjectName string) (*apimodel.ForceReconcileResponse, error) {
+	m.RecordedReconcileSubjects = append(m.RecordedReconcileSubjects, RecordedSubject{Subject: subject, SubjectName: subjectName})
+	nextResponse := m.ReconcileResponses[0]
+	m.ReconcileResponses = m.ReconcileResponses[1:]
+
+	return nextResponse.Response, nextResponse.Error
+}
+
+func (m *FakeMetastructure) ForceCheckTTL() (*apimodel.ForceCheckTTLResponse, error) {
+	nextResponse := m.CheckTTLResponses[0]
+	m.CheckTTLResponses = m.CheckTTLResponses[1:]
+
+	return nextResponse.Response, nextResponse.Error
+}
+
+func (m *FakeMetastructure) ListDrift(stack string) (*apimodel.ModifiedStack, error) {
+	nextResponse := m.DriftResponses[0]
+	m.DriftResponses = m.DriftResponses[1:]
+	return &nextResponse.Drift, nextResponse.Error
+}
+
+func (m *FakeMetastructure) Stats() (*apimodel.Stats, error) {
+	return &apimodel.Stats{
+		Version: formae.Version,
+		AgentID: "test-agent",
+	}, nil
+}
+
+func (m *FakeMetastructure) RegisteredPlugins() ([]messages.RegisteredPluginInfo, error) {
+	return nil, nil
+}

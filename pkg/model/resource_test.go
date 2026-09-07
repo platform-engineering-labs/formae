@@ -165,3 +165,86 @@ func TestValidateRequiredOnCreateFieldsMissingRequiredFieldOnCreateReturnsNoErro
 	assert.Contains(t, err.Error(), "missing required fields: [InstanceType]")
 	assert.Contains(t, err.Error(), "cannot be created")
 }
+
+func TestGetEffectivePropertyValue_LiteralScalar(t *testing.T) {
+	r := &Resource{Properties: json.RawMessage(`{"FileSystemId":"fs-abc123"}`)}
+	v, ok := r.GetEffectivePropertyValue("FileSystemId")
+	assert.True(t, ok)
+	assert.Equal(t, "fs-abc123", v)
+}
+
+func TestGetEffectivePropertyValue_UnwrapsResolvedReference(t *testing.T) {
+	r := &Resource{Properties: json.RawMessage(`{
+		"FileSystemId": {"$ref": "formae://abc#/FileSystemId", "$value": "fs-abc123"}
+	}`)}
+	v, ok := r.GetEffectivePropertyValue("FileSystemId")
+	assert.True(t, ok)
+	assert.Equal(t, "fs-abc123", v, "$value should be unwrapped from resolved reference")
+}
+
+func TestGetEffectivePropertyValue_UnresolvedReferenceReturnsFalse(t *testing.T) {
+	// A $ref without $value (resolution hasn't happened yet) is not a usable
+	// scalar.
+	r := &Resource{Properties: json.RawMessage(`{
+		"FileSystemId": {"$ref": "formae://abc#/FileSystemId"}
+	}`)}
+	_, ok := r.GetEffectivePropertyValue("FileSystemId")
+	assert.False(t, ok)
+}
+
+func TestGetEffectivePropertyValue_NonScalarObjectReturnsFalse(t *testing.T) {
+	// A nested object that isn't a resolved-reference shape (no $ref) shouldn't
+	// be returned as a scalar.
+	r := &Resource{Properties: json.RawMessage(`{
+		"NetworkConfiguration": {"awsvpcConfiguration": {"subnets": ["s-1"]}}
+	}`)}
+	_, ok := r.GetEffectivePropertyValue("NetworkConfiguration")
+	assert.False(t, ok)
+}
+
+func TestGetEffectivePropertyValue_MissingPropertyReturnsFalse(t *testing.T) {
+	r := &Resource{Properties: json.RawMessage(`{}`)}
+	_, ok := r.GetEffectivePropertyValue("Anything")
+	assert.False(t, ok)
+}
+
+func TestGetEffectivePropertyValue_NullValueReturnsFalse(t *testing.T) {
+	r := &Resource{Properties: json.RawMessage(`{"FileSystemId":null}`)}
+	_, ok := r.GetEffectivePropertyValue("FileSystemId")
+	assert.False(t, ok)
+}
+
+func TestGetPropertyReference_ReturnsRefURI(t *testing.T) {
+	r := &Resource{Properties: json.RawMessage(`{
+		"FileSystemId": {"$ref": "formae://abc#/FileSystemId", "$value": "fs-abc123"}
+	}`)}
+	uri, ok := r.GetPropertyReference("FileSystemId")
+	assert.True(t, ok)
+	assert.Equal(t, FormaeURI("formae://abc#/FileSystemId"), uri)
+}
+
+func TestGetPropertyReference_ReturnsRefEvenWithoutValue(t *testing.T) {
+	// A $ref without $value is still a valid reference shape — the URI is
+	// what we want to chase regardless of whether resolution has populated
+	// $value yet.
+	r := &Resource{Properties: json.RawMessage(`{
+		"FileSystemId": {"$ref": "formae://abc#/FileSystemId"}
+	}`)}
+	uri, ok := r.GetPropertyReference("FileSystemId")
+	assert.True(t, ok)
+	assert.Equal(t, FormaeURI("formae://abc#/FileSystemId"), uri)
+}
+
+func TestGetPropertyReference_LiteralReturnsFalse(t *testing.T) {
+	r := &Resource{Properties: json.RawMessage(`{"FileSystemId":"fs-abc123"}`)}
+	_, ok := r.GetPropertyReference("FileSystemId")
+	assert.False(t, ok)
+}
+
+func TestGetPropertyReference_NonRefObjectReturnsFalse(t *testing.T) {
+	r := &Resource{Properties: json.RawMessage(`{
+		"Tags": [{"Key": "Name", "Value": "v"}]
+	}`)}
+	_, ok := r.GetPropertyReference("Tags")
+	assert.False(t, ok)
+}

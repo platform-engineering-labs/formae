@@ -8,7 +8,9 @@ open module formae.Config
 
 typealias Port = Int(this >= 0 && this <= 65535)
 
-typealias DatastoreType = "sqlite" | "postgres" | "auroradataapi"
+typealias DatastoreType = "sqlite" | "postgres" | "auroradataapi" | "mssql"
+
+typealias MSSQLAuthMode = "sql" | "workload-identity"
 
 class ServerConfig {
     nodename: String = "formae"
@@ -37,6 +39,8 @@ class DatastoreConfig {
     postgres: PostgresConfig = new PostgresConfig{}
 
     auroraDataAPI: AuroraDataAPIConfig = new AuroraDataAPIConfig{}
+
+    mssql: MSSQLConfig = new MSSQLConfig{}
 }
 
 class SqliteConfig {
@@ -51,6 +55,15 @@ class PostgresConfig {
     user: String = "postgres"
 
     password: String = "admin"
+
+    /// Resolve the password from this Secrets Manager secret on every new
+    /// connection instead of using `password`, so a credential rotated out
+    /// from under a running agent is picked up without restarting it.
+    ///
+    /// The region is taken from the ARN, so there is no second setting that
+    /// could disagree with it. Empty means `password` is used as-is and no
+    /// AWS client is built.
+    passwordSecretArn: String = ""
 
     database: String = ""
 
@@ -67,6 +80,35 @@ class AuroraDataAPIConfig {
     database: String = ""
 
     region: String = ""
+
+    /// The RDS Data API endpoint to connect to. Empty means the SDK's default
+    /// endpoint for the resolved region. Credentials always come from the
+    /// standard AWS credential chain, independent of this setting.
+    endpoint: String = ""
+}
+
+class MSSQLConfig {
+    host: String = ""
+
+    port: Port = 1433
+
+    database: String = ""
+
+    authMode: MSSQLAuthMode = "sql"
+
+    user: String = ""
+
+    password: String = ""
+
+    encrypt: Boolean = true
+
+    trustServerCertificate: Boolean = false
+
+    connectionParams: String = ""
+
+    maxOpenConns: Int = 4
+
+    connMaxLifetime: Duration = 1.h
 }
 
 class RetryConfig {
@@ -79,10 +121,6 @@ class RetryConfig {
 
 class DiscoveryConfig {
     enabled: Boolean = true
-
-    labelTagKeys: Listing<String> = new Listing<String> {
-        "Name"
-    }
 
     interval: Duration = 10.min
 
@@ -161,6 +199,7 @@ class TailscaleConfig {
     authKey: String
     hostname: String?
     advertiseTags: Listing<String>?
+    egressProxyPort: Port = 0
 }
 
 class NetworkConfig {
@@ -183,8 +222,14 @@ class FilterCondition {
     propertyValue: String?
 }
 
+/// A rule that excludes matching resources from discovery.
 class MatchFilter {
+    /// Resource types this filter applies to. Leave it out to apply the
+    /// filter to every type the plugin discovers.
     resourceTypes: Listing<String>
+
+    /// Every condition must match for a resource to be excluded. A filter
+    /// naming no conditions excludes nothing.
     conditions: Listing<FilterCondition>
 }
 
@@ -193,9 +238,20 @@ open class BaseResourcePluginConfig {
     enabled: Boolean = true
     rateLimit: RateLimitConfig?
     labelConfig: LabelConfig?
+
+    /// Extra discovery filters for this plugin. These are added to the
+    /// filters the plugin declares for itself, never a replacement for them.
     discoveryFilters: Listing<MatchFilter>?
     resourceTypesToDiscover: Listing<String>?
     retry: RetryConfig?
+}
+
+/// Base class for an oidc-credential broker's configuration. A broker
+/// subclasses this to declare its own fields; everything beyond `type` and
+/// `enabled` reaches the broker process as its opaque config payload.
+open class BaseOidcCredentialPluginConfig {
+    type: String
+    enabled: Boolean = true
 }
 
 open class BaseAgentAuthConfig {
@@ -228,6 +284,10 @@ class AgentConfig {
     resourcePlugins: Listing<BaseResourcePluginConfig>(
         this.toList().map((it) -> it.type).isDistinct
     )?
+
+    oidcCredentialPlugins: Listing<BaseOidcCredentialPluginConfig>(
+        this.toList().map((it) -> it.type).isDistinct
+    )?
 }
 
 class ApiConfig {
@@ -236,20 +296,91 @@ class ApiConfig {
     port: Port = 49684
 }
 
+/// A connection to a self-hosted formae agent.
+class Classic {
+    url: String = "http://localhost"
+
+    port: Port = 49684
+
+    /// Optional: a self-hosted agent may be protected by an auth plugin.
+    auth: (BaseCliAuthConfig|Dynamic)?
+}
+
+/// A connection to a hosted formae installation.
+class Hosted {
+    /// Absolute https origin. Validated when the configuration is loaded.
+    endpoint: String
+
+    /// The installation this client addresses, as a canonical KSUID.
+    installation: String
+
+    /// Required: a hosted installation always authenticates.
+    auth: (BaseCliAuthConfig|Dynamic)
+}
+
+class Repository {
+  /// Orbital repository URI (optionally with #channel fragment).
+  uri: Uri
+
+  /// Discriminator: "binary" for the formae binary / tooling repo;
+  /// "formae-plugin" for a plugin repo consulted by `formae plugin *`.
+  type: "binary"|"formae-plugin"
+}
+
 class ArtifactConfig {
+  @Deprecated { message = "Use artifacts.repositories instead" }
   url: Uri = "https://hub.platform.engineering/repos/platform.engineering/pel#stable"
 
+  @Deprecated { message = "Use repository-specific credentials" }
   username: String?
 
+  @Deprecated { message = "Use repository-specific credentials" }
   password: String?
+
+  /// List of orbital repositories to consult for binary and plugin packages.
+  repositories: Listing<Repository> = new {
+    new {
+      uri  = "https://hub.platform.engineering/repos/platform.engineering/pel#stable"
+      type = "binary"
+    }
+    new {
+      uri  = "https://hub.platform.engineering/repos/platform.engineering/community#stable"
+      type = "formae-plugin"
+    }
+  }
 }
 
 class CliConfig {
-    api: ApiConfig
+    /// Where this client sends commands. Exactly one of the two forms, by
+    /// construction: a connection is either classic or hosted, never both.
+    connection: (Classic|Hosted)?
+
+    /// Deprecated: use `connection = new Classic { ... }`.
+    ///
+    /// Declared nullable with no default on purpose. Writing `= null` here
+    /// breaks the nested `cli { api { ... } }` form this property exists to
+    /// keep working.
+    api: ApiConfig?
 
     disableUsageReporting: Boolean = false
 
+    /// Deprecated: set `auth` inside `connection`.
     auth: (BaseCliAuthConfig|Dynamic)?
+
+    // Theme name: a built-in (quiet, rich, colorblind, omarchy) or the stem of
+    // a TOML file in ~/.config/formae/themes/. "omarchy" derives its palette
+    // live from the active Omarchy theme's colors.toml, found under
+    // ~/.local/state/omarchy/current/theme (Omarchy 4) or
+    // ~/.config/omarchy/current/theme (Omarchy 3). "formae" is an alias for
+    // quiet. Unknown names fall back to quiet at runtime.
+    theme: String = "quiet"
+
+    // Appearance selects which side of every adaptive color the CLI renders:
+    // "light" or "dark" force it, "auto" detects it from the terminal
+    // background. Orthogonal to `theme` (every theme color has both a light and
+    // a dark variant). The FORMAE_APPEARANCE environment variable overrides
+    // this per invocation.
+    appearance: "light"|"dark"|"auto" = "auto"
 }
 
 /// Deprecated: use top-level pluginDir, network, and agent.auth / cli.auth instead.

@@ -8,6 +8,7 @@ package target_update
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -1113,4 +1114,416 @@ func TestGenerateTargetUpdates_UnresolvableRef_TreatedAsChange(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, updates, 1)
 	assert.Equal(t, TargetOperationReplace, updates[0].Operation)
+}
+
+func TestGenerateTargetUpdates_RefWithCachedValue_NoChange(t *testing.T) {
+	mockDS := &mockTargetDatastore{
+		targets: map[string]*pkgmodel.Target{
+			"k8s-target": {
+				Label:     "k8s-target",
+				Namespace: "k8s",
+				Config:    json.RawMessage(`{"endpoint":{"$ref":"formae://abc123#/Endpoint","$value":"https://my-cluster.eks.amazonaws.com"}}`),
+			},
+		},
+		resources: map[string]*pkgmodel.Resource{
+			"abc123": {
+				Ksuid:      "abc123",
+				Properties: json.RawMessage(`{"Endpoint":"https://my-cluster.eks.amazonaws.com"}`),
+			},
+		},
+	}
+	generator := NewTargetUpdateGenerator(mockDS)
+
+	targets := []pkgmodel.Target{
+		{
+			Label:     "k8s-target",
+			Namespace: "k8s",
+			Config:    json.RawMessage(`{"endpoint":{"$ref":"formae://abc123#/Endpoint"}}`),
+		},
+	}
+
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, false)
+	require.NoError(t, err)
+	assert.Empty(t, updates, "$ref+$value vs $ref-only with same resolved value must not produce an update")
+}
+
+// When the existing target carries a cached $value but the referenced
+// resource is gone, the dangling ref must surface as an update — otherwise
+// downstream resource generation will silently feed plugins the stale
+// cached value.
+func TestGenerateTargetUpdates_RefWithCachedValue_UnresolvableRef(t *testing.T) {
+	mockDS := &mockTargetDatastore{
+		targets: map[string]*pkgmodel.Target{
+			"k8s-target": {
+				Label:     "k8s-target",
+				Namespace: "k8s",
+				Config:    json.RawMessage(`{"endpoint":{"$ref":"formae://abc123#/Endpoint","$value":"https://stale.eks.amazonaws.com"}}`),
+			},
+		},
+		// No resources — abc123 is gone
+	}
+	generator := NewTargetUpdateGenerator(mockDS)
+
+	targets := []pkgmodel.Target{
+		{
+			Label:     "k8s-target",
+			Namespace: "k8s",
+			Config:    json.RawMessage(`{"endpoint":{"$ref":"formae://abc123#/Endpoint"}}`),
+		},
+	}
+
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, false)
+	require.NoError(t, err)
+	require.Len(t, updates, 1, "dangling $ref with stale cached $value must surface as an update, not be silently absorbed")
+	assert.Equal(t, TargetOperationUpdate, updates[0].Operation)
+}
+
+// Every shape an opaque credential can take at rest must survive an identical
+// re-apply without producing a target update. Held fixed across the cases: the
+// stored config carries the opacity-stamped $ref with no $value (reference-
+// don't-store), while the re-rendered forma carries the same $ref stamped
+// Clear. What varies is how the source resource holds the secret, which decides
+// whether the $ref reads back a value at all — a whole map-shaped secret hashed
+// into a single envelope exposes nothing at a sub-key, whereas a property
+// hashed in place reads back as an envelope whose $value is a digest. A digest
+// can never compare equal to the stored side's bare $ref, so any shape that
+// feeds one into the comparison reports a change on every apply.
+func TestGenerateTargetUpdates_OpaqueCredRef_IdempotentAcrossAtRestShapes(t *testing.T) {
+	const digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+	tests := []struct {
+		name        string
+		refPath     string
+		sourceProps string
+	}{
+		{
+			name:        "sub-key of a map-shaped secret hashed whole",
+			refPath:     "decodedData.admin-password",
+			sourceProps: `{"decodedData":{"$value":"` + digest + `","$visibility":"Opaque","$strategy":"Update","$hashed":true}}`,
+		},
+		{
+			name:        "top-level opaque property hashed in place",
+			refPath:     "SecretString",
+			sourceProps: `{"SecretString":{"$value":"` + digest + `","$visibility":"Opaque","$strategy":"Update","$hashed":true}}`,
+		},
+		{
+			name:        "nested opaque property hashed in place",
+			refPath:     "settings.password",
+			sourceProps: `{"settings":{"password":{"$value":"` + digest + `","$visibility":"Opaque","$strategy":"Update","$hashed":true}}}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stored := fmt.Sprintf(
+				`{"Type":"Grafana","Username":"admin","Password":{"$ref":"formae://sec1#/%s","$strategy":"Update","$visibility":"Opaque"}}`, tt.refPath)
+			desired := fmt.Sprintf(
+				`{"Type":"Grafana","Username":"admin","Password":{"$ref":"formae://sec1#/%s","$visibility":"Clear"}}`, tt.refPath)
+
+			mockDS := &mockTargetDatastore{
+				targets: map[string]*pkgmodel.Target{
+					"grafana-target": {
+						Label:     "grafana-target",
+						Namespace: "GRAFANA",
+						Config:    json.RawMessage(stored),
+					},
+				},
+				resources: map[string]*pkgmodel.Resource{
+					"sec1": {Ksuid: "sec1", Properties: json.RawMessage(tt.sourceProps)},
+				},
+			}
+			generator := NewTargetUpdateGenerator(mockDS)
+
+			targets := []pkgmodel.Target{
+				{Label: "grafana-target", Namespace: "GRAFANA", Config: json.RawMessage(desired)},
+			}
+
+			updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, false)
+			require.NoError(t, err)
+			assert.Empty(t, updates, "an opaque credential ref must be idempotent, not update on every re-apply")
+		})
+	}
+}
+
+// The full target-config shape a secret-backed target actually persists: the
+// opaque credential sits nested inside an Auth object, and a SIBLING clear $ref
+// carries the cached $value a successful apply wrote. The sibling matters — it
+// is the field whose cached $value has no counterpart in a freshly rendered
+// forma, so it is what a comparison falling through to raw configs would trip
+// over. An identical re-declare of the whole config must still be a no-op.
+func TestGenerateTargetUpdates_SecretSourcedCredRef_HashedEnvelopeAtRest_NoChange(t *testing.T) {
+	mockDS := &mockTargetDatastore{
+		targets: map[string]*pkgmodel.Target{
+			"grafana-target": {
+				Label:     "grafana-target",
+				Namespace: "GRAFANA",
+				Config: json.RawMessage(`{
+					"Url":{"$ref":"formae://svc1#/Endpoint","$value":"http://lb.example.com:80"},
+					"Auth":{"Type":"Token","Token":{"$ref":"formae://sec1#/SecretString","$strategy":"Update","$visibility":"Opaque"}}
+				}`),
+				ConfigSchema: pkgmodel.ConfigSchema{
+					Hints: map[string]pkgmodel.ConfigFieldHint{
+						"Auth": {CreateOnly: false},
+					},
+				},
+			},
+		},
+		resources: map[string]*pkgmodel.Resource{
+			"svc1": {
+				Ksuid:              "svc1",
+				ReadOnlyProperties: json.RawMessage(`{"Endpoint":"http://lb.example.com:80"}`),
+			},
+			"sec1": {
+				Ksuid:      "sec1",
+				Properties: json.RawMessage(`{"SecretString":{"$value":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","$visibility":"Opaque","$strategy":"Update","$hashed":true}}`),
+			},
+		},
+	}
+	generator := NewTargetUpdateGenerator(mockDS)
+
+	targets := []pkgmodel.Target{
+		{
+			Label:     "grafana-target",
+			Namespace: "GRAFANA",
+			Config: json.RawMessage(`{
+				"Url":{"$ref":"formae://svc1#/Endpoint"},
+				"Auth":{"Type":"Token","Token":{"$ref":"formae://sec1#/SecretString"}}
+			}`),
+			ConfigSchema: pkgmodel.ConfigSchema{
+				Hints: map[string]pkgmodel.ConfigFieldHint{
+					"Auth": {CreateOnly: false},
+				},
+			},
+		},
+	}
+
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, false)
+	require.NoError(t, err)
+	assert.Empty(t, updates, "a ref to a hashed-at-rest opaque property must compare by ref identity, not update every re-apply")
+}
+
+// Falling back to ref identity for a hashed-at-rest credential must not swallow
+// a real change elsewhere in the config: a mutable plain field that differs, and
+// a credential ref repointed at a different secret, both still produce an update.
+func TestGenerateTargetUpdates_SecretSourcedCredRef_RealChangeStillDetected(t *testing.T) {
+	storedConfig := `{
+		"OrgId":"1",
+		"Auth":{"Type":"Token","Token":{"$ref":"formae://sec1#/SecretString","$strategy":"Update","$visibility":"Opaque"}}
+	}`
+	newDS := func() *mockTargetDatastore {
+		return &mockTargetDatastore{
+			targets: map[string]*pkgmodel.Target{
+				"grafana-target": {
+					Label:     "grafana-target",
+					Namespace: "GRAFANA",
+					Config:    json.RawMessage(storedConfig),
+					ConfigSchema: pkgmodel.ConfigSchema{
+						Hints: map[string]pkgmodel.ConfigFieldHint{
+							"Auth":  {CreateOnly: false},
+							"OrgId": {CreateOnly: false},
+						},
+					},
+				},
+			},
+			resources: map[string]*pkgmodel.Resource{
+				"sec1": {
+					Ksuid:      "sec1",
+					Properties: json.RawMessage(`{"SecretString":{"$value":"aaaa","$visibility":"Opaque","$strategy":"Update","$hashed":true}}`),
+				},
+				"sec2": {
+					Ksuid:      "sec2",
+					Properties: json.RawMessage(`{"SecretString":{"$value":"bbbb","$visibility":"Opaque","$strategy":"Update","$hashed":true}}`),
+				},
+			},
+		}
+	}
+
+	tests := []struct {
+		name      string
+		newConfig string
+	}{
+		{
+			name:      "plain field changed",
+			newConfig: `{"OrgId":"2","Auth":{"Type":"Token","Token":{"$ref":"formae://sec1#/SecretString"}}}`,
+		},
+		{
+			name:      "credential repointed at another secret",
+			newConfig: `{"OrgId":"1","Auth":{"Type":"Token","Token":{"$ref":"formae://sec2#/SecretString"}}}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			generator := NewTargetUpdateGenerator(newDS())
+
+			targets := []pkgmodel.Target{
+				{
+					Label:     "grafana-target",
+					Namespace: "GRAFANA",
+					Config:    json.RawMessage(tt.newConfig),
+					ConfigSchema: pkgmodel.ConfigSchema{
+						Hints: map[string]pkgmodel.ConfigFieldHint{
+							"Auth":  {CreateOnly: false},
+							"OrgId": {CreateOnly: false},
+						},
+					},
+				},
+			}
+
+			updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, false)
+			require.NoError(t, err)
+			require.Len(t, updates, 1)
+			assert.Equal(t, TargetOperationUpdate, updates[0].Operation)
+		})
+	}
+}
+
+// Mirrors a real K8s target Config shape: $refs are nested under Auth, alongside
+// plain scalar fields. Existing Config has $ref+$value pairs (resolved at apply);
+// desired Config has $ref only. Same resolved values, same shape → no update.
+func TestGenerateTargetUpdates_RefWithCachedValue_NestedAuth_NoChange(t *testing.T) {
+	mockDS := &mockTargetDatastore{
+		targets: map[string]*pkgmodel.Target{
+			"k8s-target-aws": {
+				Label:     "k8s-target-aws",
+				Namespace: "K8S",
+				Config: json.RawMessage(`{
+					"Type":"K8S",
+					"Auth":{
+						"Type":"EKS",
+						"Endpoint":{"$ref":"formae://cluster1#/Endpoint","$value":"https://abc.eks.amazonaws.com"},
+						"CertificateAuthority":{"$ref":"formae://cluster1#/CertificateAuthorityData","$value":"LS0tLS1CRUdJTg=="},
+						"ClusterName":{"$ref":"formae://cluster1#/Name","$value":"k8s-fullstack"}
+					},
+					"ApiVersion":"v1.34"
+				}`),
+			},
+		},
+		resources: map[string]*pkgmodel.Resource{
+			"cluster1": {
+				Ksuid:              "cluster1",
+				Properties:         json.RawMessage(`{"Name":"k8s-fullstack"}`),
+				ReadOnlyProperties: json.RawMessage(`{"Endpoint":"https://abc.eks.amazonaws.com","CertificateAuthorityData":"LS0tLS1CRUdJTg=="}`),
+			},
+		},
+	}
+	generator := NewTargetUpdateGenerator(mockDS)
+
+	targets := []pkgmodel.Target{
+		{
+			Label:     "k8s-target-aws",
+			Namespace: "K8S",
+			Config: json.RawMessage(`{
+				"Type":"K8S",
+				"Auth":{
+					"Type":"EKS",
+					"Endpoint":{"$ref":"formae://cluster1#/Endpoint"},
+					"CertificateAuthority":{"$ref":"formae://cluster1#/CertificateAuthorityData"},
+					"ClusterName":{"$ref":"formae://cluster1#/Name"}
+				},
+				"ApiVersion":"v1.34"
+			}`),
+		},
+	}
+
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, false)
+	require.NoError(t, err)
+	assert.Empty(t, updates, "nested $ref+$value vs $ref-only with same resolved values must not produce an update")
+}
+
+// TestGenerateTargetUpdates_ReapedTarget_IdenticalRedeclare_ForcesRecoverUpdate
+// pins the recovery invariant: re-applying an identical target whose current
+// row is 'reaped' must emit a recover TargetOperationUpdate, not dedupe to no
+// update. Without the reaped-recover branch the identical config/discoverable/
+// schema would return no update, UpdateTarget would never run, and the target
+// would stay reaped forever.
+func TestGenerateTargetUpdates_ReapedTarget_IdenticalRedeclare_ForcesRecoverUpdate(t *testing.T) {
+	existing := &pkgmodel.Target{
+		Label:        "reaped-target",
+		Namespace:    "AWS",
+		Config:       json.RawMessage(`{"Region":"us-east-1"}`),
+		Discoverable: false,
+		Version:      1,
+		Health:       &pkgmodel.TargetHealth{State: pkgmodel.TargetHealthStateReaped},
+	}
+	mockDS := &mockTargetDatastore{
+		targets: map[string]*pkgmodel.Target{"reaped-target": existing},
+	}
+	generator := NewTargetUpdateGenerator(mockDS)
+
+	// Identical declaration (same config, discoverable, no schema).
+	targets := []pkgmodel.Target{
+		{Label: "reaped-target", Namespace: "AWS", Config: json.RawMessage(`{"Region":"us-east-1"}`)},
+	}
+
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, false)
+	require.NoError(t, err)
+	require.Len(t, updates, 1, "a reaped target re-declared identically must still produce a recover update")
+	assert.Equal(t, TargetOperationUpdate, updates[0].Operation)
+}
+
+// TestGenerateTargetUpdates_HealthyTarget_IdenticalRedeclare_NoUpdate guards the
+// recovery branch: a non-reaped identical re-apply must still dedupe to no update.
+func TestGenerateTargetUpdates_HealthyTarget_IdenticalRedeclare_NoUpdate(t *testing.T) {
+	existing := &pkgmodel.Target{
+		Label:        "healthy-target",
+		Namespace:    "AWS",
+		Config:       json.RawMessage(`{"Region":"us-east-1"}`),
+		Discoverable: false,
+		Version:      1,
+		Health:       &pkgmodel.TargetHealth{State: pkgmodel.TargetHealthStateReachable},
+	}
+	mockDS := &mockTargetDatastore{
+		targets: map[string]*pkgmodel.Target{"healthy-target": existing},
+	}
+	generator := NewTargetUpdateGenerator(mockDS)
+
+	targets := []pkgmodel.Target{
+		{Label: "healthy-target", Namespace: "AWS", Config: json.RawMessage(`{"Region":"us-east-1"}`)},
+	}
+
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, false)
+	require.NoError(t, err)
+	assert.Empty(t, updates, "an identical re-apply of a healthy target must not produce an update")
+}
+
+// TestGenerateTargetUpdates_ResolvesReapingDefault verifies that a created
+// target with no explicit reaping is admitted with the resolved global default
+// written into Target.Reaping.
+func TestGenerateTargetUpdates_ResolvesReapingDefault(t *testing.T) {
+	mockDS := &mockTargetDatastore{}
+	generator := NewTargetUpdateGenerator(mockDS)
+
+	targets := []pkgmodel.Target{
+		{Label: "new-target", Namespace: "AWS", Config: json.RawMessage(`{"Region":"us-east-1"}`)},
+	}
+
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, false)
+	require.NoError(t, err)
+	require.Len(t, updates, 1)
+	require.NotEmpty(t, updates[0].Target.Reaping, "admission must write a resolved reaping")
+	behaviour, err := pkgmodel.ParseReaping(updates[0].Target.Reaping)
+	require.NoError(t, err)
+	after, ok := behaviour.(*pkgmodel.ReapAfter)
+	require.True(t, ok)
+	assert.Equal(t, pkgmodel.DefaultReapMaxUnreachableSeconds, after.MaxUnreachableSeconds)
+}
+
+// TestGenerateTargetUpdates_RejectsSubFloorReapAfter verifies the duration-floor
+// validation rejects an explicit reap-after below MinReapDuration.
+func TestGenerateTargetUpdates_RejectsSubFloorReapAfter(t *testing.T) {
+	mockDS := &mockTargetDatastore{}
+	generator := NewTargetUpdateGenerator(mockDS)
+
+	targets := []pkgmodel.Target{
+		{
+			Label:     "sub-floor-target",
+			Namespace: "AWS",
+			Config:    json.RawMessage(`{"Region":"us-east-1"}`),
+			Reaping:   json.RawMessage(`{"Kind":"after","MaxUnreachableSeconds":1}`),
+		},
+	}
+
+	_, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, false)
+	require.Error(t, err, "a reap-after below the floor must be rejected at admission")
 }

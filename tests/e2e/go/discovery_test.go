@@ -32,9 +32,9 @@ func TestDiscovery(t *testing.T) {
 	agent := StartAgent(t, bin, WithDiscovery("30.s",
 		"AWS::IAM::Role",
 		"AWS::IAM::RolePolicy",
-		"Azure::Resources::ResourceGroup",
-		"Azure::Network::VirtualNetwork",
-		"Azure::Network::Subnet",
+		"AZURE::Resources::ResourceGroup",
+		"AZURE::Network::VirtualNetwork",
+		"AZURE::Network::Subnet",
 	))
 	cli := NewFormaeCLI(bin, agent.ConfigPath(), agent.Port())
 
@@ -257,7 +257,7 @@ func testDiscoveryAzure(t *testing.T, cli *FormaeCLI) {
 		t.Fatalf("expected 1 resource in stack e2e-discovery-azure, got %d", len(resources))
 	}
 	managedRg := RequireResource(t, resources, "e2e-discovery-managed-rg")
-	if managedRg.Type != "Azure::Resources::ResourceGroup" {
+	if managedRg.Type != "AZURE::Resources::ResourceGroup" {
 		t.Fatalf("expected type Azure::Resources::ResourceGroup, got %s", managedRg.Type)
 	}
 
@@ -354,18 +354,18 @@ func testDiscoveryAzure(t *testing.T, cli *FormaeCLI) {
 	}
 
 	// Step 6: Verify each specific unmanaged resource exists with correct type.
-	RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-rg-a", "Azure::Resources::ResourceGroup")
-	RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-rg-b", "Azure::Resources::ResourceGroup")
+	RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-rg-a", "AZURE::Resources::ResourceGroup")
+	RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-rg-b", "AZURE::Resources::ResourceGroup")
 
-	vnetManaged := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-vnet-managed", "Azure::Network::VirtualNetwork")
-	vnetA1 := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-vnet-a1", "Azure::Network::VirtualNetwork")
-	vnetB1 := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-vnet-b1", "Azure::Network::VirtualNetwork")
-	vnetB2 := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-vnet-b2", "Azure::Network::VirtualNetwork")
+	vnetManaged := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-vnet-managed", "AZURE::Network::VirtualNetwork")
+	vnetA1 := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-vnet-a1", "AZURE::Network::VirtualNetwork")
+	vnetB1 := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-vnet-b1", "AZURE::Network::VirtualNetwork")
+	vnetB2 := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-vnet-b2", "AZURE::Network::VirtualNetwork")
 
-	subnetManaged := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-subnet-managed", "Azure::Network::Subnet")
-	subnetA1 := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-subnet-a1", "Azure::Network::Subnet")
-	subnetB1 := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-subnet-b1", "Azure::Network::Subnet")
-	subnetB2 := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-subnet-b2", "Azure::Network::Subnet")
+	subnetManaged := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-subnet-managed", "AZURE::Network::Subnet")
+	subnetA1 := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-subnet-a1", "AZURE::Network::Subnet")
+	subnetB1 := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-subnet-b1", "AZURE::Network::Subnet")
+	subnetB2 := RequireResourceByNativeID(t, unmanaged, "formae-e2e-discovery-subnet-b2", "AZURE::Network::Subnet")
 
 	// Step 7: Verify VNets have resolvable reference to parent RG.
 	knownRGNames := []string{"formae-e2e-discovery-managed-rg", "formae-e2e-discovery-rg-a", "formae-e2e-discovery-rg-b"}
@@ -376,7 +376,7 @@ func testDiscoveryAzure(t *testing.T, cli *FormaeCLI) {
 			continue
 		}
 		assertResolvableWithKnownValues(t, vnet.Label, "resourceGroupName", rgNameProp,
-			"Azure::Resources::ResourceGroup", "name", knownRGNames)
+			"AZURE::Resources::ResourceGroup", "name", knownRGNames)
 	}
 
 	// Step 8: Verify Subnets have resolvable references to parent VNet and RG.
@@ -393,7 +393,7 @@ func testDiscoveryAzure(t *testing.T, cli *FormaeCLI) {
 			t.Errorf("unmanaged Subnet %s missing virtualNetworkName property", subnet.Label)
 		} else {
 			assertResolvableWithKnownValues(t, subnet.Label, "virtualNetworkName", vnetNameProp,
-				"Azure::Network::VirtualNetwork", "name", knownVNetNames)
+				"AZURE::Network::VirtualNetwork", "name", knownVNetNames)
 		}
 
 		// resourceGroupName should reference parent RG (inherited through the VNet).
@@ -402,7 +402,7 @@ func testDiscoveryAzure(t *testing.T, cli *FormaeCLI) {
 			t.Errorf("unmanaged Subnet %s missing resourceGroupName property", subnet.Label)
 		} else {
 			assertResolvableWithKnownValues(t, subnet.Label, "resourceGroupName", rgNameProp,
-				"Azure::Network::VirtualNetwork", "resourceGroupName", knownRGNames)
+				"AZURE::Network::VirtualNetwork", "resourceGroupName", knownRGNames)
 		}
 	}
 

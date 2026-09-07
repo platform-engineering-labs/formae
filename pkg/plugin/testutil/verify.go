@@ -10,14 +10,13 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
-	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
 	"github.com/apple/pkl-go/pkl"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
+	"github.com/platform-engineering-labs/formae/pkg/plugin/pklrun"
 )
 
 //go:embed pkl/*.pkl
@@ -25,20 +24,31 @@ var pklFiles embed.FS
 
 // VerifyResult contains the results of schema verification.
 type VerifyResult struct {
-	Status             string               `json:"status"`
-	HasErrors          bool                 `json:"hasErrors"`
-	TotalModules       int                  `json:"totalModules"`
-	TotalResourceTypes int                  `json:"totalResourceTypes"`
-	DuplicateFileCount int                  `json:"duplicateFileCount"`
-	DuplicateTypeCount int                  `json:"duplicateTypeCount"`
-	DuplicateFiles     []DuplicateFileError `json:"duplicateFiles"`
-	DuplicateTypes     []string             `json:"duplicateTypes"`
+	Status               string               `json:"status"`
+	HasErrors            bool                 `json:"hasErrors"`
+	TotalModules         int                  `json:"totalModules"`
+	TotalResourceTypes   int                  `json:"totalResourceTypes"`
+	DuplicateFileCount   int                  `json:"duplicateFileCount"`
+	DuplicateTypeCount   int                  `json:"duplicateTypeCount"`
+	DuplicateFiles       []DuplicateFileError `json:"duplicateFiles"`
+	DuplicateTypes       []string             `json:"duplicateTypes"`
+	OrphanFieldHintCount int                  `json:"orphanFieldHintCount"`
+	OrphanFieldHints     []OrphanFieldHint    `json:"orphanFieldHints"`
 }
 
 // DuplicateFileError represents a file that appears multiple times in the schema.
 type DuplicateFileError struct {
 	FileName string   `json:"fileName"`
 	Modules  []string `json:"modules"`
+}
+
+// OrphanFieldHint represents a class that carries a @FieldHint on one of its
+// properties but does not extend formae.Resource or formae.SubResource, so the
+// hint never reaches Schema.Hints.
+type OrphanFieldHint struct {
+	ModuleName string   `json:"moduleName"`
+	ClassName  string   `json:"className"`
+	Fields     []string `json:"fields"`
 }
 
 // VerifySchema runs PKL schema verification for a plugin.
@@ -193,20 +203,15 @@ func generatePklProject(ctx context.Context, workDir, namespace, schemaPath stri
 
 // resolvePklProject runs pkl project resolve to fetch dependencies.
 func resolvePklProject(workDir string) error {
-	cmd := exec.Command("pkl", "project", "resolve", workDir)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("pkl project resolve failed: %s", string(output))
-	}
-	return nil
+	return pklrun.ProjectResolve(workDir)
 }
 
 // generateImports generates imports.pkl from PklProject dependencies.
 func generateImports(ctx context.Context, workDir string) error {
-	evaluator, cleanup, err := newSafeProjectEvaluator(
+	evaluator, cleanup, err := pklrun.NewProjectEvaluator(
 		ctx,
-		&url.URL{Scheme: "file", Path: workDir},
-		pkl.PreconfiguredOptions,
+		workDir,
+		pklrun.WithEvaluatorOptions(pkl.PreconfiguredOptions),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create evaluator: %w", err)
@@ -229,10 +234,10 @@ func generateImports(ctx context.Context, workDir string) error {
 
 // runVerification runs Verify.pkl and parses the result.
 func runVerification(ctx context.Context, workDir string) (*VerifyResult, error) {
-	evaluator, cleanup, err := newSafeProjectEvaluator(
+	evaluator, cleanup, err := pklrun.NewProjectEvaluator(
 		ctx,
-		&url.URL{Scheme: "file", Path: workDir},
-		pkl.PreconfiguredOptions,
+		workDir,
+		pklrun.WithEvaluatorOptions(pkl.PreconfiguredOptions),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create evaluator: %w", err)
@@ -264,7 +269,8 @@ func (r *VerifyResult) FormatReport(namespace string) string {
 	fmt.Fprintf(&sb, "- Total modules: %d\n", r.TotalModules)
 	fmt.Fprintf(&sb, "- Total resource types: %d\n", r.TotalResourceTypes)
 	fmt.Fprintf(&sb, "- Duplicate files found: %d\n", r.DuplicateFileCount)
-	fmt.Fprintf(&sb, "- Duplicate types found: %d\n\n", r.DuplicateTypeCount)
+	fmt.Fprintf(&sb, "- Duplicate types found: %d\n", r.DuplicateTypeCount)
+	fmt.Fprintf(&sb, "- Orphan @FieldHint classes found: %d\n\n", r.OrphanFieldHintCount)
 
 	if len(r.DuplicateFiles) > 0 {
 		sb.WriteString("DUPLICATE FILES DETECTED:\n")
@@ -289,47 +295,25 @@ func (r *VerifyResult) FormatReport(namespace string) string {
 		sb.WriteString("No duplicate resource types found\n\n")
 	}
 
+	if len(r.OrphanFieldHints) > 0 {
+		sb.WriteString("ORPHAN @FieldHint CLASSES DETECTED:\n")
+		sb.WriteString("  A @FieldHint on a class that does not extend formae.Resource or\n")
+		sb.WriteString("  formae.SubResource (directly or transitively) never reaches Schema.Hints,\n")
+		sb.WriteString("  and the class also misses the SubResource render path. Add\n")
+		sb.WriteString("  \"extends formae.SubResource\" to the class.\n")
+		for _, o := range r.OrphanFieldHints {
+			fmt.Fprintf(&sb, "  %s#%s: %s\n", o.ModuleName, o.ClassName, strings.Join(o.Fields, ", "))
+		}
+		sb.WriteString("\n")
+	} else {
+		sb.WriteString("No orphan @FieldHint classes found\n\n")
+	}
+
 	if r.HasErrors {
-		sb.WriteString("VERIFICATION FAILED - Please resolve duplicate files/types before proceeding\n")
+		sb.WriteString("VERIFICATION FAILED - Please resolve the issues listed above before proceeding\n")
 	} else {
 		sb.WriteString("VERIFICATION PASSED - Schema is valid\n")
 	}
 
 	return sb.String()
-}
-
-// newSafeProjectEvaluator creates a project-aware PKL evaluator without the race
-// condition in pkl-go's NewProjectEvaluator. That function internally creates two
-// evaluators on the same manager and defer-closes the first one. If the pkl subprocess
-// sends a late message for the closed evaluator, the manager's listen loop exits
-// entirely (calls return instead of continue), killing all message processing.
-// See: https://github.com/apple/pkl-go/blob/v0.12.0/pkl/evaluator_exec.go#L57-L84
-//
-// This function keeps both evaluators alive until the returned cleanup function is
-// called, which closes the entire manager.
-func newSafeProjectEvaluator(ctx context.Context, projectBaseURL *url.URL, opts ...func(*pkl.EvaluatorOptions)) (pkl.Evaluator, func(), error) {
-	manager := pkl.NewEvaluatorManager()
-
-	projectEvaluator, err := manager.NewEvaluator(ctx, opts...)
-	if err != nil {
-		manager.Close()
-		return nil, nil, fmt.Errorf("failed to create project evaluator: %w", err)
-	}
-
-	projectPath := projectBaseURL.JoinPath("PklProject")
-	project, err := pkl.LoadProjectFromEvaluator(ctx, projectEvaluator, &pkl.ModuleSource{Uri: projectPath})
-	if err != nil {
-		manager.Close()
-		return nil, nil, fmt.Errorf("failed to load project: %w", err)
-	}
-
-	newOpts := []func(*pkl.EvaluatorOptions){pkl.WithProject(project)}
-	newOpts = append(newOpts, opts...)
-	evaluator, err := manager.NewEvaluator(ctx, newOpts...)
-	if err != nil {
-		manager.Close()
-		return nil, nil, fmt.Errorf("failed to create evaluator: %w", err)
-	}
-
-	return evaluator, func() { manager.Close() }, nil
 }
