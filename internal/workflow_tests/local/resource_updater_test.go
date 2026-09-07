@@ -129,7 +129,15 @@ func TestResourceUpdater_HandlesThrottlingDuringSynchronization(t *testing.T) {
 		})
 		assert.NoError(t, err)
 
-		command, ok := commandRes.(*forma_command.FormaCommand)
+		commandLoadRes, ok := commandRes.(forma_persister.LoadFormaCommandResult)
+
+		var command *forma_command.FormaCommand
+
+		if ok {
+
+			command = commandLoadRes.Command
+
+		}
 		assert.True(t, ok)
 		assert.Equal(t, forma_command.CommandStateSuccess, command.State)
 	})
@@ -224,7 +232,15 @@ func TestResourceUpdater_RejectsUpdateWhenTheResourceIsOutOfSync(t *testing.T) {
 		})
 		assert.NoError(t, err)
 
-		command, ok := commandRes.(*forma_command.FormaCommand)
+		commandLoadRes, ok := commandRes.(forma_persister.LoadFormaCommandResult)
+
+		var command *forma_command.FormaCommand
+
+		if ok {
+
+			command = commandLoadRes.Command
+
+		}
 		assert.True(t, ok)
 		assert.Equal(t, forma_command.CommandStateFailed, command.State)
 		assert.Len(t, command.ResourceUpdates, 1)
@@ -314,7 +330,15 @@ func TestResourceUpdater_SuccessfullySynchronizesAResource(t *testing.T) {
 		})
 		assert.NoError(t, err)
 
-		command, ok := commandRes.(*forma_command.FormaCommand)
+		commandLoadRes, ok := commandRes.(forma_persister.LoadFormaCommandResult)
+
+		var command *forma_command.FormaCommand
+
+		if ok {
+
+			command = commandLoadRes.Command
+
+		}
 		assert.True(t, ok)
 		assert.Equal(t, forma_command.CommandStateSuccess, command.State)
 		assert.Len(t, command.ResourceUpdates, 1)
@@ -427,7 +451,15 @@ func TestResourceUpdater_SuccessfullyDeletesAResource(t *testing.T) {
 		})
 		assert.NoError(t, err)
 
-		command, ok := commandRes.(*forma_command.FormaCommand)
+		commandLoadRes, ok := commandRes.(forma_persister.LoadFormaCommandResult)
+
+		var command *forma_command.FormaCommand
+
+		if ok {
+
+			command = commandLoadRes.Command
+
+		}
 		assert.True(t, ok)
 		assert.Equal(t, forma_command.CommandStateSuccess, command.State)
 		assert.Len(t, command.ResourceUpdates, 1)
@@ -521,7 +553,15 @@ func TestResourceUpdater_DeleteOperationFailsWhenPluginCrashes(t *testing.T) {
 		})
 		assert.NoError(t, err)
 
-		command, ok := commandRes.(*forma_command.FormaCommand)
+		commandLoadRes, ok := commandRes.(forma_persister.LoadFormaCommandResult)
+
+		var command *forma_command.FormaCommand
+
+		if ok {
+
+			command = commandLoadRes.Command
+
+		}
 		assert.True(t, ok)
 		assert.Equal(t, forma_command.CommandStateFailed, command.State)
 		assert.Len(t, command.ResourceUpdates, 1)
@@ -603,7 +643,15 @@ func TestResourceUpdater_PreservesPluginErrorMessageOnDeleteFailure(t *testing.T
 		})
 		assert.NoError(t, err)
 
-		command, ok := commandRes.(*forma_command.FormaCommand)
+		commandLoadRes, ok := commandRes.(forma_persister.LoadFormaCommandResult)
+
+		var command *forma_command.FormaCommand
+
+		if ok {
+
+			command = commandLoadRes.Command
+
+		}
 		assert.True(t, ok)
 		assert.Len(t, command.ResourceUpdates, 1)
 		assert.Contains(t, command.ResourceUpdates[0].MostRecentFailureMessage(), pluginErr,
@@ -770,8 +818,11 @@ func TestResourceUpdater_SuccessfullyCreatesAResource(t *testing.T) {
 		assert.Equal(t, "test-resource", newResource.Label)
 		assert.Equal(t, "FakeAWS::S3::Bucket", newResource.Type)
 		// The write-origin merge records the just-applied resolution as $applied
-		// alongside $value, so later diffs can compare against the written domain.
-		assert.JSONEq(t, fmt.Sprintf(`{"VpcId":{"$ref":"formae://%s#/VpcId", "$value":"vpc-12345678", "$applied":"vpc-12345678"},"baz":"qux","a":[3,4,2]}`, vpcKsuid), string(newResource.Properties))
+		// alongside $value (so later diffs can compare against the written
+		// domain) and stamps $resolvedFrom with the canonical digest of the
+		// source value the resolution came from (the convergence witness the
+		// next plan compares).
+		assert.JSONEq(t, fmt.Sprintf(`{"VpcId":{"$ref":"formae://%s#/VpcId", "$value":"vpc-12345678", "$applied":"vpc-12345678", "$resolvedFrom":"v1:2a0b9a0c839df94183b2f5f2e9ccb871de6f12f4342cbbfedf78c786ca16af68"},"baz":"qux","a":[3,4,2]}`, vpcKsuid), string(newResource.Properties))
 		assert.True(t, newResource.Managed)
 
 		// assert that the forma command in the database is updated with the success state
@@ -780,7 +831,15 @@ func TestResourceUpdater_SuccessfullyCreatesAResource(t *testing.T) {
 		})
 		assert.NoError(t, err)
 
-		loadedCommand, ok := commandRes.(*forma_command.FormaCommand)
+		loadedCommandLoadRes, ok := commandRes.(forma_persister.LoadFormaCommandResult)
+
+		var loadedCommand *forma_command.FormaCommand
+
+		if ok {
+
+			loadedCommand = loadedCommandLoadRes.Command
+
+		}
 		assert.True(t, ok)
 		assert.Equal(t, forma_command.CommandStateSuccess, loadedCommand.State)
 		assert.Len(t, loadedCommand.ResourceUpdates, 1)
@@ -890,7 +949,15 @@ func TestResourceUpdater_SuccessfullyUpdatesAResource(t *testing.T) {
 		})
 		assert.NoError(t, err)
 
-		command, ok := commandRes.(*forma_command.FormaCommand)
+		commandLoadRes, ok := commandRes.(forma_persister.LoadFormaCommandResult)
+
+		var command *forma_command.FormaCommand
+
+		if ok {
+
+			command = commandLoadRes.Command
+
+		}
 		assert.True(t, ok)
 		assert.Equal(t, forma_command.CommandStateSuccess, command.State)
 		assert.Len(t, command.ResourceUpdates, 1)
@@ -975,7 +1042,15 @@ func TestResourceUpdater_PreservesPluginErrorMessageOnUpdateFailure(t *testing.T
 		})
 		assert.NoError(t, err)
 
-		command, ok := commandRes.(*forma_command.FormaCommand)
+		commandLoadRes, ok := commandRes.(forma_persister.LoadFormaCommandResult)
+
+		var command *forma_command.FormaCommand
+
+		if ok {
+
+			command = commandLoadRes.Command
+
+		}
 		assert.True(t, ok)
 		assert.Len(t, command.ResourceUpdates, 1)
 		assert.Contains(t, command.ResourceUpdates[0].MostRecentFailureMessage(), pluginErr,
@@ -1093,7 +1168,15 @@ func TestResourceUpdater_SuccessfullyRecoversFromADeleteOperationLeftInInProgres
 		})
 		assert.NoError(t, err)
 
-		command, ok := commandRes.(*forma_command.FormaCommand)
+		commandLoadRes, ok := commandRes.(forma_persister.LoadFormaCommandResult)
+
+		var command *forma_command.FormaCommand
+
+		if ok {
+
+			command = commandLoadRes.Command
+
+		}
 		assert.True(t, ok)
 		assert.Equal(t, forma_command.CommandStateSuccess, command.State)
 		assert.Len(t, command.ResourceUpdates, 1)
@@ -1216,7 +1299,15 @@ func TestResourceUpdater_SuccessfullyRecoversFromACreateOperationLeftInInProgres
 		})
 		assert.NoError(t, err)
 
-		loadFormaCommand, ok := commandRes.(*forma_command.FormaCommand)
+		loadFormaCommandLoadRes, ok := commandRes.(forma_persister.LoadFormaCommandResult)
+
+		var loadFormaCommand *forma_command.FormaCommand
+
+		if ok {
+
+			loadFormaCommand = loadFormaCommandLoadRes.Command
+
+		}
 		assert.True(t, ok)
 		assert.Equal(t, forma_command.CommandStateSuccess, loadFormaCommand.State)
 		assert.Len(t, loadFormaCommand.ResourceUpdates, 1)
@@ -1363,7 +1454,15 @@ func TestResourceUpdater_SuccessfullyRecoversFromAnUpdateOperationLeftInInFailed
 		})
 		assert.NoError(t, err)
 
-		command, ok := commandRes.(*forma_command.FormaCommand)
+		commandLoadRes, ok := commandRes.(forma_persister.LoadFormaCommandResult)
+
+		var command *forma_command.FormaCommand
+
+		if ok {
+
+			command = commandLoadRes.Command
+
+		}
 		assert.True(t, ok)
 		assert.Equal(t, forma_command.CommandStateSuccess, command.State)
 		assert.Len(t, command.ResourceUpdates, 1)

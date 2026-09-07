@@ -38,8 +38,10 @@ func (m *Metastructure) ExtractResourceByKsuid(ksuid string) (*pkgmodel.Resource
 		return nil, nil
 	}
 
+	// The generators the rewrite resolved are discarded: a single resource is
+	// not a forma and has nowhere to declare one.
 	resources := []*pkgmodel.Resource{res}
-	if err := m.reverseTranslateKSUIDsToTriplets(resources); err != nil {
+	if _, err := m.reverseTranslateKSUIDsToTriplets(resources); err != nil {
 		slog.Error("Failed to reverse translate KSUIDs to triplets", "ksuid", ksuid, "error", err)
 		return nil, err
 	}

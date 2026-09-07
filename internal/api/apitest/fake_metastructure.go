@@ -12,6 +12,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/changeset"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/querier"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
@@ -77,6 +78,11 @@ type WrappedPolicyResponse struct {
 	Error    error
 }
 
+type WrappedGeneratorResponse struct {
+	Generators []apimodel.GeneratorInventoryItem
+	Error      error
+}
+
 type WrappedSummaryResponse struct {
 	Summaries []pkgmodel.ResourceSummary
 	Error     error
@@ -101,6 +107,7 @@ type FakeMetastructure struct {
 	CheckTTLResponses        []WrappedCheckTTLResponse
 	StackResponses           []WrappedStackResponse
 	PolicyResponses          []WrappedPolicyResponse
+	GeneratorResponses       []WrappedGeneratorResponse
 	RecordedCancelQueries    []string
 	RecordedExtractQueries   []string
 	RecordedSummaryQueries   []string
@@ -151,7 +158,7 @@ func (m *FakeMetastructure) CancelCommand(commandID string, force bool, clientID
 	return nil, nil
 }
 
-func (m *FakeMetastructure) CancelCommandsByQuery(query string, force bool, clientID string) (*apimodel.CancelCommandResponse, error) {
+func (m *FakeMetastructure) CancelCommandsByQuery(query string, force bool, caller querier.Caller) (*apimodel.CancelCommandResponse, error) {
 	m.RecordedCancelQueries = append(m.RecordedCancelQueries, query)
 	nextResponse := m.CancelResponses[0]
 	m.CancelResponses = m.CancelResponses[1:]
@@ -159,7 +166,7 @@ func (m *FakeMetastructure) CancelCommandsByQuery(query string, force bool, clie
 	return nextResponse.CancelCommandResponse, nextResponse.Error
 }
 
-func (m *FakeMetastructure) ListFormaCommandStatus(commandID string, clientID string, n int, scope apimodel.CommandScope) (*apimodel.ListCommandStatusResponse, error) {
+func (m *FakeMetastructure) ListFormaCommandStatus(commandID string, caller querier.Caller, n int, scope apimodel.CommandScope) (*apimodel.ListCommandStatusResponse, error) {
 	m.RecordedListN = append(m.RecordedListN, n)
 	m.RecordedListScopes = append(m.RecordedListScopes, scope)
 
@@ -260,6 +267,17 @@ func (m *FakeMetastructure) ExtractStacks() ([]*pkgmodel.Stack, error) {
 		m.StackResponses = m.StackResponses[1:]
 	}
 	return next.Stacks, next.Error
+}
+
+func (m *FakeMetastructure) ExtractGenerators() ([]apimodel.GeneratorInventoryItem, error) {
+	if len(m.GeneratorResponses) == 0 {
+		return []apimodel.GeneratorInventoryItem{}, nil
+	}
+	next := m.GeneratorResponses[0]
+	if len(m.GeneratorResponses) > 1 {
+		m.GeneratorResponses = m.GeneratorResponses[1:]
+	}
+	return next.Generators, next.Error
 }
 
 func (m *FakeMetastructure) ExtractPolicies() ([]apimodel.PolicyInventoryItem, error) {

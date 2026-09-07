@@ -144,14 +144,38 @@ func seedFake(t *testing.T) *apitest.FakeMetastructure {
 				},
 			}},
 		},
+		GeneratorResponses: []apitest.WrappedGeneratorResponse{
+			{Generators: []apimodel.GeneratorInventoryItem{
+				{
+					Label:         "e2e-db-password",
+					Type:          "password",
+					Stack:         "prod",
+					Config:        json.RawMessage(`{"Type":"password","Length":32}`),
+					EverySeconds:  86400,
+					LastRotatedAt: time.Date(2025, 12, 2, 12, 0, 0, 0, time.UTC),
+					GenerationID:  "2ABcDeFgHiJkLmNoPqRsTuVwXyZ",
+					Destinations: []apimodel.GeneratorDestination{
+						{ResourceLabel: "e2e-primary", StackLabel: "prod"},
+						{ResourceLabel: "e2e-worker", StackLabel: "staging"},
+					},
+				},
+				{
+					Label:        "e2e-api-key",
+					Type:         "password",
+					Stack:        "staging",
+					Config:       json.RawMessage(`{"Type":"password","Length":64}`),
+					EverySeconds: 3600,
+				},
+			}},
+		},
 	}
 }
 
-// TestInventoryE2E_FourTabBrowse is the core layer-3 E2E: seeds all four entity
-// types, drives the TUI through each tab via key 1-4, and makes targeted
+// TestInventoryE2E_FiveTabBrowse is the core layer-3 E2E: seeds all five entity
+// types, drives the TUI through each tab via key 1-5, and makes targeted
 // WaitForContains assertions. Timing-dependent strings are intentionally
 // excluded from assertions.
-func TestInventoryE2E_FourTabBrowse(t *testing.T) {
+func TestInventoryE2E_FiveTabBrowse(t *testing.T) {
 	fake := seedFake(t)
 
 	srv := api.NewServer(t.Context(), fake, nil, nil, nil, nil)
@@ -192,6 +216,25 @@ func TestInventoryE2E_FourTabBrowse(t *testing.T) {
 
 	// Esc back to list.
 	tm.Send(tea.KeyMsg{Type: tea.KeyEsc})
+
+	// Tab 5 (Generators). The cadence and the derived instant of the last
+	// committed rotation both reach the cell, and a generator whose rotation has
+	// never committed reads as "never" rather than as an empty cell.
+	tm.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'5'}})
+	waitForAll(t, tm, "e2e-db-password", "e2e-api-key", "1d", "Dec 2 12:00Z", "never")
+
+	// Enter on the generators tab → detail names the destinations with the stack
+	// that holds each, and names the generation the generator currently holds.
+	// Rows default-sort by Label ascending, so the first row is e2e-api-key;
+	// move down to e2e-db-password, which is the one with destinations.
+	tm.Send(tea.KeyMsg{Type: tea.KeyDown})
+	tm.Send(tea.KeyMsg{Type: tea.KeyEnter})
+	waitForAll(t, tm, "Destinations (2):", "e2e-primary (stack prod)",
+		"e2e-worker (stack staging)", "2ABcDeFgHiJkLmNoPqRsTuVwXyZ")
+
+	// Esc back to list, then back to the policies tab for the query assertions.
+	tm.Send(tea.KeyMsg{Type: tea.KeyEsc})
+	tm.Send(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'4'}})
 
 	// Search: '/' focuses the query bar; typing then enter applies the query.
 	// The status line "Showing N of M policies (filtered)" and the applied-query

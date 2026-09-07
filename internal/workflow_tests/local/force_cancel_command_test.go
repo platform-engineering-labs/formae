@@ -19,6 +19,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/querier"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/testutil"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/types"
@@ -423,7 +424,7 @@ func TestMetastructure_ForceCancelCommand_ResourceStatesAttributeCommandID(t *te
 		}, 10*time.Second, 50*time.Millisecond, "expected at least 2 resource updates to be in progress")
 
 		// Cancel via CancelCommandsByQuery (the aggregation path that builds ResourceUpdateStates).
-		cancelResp, err := m.CancelCommandsByQuery("", true, "test-client")
+		cancelResp, err := m.CancelCommandsByQuery("", true, querier.Caller{ClientID: "test-client"})
 		require.NoError(t, err)
 		require.NotNil(t, cancelResp)
 

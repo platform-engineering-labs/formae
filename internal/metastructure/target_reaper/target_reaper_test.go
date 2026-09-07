@@ -231,7 +231,7 @@ func TestReapCandidates_SkipsTargetWithIncompleteCommand(t *testing.T) {
 				StackLabel:     "default",
 			},
 		},
-		nil, nil, nil,
+		nil, nil, nil, nil,
 		"test-client",
 		"",
 		"",

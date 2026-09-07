@@ -1,0 +1,16 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+name = "oidc-echo"
+version = "0.0.1"
+namespace = "OidcEcho"
+summary = "Resource plugin that echoes the identity token its broker mints"
+license = "FSL-1.1-ALv2"
+category = "config"
+
+/// Must be at least pkg/plugin.MinFormaeVersion and no newer than the agent
+/// under test, or the agent drops this plugin as incompatible.
+minFormaeVersion = "0.89.0"

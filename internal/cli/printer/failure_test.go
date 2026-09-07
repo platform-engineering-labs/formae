@@ -101,6 +101,34 @@ func TestFailureIsAnError(t *testing.T) {
 	}
 }
 
+// Every code the connect stream declares is registered, so it reaches the
+// wire as itself rather than degrading to internal.
+func TestPrintFailureCarriesTheConnectCodes(t *testing.T) {
+	for _, code := range []Code{
+		CodeHostedRequired,
+		CodeAccountMismatch,
+		CodeSSOLoginRequired,
+		CodeProvisionFailed,
+		CodeRoleCollision,
+		CodeProviderConflict,
+		CodeRegistrationConflict,
+		CodeNotAuthorized,
+		CodeUnsupportedPartition,
+		CodeControlPlaneTooOld,
+		CodeInstallationNotReady,
+	} {
+		t.Run(string(code), func(t *testing.T) {
+			var out bytes.Buffer
+			if _, err := PrintFailure(&out, "json", Fail(code, "declared", nil)); err != nil {
+				t.Fatalf("PrintFailure: %v", err)
+			}
+			if !strings.Contains(out.String(), `"code":"`+string(code)+`"`) {
+				t.Fatalf("code %s did not survive the envelope: %s", code, out.String())
+			}
+		})
+	}
+}
+
 func TestPrintFailureSupportsYAML(t *testing.T) {
 	var out bytes.Buffer
 	if _, err := PrintFailure(&out, "yaml", Fail(CodeNoConnection, "no connection", nil)); err != nil {

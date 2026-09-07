@@ -33,31 +33,22 @@ func NewResourceLabeler(ds ResourceDataLookup) *ResourceLabeler {
 
 // LabelForUnmanagedResource generates a label for a discovered resource.
 // Uses JSONPath query from labelConfig to extract label value from properties.
-// Falls back to legacy tagLabelKeys, then to nativeID if no label can be extracted.
+// Falls back to nativeID if no label can be extracted.
 //
 // Resolution order:
 // 1. Plugin's ResourceOverrides[resourceType] (if exists)
 // 2. Plugin's DefaultQuery
-// 3. Legacy tagLabelKeys (for backwards compatibility)
-// 4. NativeID (fallback)
+// 3. NativeID (fallback)
 func (l *ResourceLabeler) LabelForUnmanagedResource(
 	nativeID string,
 	resourceType string,
 	properties json.RawMessage,
 	labelConfig pkgmodel.LabelConfig,
-	legacyTagKeys []string,
 ) string {
 	// Try JSONPath query first (from LabelConfig)
 	query := labelConfig.QueryForResourceType(resourceType)
 	if query != "" {
 		if label := l.extractLabelFromQuery(properties, query); label != "" {
-			return l.ensureUnique(label)
-		}
-	}
-
-	// Legacy fallback: use tag keys from config
-	if len(legacyTagKeys) > 0 {
-		if label := l.extractLabelFromLegacyTagKeys(properties, legacyTagKeys); label != "" {
 			return l.ensureUnique(label)
 		}
 	}
@@ -111,41 +102,28 @@ func (l *ResourceLabeler) extractLabelFromQuery(properties json.RawMessage, quer
 	return strings.Join(parts, labelSeparator)
 }
 
-// extractLabelFromLegacyTagKeys extracts a label using the legacy tag-based approach.
-// This is kept for backwards compatibility with existing configurations.
-func (l *ResourceLabeler) extractLabelFromLegacyTagKeys(properties json.RawMessage, tagKeys []string) string {
-	tags := pkgmodel.GetTagsFromProperties(properties)
-	tagMap := make(map[string]string)
-	for _, tag := range tags {
-		tagMap[tag.Key] = tag.Value
-	}
-
-	var labelParts []string
-	for _, key := range tagKeys {
-		if value, exists := tagMap[key]; exists && value != "" {
-			labelParts = append(labelParts, value)
-		}
-	}
-
-	if len(labelParts) > 0 {
-		return strings.Join(labelParts, labelSeparator)
-	}
-	return ""
-}
-
-// ensureUnique checks if a label already exists and increments the version if needed.
+// ensureUnique returns a label that no existing resource holds, incrementing
+// the version suffix as often as needed. A single increment is not enough:
+// when the base label itself ends in "-<number>" ("server-1"), incrementing it
+// lands on a neighboring label ("server-2") that another resource may already
+// hold as its natural name, and the minted variant is invisible to a later
+// lookup for the original base — so every candidate is re-checked until one
+// is free.
 func (l *ResourceLabeler) ensureUnique(label string) string {
-	res, err := l.datastore.LatestLabelForResource(label)
-	if err != nil {
-		return label
-	}
+	candidate := label
+	for {
+		res, err := l.datastore.LatestLabelForResource(candidate)
+		if err != nil {
+			return candidate
+		}
 
-	// No existing resource on the unmanaged stack with this label
-	if res == "" {
-		return label
-	}
+		// No existing resource with this label or a versioned variant of it
+		if res == "" {
+			return candidate
+		}
 
-	return incrementVersion(res)
+		candidate = incrementVersion(res)
+	}
 }
 
 func incrementVersion(version string) string {

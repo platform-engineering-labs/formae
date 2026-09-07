@@ -4,7 +4,7 @@
 
 //go:build unit
 
-package login
+package cloudapi
 
 import (
 	"context"
@@ -26,6 +26,17 @@ import (
 // testBearer is the complete Authorization header value a caller hands the
 // client, scheme included.
 const testBearer = "Bearer test-token-value"
+
+// testOrigin is the canonical https origin the fixtures name, and what the
+// canonicalisation cases expect back.
+const testOrigin = "https://cloud.formae.io"
+
+// The installation ids the fixtures use: three distinct, well-formed KSUIDs.
+const (
+	testInstallationA = "3HzFPXfPDGhwLJJVtaHbmFs6vLa"
+	testInstallationB = "2ZaBcDeFgHiJkLmNoPqRsTuVwXy"
+	testInstallationC = "1QrStUvWxYz0123456789AbCdEf"
+)
 
 // rawInstallation is an installation record as it appears in the response,
 // built as raw JSON so tests can express shapes the Go type cannot hold.
@@ -111,7 +122,7 @@ func serveInstallations(t *testing.T, records ...any) (*httptest.Server, *captur
 // listFrom drives one request against srv and returns the snapshot.
 func listFrom(t *testing.T, srv *httptest.Server) (Snapshot, error) {
 	t.Helper()
-	return newCloudClient(srv.URL).ListInstallations(context.Background(), testBearer)
+	return NewClient(srv.URL).ListInstallations(context.Background(), testBearer)
 }
 
 // installationIDs returns the id of every installation, in order.
@@ -301,8 +312,8 @@ func TestListInstallations_ClassifiesFailures(t *testing.T) {
 			assert.Empty(t, snapshot.Installations)
 			assert.False(t, snapshot.Authoritative)
 
-			var authErr *cloudAuthError
-			var transientErr *cloudTransientError
+			var authErr *AuthError
+			var transientErr *TransientError
 			assert.Equal(t, tc.auth, errors.As(err, &authErr), "auth classification")
 			assert.Equal(t, tc.transient, errors.As(err, &transientErr), "transient classification")
 		})
@@ -330,14 +341,14 @@ func TestListInstallations_ClassifiesATimeoutAsTransient(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	client, ok := newCloudClient(srv.URL).(*httpCloudClient)
+	client, ok := NewClient(srv.URL).(*httpCloudClient)
 	require.True(t, ok)
 	client.http.Timeout = 20 * time.Millisecond
 
 	snapshot, err := client.ListInstallations(context.Background(), testBearer)
 
 	require.Error(t, err)
-	var transientErr *cloudTransientError
+	var transientErr *TransientError
 	assert.True(t, errors.As(err, &transientErr))
 	assert.False(t, snapshot.Authoritative)
 }

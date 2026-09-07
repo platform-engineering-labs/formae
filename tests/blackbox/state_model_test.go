@@ -8,6 +8,7 @@ package blackbox
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -41,7 +42,7 @@ func TestCorrectModelFromCommandOutcome_FailedCreateForcesNotExist(t *testing.T)
 	}
 
 	corrected := map[struct{ stackIdx, slotIdx int }]bool{}
-	correctModelFromCommandOutcome(t, cmd, model, nil, snapshots, corrected, true)
+	correctModelFromCommandOutcome(t, cmd, model, nil, snapshots, corrected, true, nil, nil)
 
 	require.Equal(t, StateNotExist, model.Resource(0, 1).State,
 		"a failed create must leave the slot NotExist, not revert to a stale Exists snapshot")
@@ -67,7 +68,7 @@ func TestCorrectModelFromCommandOutcome_FailedDeleteRevertsToSnapshot(t *testing
 	}
 
 	corrected := map[struct{ stackIdx, slotIdx int }]bool{}
-	correctModelFromCommandOutcome(t, cmd, model, nil, snapshots, corrected, true)
+	correctModelFromCommandOutcome(t, cmd, model, nil, snapshots, corrected, true, nil, nil)
 
 	require.Equal(t, StateExists, model.Resource(0, 1).State,
 		"a failed delete leaves the resource in place, reverting to its Exists snapshot")
@@ -94,8 +95,8 @@ func TestCorrectModelFromCommandOutcome_ReverseOrderFailedCreatesStayNotExist(t 
 	corrected := map[struct{ stackIdx, slotIdx int }]bool{}
 	newerSnap := []ResourceSnapshot{{StackIndex: 0, SlotIndex: 1, State: StateNotExist}}
 	olderSnap := []ResourceSnapshot{{StackIndex: 0, SlotIndex: 1, State: StateExists}} // stale
-	correctModelFromCommandOutcome(t, newerCmd, model, nil, newerSnap, corrected, true)
-	correctModelFromCommandOutcome(t, olderCmd, model, nil, olderSnap, corrected, true)
+	correctModelFromCommandOutcome(t, newerCmd, model, nil, newerSnap, corrected, true, nil, nil)
+	correctModelFromCommandOutcome(t, olderCmd, model, nil, olderSnap, corrected, true, nil, nil)
 
 	require.Equal(t, StateNotExist, model.Resource(0, 1).State,
 		"an older failed-create command must not resurrect a slot from its stale Exists snapshot")
@@ -438,6 +439,33 @@ func TestStateModel_UnmanagedLifecycle(t *testing.T) {
 	assert.False(t, res.PresentInCloud)
 }
 
+// Discovery reaches children by filtering ParentId against the parent's
+// current Name. Renaming a parent before its children were ingested makes
+// them (and their descendants) unreachable; renaming it back restores them.
+func TestStateModel_DiscoverySkipsChildrenOrphanedByParentRename(t *testing.T) {
+	model := NewStateModel(1, 1)
+	model.ApplyUnmanagedCloudCreate("cloud-1", "Test::Generic::Resource", `{"Name":"p1","Value":"v1"}`)
+	model.ApplyUnmanagedCloudCreate("cloud-1-child-0", "Test::Generic::ChildResource", `{"Name":"c1","ParentId":"p1","Value":"v1"}`)
+	model.ApplyUnmanagedCloudCreate("cloud-1-gc-0", "Test::Generic::GrandchildResource", `{"Name":"g1","ParentId":"c1","Value":"v1"}`)
+
+	model.ApplyUnmanagedCloudModify("cloud-1", `{"Name":"p1-renamed","Value":"v2"}`)
+	model.ApplyDiscoveryToUnmanaged()
+
+	assert.True(t, model.UnmanagedResources["cloud-1"].PresentInInventory)
+	assert.False(t, model.UnmanagedResources["cloud-1-child-0"].PresentInInventory,
+		"child pointing at the old parent name is unreachable")
+	assert.False(t, model.UnmanagedResources["cloud-1-gc-0"].PresentInInventory,
+		"grandchild under an unreachable child is transitively unreachable")
+
+	model.ApplyUnmanagedCloudModify("cloud-1", `{"Name":"p1","Value":"v3"}`)
+	model.ApplyDiscoveryToUnmanaged()
+
+	assert.True(t, model.UnmanagedResources["cloud-1-child-0"].PresentInInventory,
+		"renaming the parent back makes the child reachable again")
+	assert.True(t, model.UnmanagedResources["cloud-1-gc-0"].PresentInInventory,
+		"the grandchild follows once the child is reachable")
+}
+
 // An out-of-band modify of a managed resource is absorbed by sync: inventory
 // converges on the cloud properties. The model computes that end state
 // directly at the drift operation.
@@ -502,6 +530,88 @@ func TestStateModel_DriftEligibilitySkipsStacksWithInFlightCommands(t *testing.T
 // Cross-stack slots reference a parent on the provider stack (stack 0), so an
 // in-flight command on the provider stack can cascade onto them. They are only
 // eligible for drift while the provider stack is quiescent too.
+// findCrossStackSlot returns a cross-stack slot index of the model's pool.
+func findCrossStackSlot(t *testing.T, model *StateModel) int {
+	t.Helper()
+	require.NotNil(t, model.Pool)
+	for i := range model.Pool.Slots {
+		if model.Pool.IsCrossStack(i) {
+			return i
+		}
+	}
+	t.Fatal("pool has no cross-stack slot")
+	return -1
+}
+
+// Cross-stack slots are asserted against inventory like any other slot: a
+// slot the model expects to exist must have an inventory row.
+func TestCheckModelVsInventory_CrossStackSlotIsAsserted(t *testing.T) {
+	model := NewStateModel(2, 10)
+	crossIdx := findCrossStackSlot(t, model)
+	model.ApplyCreated(1, []int{crossIdx}, `{"Name":"x","ParentId":"p","Value":"v1"}`)
+
+	violations := CheckModelVsInventory(model, nil)
+
+	found := false
+	label := model.LabelForResource(1, crossIdx)
+	for _, v := range violations {
+		if v.Kind == ViolationModelInventoryMismatch && strings.Contains(v.Message, label) {
+			found = true
+		}
+	}
+	assert.True(t, found, "a missing cross-stack inventory row must be reported, not skipped")
+}
+
+// The reverse direction holds too: an inventory row for a cross-stack slot
+// the model does not expect is an unexpected managed resource.
+func TestCheckModelVsInventory_UnexpectedCrossStackRowIsAsserted(t *testing.T) {
+	model := NewStateModel(2, 10)
+	crossIdx := findCrossStackSlot(t, model)
+	label := model.LabelForResource(1, crossIdx)
+
+	inventory := []pkgmodel.Resource{{
+		Stack:      "stack-1",
+		Label:      label,
+		Type:       model.TypeForResource(crossIdx),
+		NativeID:   "test-9",
+		Managed:    true,
+		Properties: []byte(`{"Name":"x","ParentId":"p","Value":"v1"}`),
+	}}
+
+	violations := CheckModelVsInventory(model, inventory)
+
+	found := false
+	for _, v := range violations {
+		if v.Kind == ViolationModelInventoryMismatch && strings.Contains(v.Message, "unexpected managed resource") && strings.Contains(v.Message, label) {
+			found = true
+		}
+	}
+	assert.True(t, found, "an unexpected cross-stack inventory row must be reported, not skipped")
+}
+
+// A failed command's unmentioned cross-stack slot reverts to its snapshot
+// like any other slot: the optimistic prediction must not survive a command
+// that never reported an outcome for it.
+func TestCorrectModelFromCommandOutcome_UnmentionedCrossStackSlotReverts(t *testing.T) {
+	model := NewStateModel(2, 10)
+	crossIdx := findCrossStackSlot(t, model)
+
+	// Snapshot taken while the slot did not exist, then an optimistic create.
+	snapshots := []ResourceSnapshot{{StackIndex: 1, SlotIndex: crossIdx, State: StateNotExist}}
+	model.ApplyCreated(1, []int{crossIdx}, `{"Name":"x","ParentId":"p","Value":"v1"}`)
+
+	cmd := &apimodel.Command{
+		CommandID:       "cmd-failed",
+		State:           "Failed",
+		ResourceUpdates: nil, // the command died before reaching this slot
+	}
+	corrected := map[struct{ stackIdx, slotIdx int }]bool{}
+	correctModelFromCommandOutcome(t, cmd, model, model.Pool, snapshots, corrected, false, nil, nil)
+
+	require.Equal(t, StateNotExist, model.Resource(1, crossIdx).State,
+		"an unmentioned cross-stack slot in a failed command reverts to its snapshot")
+}
+
 func TestStateModel_DriftEligibilityCrossStackNeedsQuiescentProvider(t *testing.T) {
 	model := NewStateModel(2, 10)
 	require.NotNil(t, model.Pool)
@@ -585,4 +695,279 @@ func TestStateModel_Stack(t *testing.T) {
 	stack1 := model.Stack(1)
 	require.NotNil(t, stack1)
 	assert.Equal(t, "stack-1", stack1.Label)
+}
+
+// A TTL destroy observed via ForceCheckTTLAndWait supersedes every command
+// accepted before it. A stale command that finished Failed but carries a
+// create-Success RU for a cascade-destroyed cross-stack slot must not
+// resurrect that slot in the model: the create would otherwise clear the
+// destroy's authoritative mark and re-apply Exists while the inventory row
+// is gone.
+func TestCorrectModelFromCommandOutcome_TTLSupersededSlotStaysDestroyed(t *testing.T) {
+	model := NewStateModel(3, 10) // pool config with cross-stack slots
+	require.NotNil(t, model.Pool)
+	xslot := -1
+	for i := range model.Pool.Slots {
+		if model.Pool.IsCrossStack(i) {
+			xslot = i
+			break
+		}
+	}
+	require.NotEqual(t, -1, xslot, "pool must have a cross-stack slot")
+
+	// An apply optimistically created the cross-stack slot and was tracked.
+	model.ApplyCreated(2, []int{xslot}, "")
+	model.TrackAcceptedCommand("cmd-old", nil, []ResourceSlotRef{{StackIndex: 2, SlotIndex: xslot}}, 0, true)
+
+	// A TTL destroy of the provider stack is observed and modeled the way
+	// ForceCheckTTLAndWait does it: destroyed, authoritative, and superseding
+	// the outcomes of every command accepted before it.
+	model.ApplyDestroyed(2, []int{xslot})
+	model.MarkAuthoritativeSlot(2, xslot)
+	model.SupersedeSlots([]ResourceSlotRef{{StackIndex: 2, SlotIndex: xslot}})
+
+	// The stale command drains afterwards: Failed overall, but its RU for the
+	// cross-stack slot reported create Success (it completed before the TTL).
+	cmd := &apimodel.Command{
+		CommandID: "cmd-old",
+		State:     "Failed",
+		ResourceUpdates: []apimodel.ResourceUpdate{{
+			StackName:     "stack-2",
+			ResourceLabel: model.LabelForResource(2, xslot),
+			Operation:     "create",
+			State:         "Success",
+		}},
+	}
+	corrected := map[struct{ stackIdx, slotIdx int }]bool{}
+	ac := model.AcceptedCommands[0]
+	correctModelFromCommandOutcome(t, cmd, model, model.Pool, ac.Snapshots, corrected, true, ac.SupersededSlots, nil)
+
+	require.Equal(t, StateNotExist, model.Resource(2, xslot).State,
+		"a TTL-destroyed slot must not be resurrected by a stale command's create RU")
+	require.True(t, model.IsAuthoritativeSlot(2, xslot),
+		"the TTL destroy's authoritative mark must survive the stale correction")
+}
+
+// Commands fold into the model in completion order, which can invert the
+// order the agent actually executed per-resource operations in. A cascade
+// delete that succeeded proves the deleted incarnation existed when it ran,
+// so a create RU carrying that same NativeID predates the delete no matter
+// which command completed first. When such a create drains after the delete
+// was already folded, it must not resurrect the slot: the deterministic end
+// state is NotExist.
+func TestCorrectModelFromCommandOutcome_CreateOfDeletedIncarnationDoesNotResurrect(t *testing.T) {
+	model := NewStateModel(3, 10)
+	require.NotNil(t, model.Pool)
+	xslot := -1
+	for i := range model.Pool.Slots {
+		if model.Pool.IsCrossStack(i) {
+			xslot = i
+			break
+		}
+	}
+	require.NotEqual(t, -1, xslot, "pool must have a cross-stack slot")
+
+	// An apply optimistically created the cross-stack slot.
+	model.ApplyCreated(1, []int{xslot}, "")
+	label := model.LabelForResource(1, xslot)
+
+	// A destroy of the provider stack cascade-deleted the slot and completed
+	// (Canceled overall) before the apply did, so its outcome folds first.
+	destroyCmd := &apimodel.Command{
+		CommandID: "cmd-destroy",
+		State:     "Canceled",
+		ResourceUpdates: []apimodel.ResourceUpdate{{
+			StackName:     "stack-1",
+			ResourceLabel: label,
+			Operation:     "delete",
+			State:         "Success",
+			IsCascade:     true,
+			NativeID:      "test-101",
+		}},
+	}
+	corrected := map[struct{ stackIdx, slotIdx int }]bool{}
+	correctModelFromCommandOutcome(t, destroyCmd, model, model.Pool, nil, corrected, false, nil, nil)
+	require.Equal(t, StateNotExist, model.Resource(1, xslot).State)
+
+	// The apply completes later (Failed overall) and drains with a create
+	// Success RU for the incarnation the cascade delete already removed.
+	applyCmd := &apimodel.Command{
+		CommandID: "cmd-apply",
+		State:     "Failed",
+		ResourceUpdates: []apimodel.ResourceUpdate{{
+			StackName:     "stack-1",
+			ResourceLabel: label,
+			Operation:     "create",
+			State:         "Success",
+			NativeID:      "test-101",
+		}},
+	}
+	corrected = map[struct{ stackIdx, slotIdx int }]bool{}
+	correctModelFromCommandOutcome(t, applyCmd, model, model.Pool, nil, corrected, true, nil, nil)
+
+	require.Equal(t, StateNotExist, model.Resource(1, xslot).State,
+		"a create RU for an incarnation a folded delete already removed must not resurrect the slot")
+	require.True(t, model.IsAuthoritativeSlot(1, xslot),
+		"the delete's authoritative mark must survive the stale create")
+}
+
+// A failed command's unmentioned slot was never touched by the agent, so an
+// optimistic property prediction for it must roll back even when the slot's
+// State never changed. A patch that fails on a sibling before reaching the
+// slot would otherwise leave the model expecting merged properties the
+// agent never wrote.
+func TestCorrectModelFromCommandOutcome_UnmentionedSlotRevertsProperties(t *testing.T) {
+	model := NewStateModel(1, 3)
+	model.ApplyCreated(0, []int{1}, `{"Value":"v1"}`)
+
+	// Snapshot at command submission, then the optimistic patch prediction.
+	snapshots := []ResourceSnapshot{{StackIndex: 0, SlotIndex: 1, State: StateExists, Properties: `{"Value":"v1"}`}}
+	model.Resource(0, 1).Properties = `{"Value":"v2"}` // optimistic merge
+
+	cmd := &apimodel.Command{
+		CommandID: "cmd-failed-before-slot",
+		State:     "Failed",
+		ResourceUpdates: []apimodel.ResourceUpdate{{
+			StackName:     "stack-0",
+			ResourceLabel: "res-stack-0-c", // slot 2 — the failing sibling
+			Operation:     "create",
+			State:         "Failed",
+		}},
+	}
+	corrected := map[struct{ stackIdx, slotIdx int }]bool{}
+	correctModelFromCommandOutcome(t, cmd, model, nil, snapshots, corrected, false, nil, nil)
+
+	require.Equal(t, StateExists, model.Resource(0, 1).State)
+	require.Equal(t, `{"Value":"v1"}`, model.Resource(0, 1).Properties,
+		"optimistic properties must revert to the snapshot when the failed command never touched the slot")
+}
+
+// A failed command whose renamed slot produced no resource update must have
+// the optimistic rename rolled back, even though the slot's State never
+// changed — the engine never persisted the new label, so keeping it would
+// let the model track a label that does not exist in inventory.
+func TestCorrectModelFromCommandOutcome_UnmentionedSlotRevertsLabels(t *testing.T) {
+	model := NewStateModel(1, 3)
+	model.ApplyCreated(0, []int{1}, "")
+	model.RecordRename(0, 1, "renamed-0") // optimistic: rename accepted
+
+	snapshots := []ResourceSnapshot{{StackIndex: 0, SlotIndex: 1, State: StateExists}} // pre-rename: no overlay
+	cmd := &apimodel.Command{
+		CommandID:       "cmd-failed-rename",
+		State:           "FinishedWithErrors",
+		ResourceUpdates: nil, // the renamed slot never got a resource update
+	}
+
+	corrected := map[struct{ stackIdx, slotIdx int }]bool{}
+	correctModelFromCommandOutcome(t, cmd, model, nil, snapshots, corrected, true, nil, nil)
+
+	require.Empty(t, model.Resource(0, 1).CurrentLabel,
+		"the optimistic rename must be rolled back when the slot is unmentioned in a failed command")
+	require.Empty(t, model.Resource(0, 1).PreviousLabel)
+	require.Equal(t, StateExists, model.Resource(0, 1).State)
+}
+
+// A successful command that carried a rename must contain a success update
+// RU at the renamed label — a destroy+recreate (or a dropped alias that made
+// the engine treat the new label as a fresh resource) produces a create RU
+// there instead.
+func TestCorrectModelFromCommandOutcome_RenameFulfilledByCreateIsViolation(t *testing.T) {
+	model := NewStateModel(1, 3)
+	model.ApplyCreated(0, []int{1}, "")
+	model.SetNativeID(0, 1, "test-42")
+	model.RecordRename(0, 1, "renamed-0")
+
+	cmd := &apimodel.Command{
+		CommandID: "cmd-recreated-rename",
+		State:     "Success",
+		ResourceUpdates: []apimodel.ResourceUpdate{{
+			StackName:     "stack-0",
+			ResourceLabel: "renamed-0",
+			Operation:     "create", // rename executed as destroy+recreate
+			State:         "Success",
+			NativeID:      "test-99",
+		}},
+	}
+
+	corrected := map[struct{ stackIdx, slotIdx int }]bool{}
+	rename := &PendingRename{StackIndex: 0, SlotIndex: 1, OldLabel: "res-stack-0-b", NewLabel: "renamed-0"}
+	correctModelFromCommandOutcome(t, cmd, model, nil, nil, corrected, false, nil, rename)
+
+	require.NotEmpty(t, model.PendingViolations)
+	require.Equal(t, ViolationRenameRecreatedResource, model.PendingViolations[0].Kind)
+
+	// The same command with an in-place update RU produces no violation.
+	model2 := NewStateModel(1, 3)
+	model2.ApplyCreated(0, []int{1}, "")
+	model2.SetNativeID(0, 1, "test-42")
+	model2.RecordRename(0, 1, "renamed-0")
+	cmd2 := &apimodel.Command{
+		CommandID: "cmd-genuine-rename",
+		State:     "Success",
+		ResourceUpdates: []apimodel.ResourceUpdate{{
+			StackName:     "stack-0",
+			ResourceLabel: "renamed-0",
+			Operation:     "update",
+			State:         "Success",
+			NativeID:      "test-42",
+		}},
+	}
+	correctModelFromCommandOutcome(t, cmd2, model2, nil, nil, map[struct{ stackIdx, slotIdx int }]bool{}, false, nil, rename)
+	require.Empty(t, model2.PendingViolations)
+}
+
+// An update RU never changes a resource's identity — a different NativeID or
+// KSUID in the response means the engine replaced the resource instead of
+// updating it in place. The check must fire BEFORE the model adopts the new
+// identity, or the final invariants compare against the adopted value and
+// pass vacuously.
+func TestCorrectModelFromCommandOutcome_UpdateChangingIdentityIsViolation(t *testing.T) {
+	model := NewStateModel(1, 3)
+	model.ApplyCreated(0, []int{1}, "")
+	model.SetNativeID(0, 1, "test-42")
+	model.SetKsuid(0, 1, "K_OLD")
+
+	cmd := &apimodel.Command{
+		CommandID: "cmd-identity-swap",
+		State:     "Success",
+		ResourceUpdates: []apimodel.ResourceUpdate{{
+			StackName:     "stack-0",
+			ResourceLabel: "res-stack-0-b",
+			Operation:     "update",
+			State:         "Success",
+			NativeID:      "test-99",
+			ResourceID:    "K_NEW",
+		}},
+	}
+
+	corrected := map[struct{ stackIdx, slotIdx int }]bool{}
+	correctModelFromCommandOutcome(t, cmd, model, nil, nil, corrected, false, nil, nil)
+
+	require.Len(t, model.PendingViolations, 2, "both the NativeID and the KSUID change must be flagged")
+	for _, v := range model.PendingViolations {
+		require.Equal(t, ViolationRenameIdentityChanged, v.Kind)
+	}
+}
+
+// The patch prediction for an array-typed field must mirror the agent's
+// EnsureExists semantics: a patch never removes array elements. A desired
+// array no shorter than the current one converges element-wise onto the
+// desired value, while a shorter one leaves the current elements in place and
+// appends only the desired elements not already present.
+func TestMergePatchProperties_ArrayFieldNeverRemovesElements(t *testing.T) {
+	hints := map[string]pkgmodel.FieldHint{
+		"A": {UpdateMethod: pkgmodel.FieldUpdateMethodArray},
+	}
+	cases := []struct{ name, current, patch, want string }{
+		{"removal-only keeps current", `{"A":["a","b","c"]}`, `{"A":["a","b"]}`, `{"A":["a","b","c"]}`},
+		{"equal length converges", `{"A":["a","b","c"]}`, `{"A":["a","X","c"]}`, `{"A":["a","X","c"]}`},
+		{"longer converges", `{"A":["a","b","c"]}`, `{"A":["a","b","c","d"]}`, `{"A":["a","b","c","d"]}`},
+		{"shorter with new element appends it", `{"A":["a","b","c"]}`, `{"A":["X","b"]}`, `{"A":["a","b","c","X"]}`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := mergePatchProperties(c.current, c.patch, hints)
+			assert.JSONEq(t, c.want, got)
+		})
+	}
 }

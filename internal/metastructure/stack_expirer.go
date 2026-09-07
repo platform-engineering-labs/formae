@@ -18,6 +18,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_persister"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/stack_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
@@ -130,10 +131,10 @@ func (s *StackExpirer) destroyExpiredStack(stackInfo datastore.ExpiredStackInfo)
 	}
 
 	// Store the forma command
-	_, err = s.Call(
+	_, err = messages.UnwrapCall(s.Call(
 		gen.ProcessID{Name: actornames.FormaCommandPersister, Node: s.Node().Name()},
 		forma_persister.StoreNewFormaCommand{Command: *result.command},
-	)
+	))
 	if err != nil {
 		return fmt.Errorf("failed to store destroy command: %w", err)
 	}
@@ -239,6 +240,7 @@ func prepareDestroyExpiredStack(ds datastore.Datastore, stackInfo datastore.Expi
 		existingTargets,
 		ds,
 		nil, nil,
+		false,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate resource updates: %w", err)
@@ -260,6 +262,7 @@ func prepareDestroyExpiredStack(ds datastore.Datastore, stackInfo datastore.Expi
 		nil,                          // No target updates on destroy
 		[]stack_update.StackUpdate{}, // No stack updates on destroy
 		nil,                          // No policy updates on destroy
+		nil,                          // No generator updates on destroy
 		clientID,
 		"",
 		"",
@@ -274,7 +277,9 @@ func prepareDestroyExpiredStack(ds datastore.Datastore, stackInfo datastore.Expi
 	if err != nil {
 		return nil, fmt.Errorf("failed to create changeset: %w", err)
 	}
-	cs, err := changeset.NewChangeset(resourceUpdates, synth, destroyCommand.ID, pkgmodel.CommandDestroy)
+	// No generator draws: a destroy writes no property, and the stack's
+	// generators go with it.
+	cs, err := changeset.NewChangeset(resourceUpdates, synth, nil, destroyCommand.ID, pkgmodel.CommandDestroy, destroyCommand.Config.Mode)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create changeset: %w", err)
 	}

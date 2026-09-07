@@ -109,6 +109,12 @@ func newManager(logger *slog.Logger, repos []pkgmodel.Repository, channel string
 // resolveTreePath returns FORMAE_PEL_ROOT when set, otherwise the
 // directory two levels above the running binary (matches the
 // /opt/pel/bin/formae → /opt/pel install layout).
+//
+// Symlinks are resolved first. os.Executable() reports the path the process
+// was invoked with — on darwin symlinks are left intact — so a shim such as
+// /opt/homebrew/bin/formae → /opt/pel/bin/formae would otherwise make the
+// shim's own prefix the tree root, and every install and removal would target
+// that foreign directory.
 func resolveTreePath() (string, error) {
 	if root := os.Getenv(FormaePelRootEnv); root != "" {
 		return root, nil
@@ -117,5 +123,13 @@ func resolveTreePath() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("could not determine binary path: %w", err)
 	}
-	return filepath.Dir(filepath.Dir(binPath)), nil
+	return treePathFrom(binPath), nil
+}
+
+// treePathFrom derives the tree root from a binary path, resolving symlinks.
+func treePathFrom(binPath string) string {
+	if resolved, err := filepath.EvalSymlinks(binPath); err == nil {
+		binPath = resolved
+	}
+	return filepath.Dir(filepath.Dir(binPath))
 }

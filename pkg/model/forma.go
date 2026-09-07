@@ -14,7 +14,8 @@ type Forma struct {
 	Stacks      []Stack           `json:"Stacks,omitempty"`
 	Targets     []Target          `json:"Targets,omitempty"`
 	Resources   []Resource        `json:"Resources,omitempty"`
-	Policies    []json.RawMessage `json:"Policies,omitempty"` // Standalone policies
+	Policies    []json.RawMessage `json:"Policies,omitempty"`   // Standalone policies
+	Generators  []json.RawMessage `json:"Generators,omitempty"` // Generators, keyed to a stack by their own Stack field
 }
 
 type Prop struct {

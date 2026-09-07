@@ -28,6 +28,16 @@ type ExpectedResource struct {
 	Index      int
 	Properties string
 	State      ResourceState
+	// CurrentLabel overrides the default index-derived label for this slot.
+	// Set when an OpRename has renamed the slot's resource. Empty means the
+	// slot uses the default label produced by resourceLabelForStack().
+	// (RFC-0041 follow-up: enables OpRename in the rapid generators.)
+	CurrentLabel string
+	// PreviousLabel is the label this slot carried before the most recent
+	// rename. Used by OpRename invariants and by executeRename to build the
+	// `alias` field on the next forma. Cleared once a subsequent rename
+	// records its own previous label.
+	PreviousLabel string
 }
 
 // ExpectedUnmanagedResource tracks the expected state of a discovered
@@ -70,10 +80,25 @@ type StateModel struct {
 	// expected to have been ingested into the unmanaged inventory.
 	UnmanagedResources map[string]*ExpectedUnmanagedResource
 	AuthoritativeSlots map[string]bool
+	// DeletedNativeIDs maps "stackIdx:slotIdx" → the NativeID of the
+	// incarnation whose folded delete RU made the slot authoritative. A
+	// create RU carrying the same NativeID predates that delete (a delete
+	// can only succeed on an incarnation that already existed), so it must
+	// not resurrect the slot however late its command drains. Cleared with
+	// the slot's authoritative mark.
+	DeletedNativeIDs map[string]string
 	// NativeIDs maps "stackIdx:slotIdx" → cloud native ID (e.g. "test-42").
 	// Populated from command response ResourceUpdate.NativeID on successful
 	// creates/updates. Cleared on successful deletes.
 	NativeIDs map[string]string
+	// Ksuids maps "stackIdx:slotIdx" → the resource's KSUID, populated from
+	// command response ResourceUpdate.ResourceID the same way as NativeIDs.
+	// A rename must keep both stable; the correction path checks that.
+	Ksuids map[string]string
+	// PendingViolations collects violations detected while correcting the
+	// model from command outcomes (e.g. an update RU that changed a
+	// resource's identity). Drained and asserted by AssertAllInvariants.
+	PendingViolations []Violation
 	// DriftExcludedStacks marks stacks whose resources are no longer valid
 	// drift targets this iteration: a canceled changeset can leave its
 	// resources registered as in-progress with the synchronizer for an
@@ -134,7 +159,9 @@ func NewStateModel(stackCount, resourcesPerStack int) *StateModel {
 		ProviderStackLabel:  providerLabel,
 		UnmanagedResources:  make(map[string]*ExpectedUnmanagedResource),
 		AuthoritativeSlots:  make(map[string]bool),
+		DeletedNativeIDs:    make(map[string]string),
 		NativeIDs:           make(map[string]string),
+		Ksuids:              make(map[string]string),
 		DriftExcludedStacks: make(map[int]bool),
 	}
 }
@@ -165,6 +192,46 @@ func (m *StateModel) GetNativeID(stackIdx, slotIdx int) string {
 
 func (m *StateModel) ClearNativeID(stackIdx, slotIdx int) {
 	delete(m.NativeIDs, nativeIDKey(stackIdx, slotIdx))
+}
+
+// SupersedeSlots marks the given slots as superseded on every currently
+// accepted command. Called when a TTL destroy is observed: every command
+// still in AcceptedCommands was accepted before that destroy, so whatever
+// those commands report for these slots is stale and corrections must not
+// apply it.
+func (m *StateModel) SupersedeSlots(refs []ResourceSlotRef) {
+	if len(refs) == 0 {
+		return
+	}
+	for i := range m.AcceptedCommands {
+		if m.AcceptedCommands[i].SupersededSlots == nil {
+			m.AcceptedCommands[i].SupersededSlots = make(map[ResourceSlotRef]bool, len(refs))
+		}
+		for _, ref := range refs {
+			m.AcceptedCommands[i].SupersededSlots[ref] = true
+		}
+	}
+}
+
+func (m *StateModel) SetKsuid(stackIdx, slotIdx int, ksuid string) {
+	if ksuid != "" {
+		m.Ksuids[nativeIDKey(stackIdx, slotIdx)] = ksuid
+	}
+}
+
+func (m *StateModel) GetKsuid(stackIdx, slotIdx int) string {
+	return m.Ksuids[nativeIDKey(stackIdx, slotIdx)]
+}
+
+func (m *StateModel) ClearKsuid(stackIdx, slotIdx int) {
+	delete(m.Ksuids, nativeIDKey(stackIdx, slotIdx))
+}
+
+// AddPendingViolation records a violation detected outside the invariant
+// checks (e.g. during command-outcome correction). Asserted and cleared by
+// AssertAllInvariants.
+func (m *StateModel) AddPendingViolation(v Violation) {
+	m.PendingViolations = append(m.PendingViolations, v)
 }
 
 // FindDriftEligibleResource finds a managed resource that exists in the model,
@@ -217,12 +284,7 @@ func (m *StateModel) FindDriftEligibleResource(sequenceNum int) (stackIdx, slotI
 			if m.Pool != nil && m.Pool.IsCrossStack(idx) && busyStacks[0] {
 				continue
 			}
-			var label string
-			if m.Pool != nil {
-				label = m.Pool.LabelForStack(stack.Label, idx)
-			} else {
-				label = resourceLabelForStack(stack.Label, idx)
-			}
+			label := m.LabelForResource(si, idx)
 			var rType string
 			if m.Pool != nil {
 				rType = m.Pool.Slots[idx].Type
@@ -239,32 +301,24 @@ func (m *StateModel) FindDriftEligibleResource(sequenceNum int) (stackIdx, slotI
 	return c.stackIdx, c.slotIdx, c.stackLabel, c.label, c.rType, c.nativeID, true
 }
 
-// NativeIDsByLabel returns a map of "stackLabel:resourceLabel" → NativeID for
-// all tracked native IDs. This matches the format expected by
-// buildPluginOpSequences and resolveReadMatchKey.
-func (m *StateModel) NativeIDsByLabel() map[string]string {
-	result := make(map[string]string, len(m.NativeIDs))
-	for key, nativeID := range m.NativeIDs {
-		var stackIdx, slotIdx int
-		fmt.Sscanf(key, "%d:%d", &stackIdx, &slotIdx)
-		stackLabel := m.Stacks[stackIdx].Label
-		var label string
-		if m.Pool != nil {
-			label = m.Pool.LabelForStack(stackLabel, slotIdx)
-		} else {
-			label = resourceLabelForStack(stackLabel, slotIdx)
-		}
-		result[stackLabel+":"+label] = nativeID
-	}
-	return result
-}
-
 func (m *StateModel) MarkAuthoritativeSlot(stackIdx, slotIdx int) {
 	m.AuthoritativeSlots[slotKeyString(stackIdx, slotIdx)] = true
 }
 
 func (m *StateModel) ClearAuthoritativeSlot(stackIdx, slotIdx int) {
 	delete(m.AuthoritativeSlots, slotKeyString(stackIdx, slotIdx))
+	delete(m.DeletedNativeIDs, slotKeyString(stackIdx, slotIdx))
+}
+
+func (m *StateModel) SetDeletedNativeID(stackIdx, slotIdx int, nativeID string) {
+	if nativeID == "" {
+		return
+	}
+	m.DeletedNativeIDs[slotKeyString(stackIdx, slotIdx)] = nativeID
+}
+
+func (m *StateModel) DeletedNativeID(stackIdx, slotIdx int) string {
+	return m.DeletedNativeIDs[slotKeyString(stackIdx, slotIdx)]
 }
 
 func (m *StateModel) IsAuthoritativeSlot(stackIdx, slotIdx int) bool {
@@ -358,9 +412,65 @@ func (m *StateModel) ApplyUnmanagedCloudDelete(nativeID string) {
 	res.CloudProperties = ""
 }
 
-func (m *StateModel) ApplyDiscoveryToUnmanaged() {
+// unmanagedParentTypeOf mirrors the test plugin's parent-child list mapping:
+// child resources are listed by filtering their ParentId against a parent
+// row's current Name.
+var unmanagedParentTypeOf = map[string]string{
+	"Test::Generic::ChildResource":      "Test::Generic::Resource",
+	"Test::Generic::GrandchildResource": "Test::Generic::ChildResource",
+}
+
+// discoverableUnmanaged returns the native ids discovery can actually reach.
+// Top-level resources are always listable. A child or grandchild is listable
+// only while some already-ingested or reachable resource of its parent type
+// still carries the Name its ParentId references: the plugin lists children
+// by ParentId == parent.Name, so a parent renamed out-of-band before its
+// children were ingested orphans them (and their descendants, transitively).
+func (m *StateModel) discoverableUnmanaged() map[string]bool {
+	// Names offered per resource type by rows discovery can consult as parents.
+	availableNames := make(map[string]map[string]bool)
+	addName := func(resType, properties string) {
+		var p struct{ Name string }
+		if properties == "" || json.Unmarshal([]byte(properties), &p) != nil || p.Name == "" {
+			return
+		}
+		if availableNames[resType] == nil {
+			availableNames[resType] = make(map[string]bool)
+		}
+		availableNames[resType][p.Name] = true
+	}
 	for _, res := range m.UnmanagedResources {
-		if !res.PresentInCloud {
+		if res.PresentInInventory {
+			addName(res.ResourceType, res.InventoryProperties)
+		}
+	}
+
+	reachable := make(map[string]bool)
+	for changed := true; changed; {
+		changed = false
+		for nativeID, res := range m.UnmanagedResources {
+			if reachable[nativeID] || !res.PresentInCloud {
+				continue
+			}
+			if parentType, isChild := unmanagedParentTypeOf[res.ResourceType]; isChild {
+				var p struct{ ParentId string }
+				if json.Unmarshal([]byte(res.CloudProperties), &p) != nil ||
+					!availableNames[parentType][p.ParentId] {
+					continue
+				}
+			}
+			reachable[nativeID] = true
+			addName(res.ResourceType, res.CloudProperties)
+			changed = true
+		}
+	}
+	return reachable
+}
+
+func (m *StateModel) ApplyDiscoveryToUnmanaged() {
+	discoverable := m.discoverableUnmanaged()
+	for nativeID, res := range m.UnmanagedResources {
+		if !res.PresentInCloud || !discoverable[nativeID] {
 			continue
 		}
 		res.PresentInInventory = true
@@ -403,13 +513,75 @@ func (m *StateModel) Resource(stackIndex, idx int) *ExpectedResource {
 	return m.Stacks[stackIndex].Resources[idx]
 }
 
-// LabelForResource returns the expected label for the resource slot on the stack.
+// LabelForResource returns the expected label for the resource slot on the
+// stack. RFC-0041: after a RecordRename, the slot's CurrentLabel overrides
+// the index-derived default; invariant checks and findResourceSlot rely on
+// this to match a renamed slot against its inventory row by the new label.
 func (m *StateModel) LabelForResource(stackIndex, idx int) string {
+	if stackIndex >= 0 && stackIndex < len(m.Stacks) {
+		if res, ok := m.Stacks[stackIndex].Resources[idx]; ok && res != nil && res.CurrentLabel != "" {
+			return res.CurrentLabel
+		}
+	}
 	stackLabel := m.Stacks[stackIndex].Label
 	if m.Pool != nil {
 		return m.Pool.LabelForStack(stackLabel, idx)
 	}
 	return resourceLabelForStack(stackLabel, idx)
+}
+
+// DefaultLabelForResource returns the index-derived label for the slot,
+// ignoring any rename overlay. This is the label a slot gets on (re)create.
+func (m *StateModel) DefaultLabelForResource(stackIndex, idx int) string {
+	stackLabel := m.Stacks[stackIndex].Label
+	if m.Pool != nil {
+		return m.Pool.LabelForStack(stackLabel, idx)
+	}
+	return resourceLabelForStack(stackLabel, idx)
+}
+
+// RecordRename updates the model after a rename was accepted. After this
+// call, LabelForResource returns newLabel and the slot remembers the label
+// it carried immediately before.
+func (m *StateModel) RecordRename(stackIdx, slotIdx int, newLabel string) {
+	res, ok := m.Stack(stackIdx).Resources[slotIdx]
+	if !ok || res == nil {
+		return
+	}
+	res.PreviousLabel = m.LabelForResource(stackIdx, slotIdx)
+	res.CurrentLabel = newLabel
+}
+
+// StackIndexByLabel returns the stack index for the given stack label, or -1
+// if no stack with that label exists.
+func (m *StateModel) StackIndexByLabel(label string) int {
+	for i := range m.Stacks {
+		if m.Stacks[i].Label == label {
+			return i
+		}
+	}
+	return -1
+}
+
+// LabelOverrides returns a map of slot index -> current label for slots that
+// have been renamed. Callers that build a forma for a stack pass this map to
+// FormaFromPoolResources / FormaFromStackResources so the constructed forma
+// carries and references resources by their post-rename labels. A nil map
+// means every slot uses its default index-derived label.
+func (m *StateModel) LabelOverrides(stackIdx int) map[int]string {
+	if stackIdx < 0 || stackIdx >= len(m.Stacks) {
+		return nil
+	}
+	var overrides map[int]string
+	for idx, res := range m.Stack(stackIdx).Resources {
+		if res != nil && res.CurrentLabel != "" {
+			if overrides == nil {
+				overrides = make(map[int]string)
+			}
+			overrides[idx] = res.CurrentLabel
+		}
+	}
+	return overrides
 }
 
 // TypeForResource returns the expected type for the resource slot.
@@ -449,6 +621,11 @@ func (m *StateModel) ApplyCreatedResolved(stackIndex int, propertiesByID map[int
 }
 
 // ApplyDestroyed marks the given resources on the given stack as not existing.
+// The rename overlay is deliberately kept: a destroyed slot's label stays at
+// its renamed value, so a later recreate targets the same label the engine
+// last knew the slot by. Clearing it would make a recreate after a FAILED
+// destroy (real resource still alive under the renamed label) declare a
+// second resource under the default label.
 func (m *StateModel) ApplyDestroyed(stackIndex int, resourceIDs []int) {
 	stack := &m.Stacks[stackIndex]
 	for _, id := range resourceIDs {
@@ -528,10 +705,12 @@ func (m *StateModel) SnapshotResources(stackIndex int, resourceIDs []int) []Reso
 		res := m.Resource(stackIndex, id)
 		if res != nil {
 			snapshots = append(snapshots, ResourceSnapshot{
-				StackIndex: stackIndex,
-				SlotIndex:  id,
-				State:      res.State,
-				Properties: res.Properties,
+				StackIndex:    stackIndex,
+				SlotIndex:     id,
+				State:         res.State,
+				Properties:    res.Properties,
+				CurrentLabel:  res.CurrentLabel,
+				PreviousLabel: res.PreviousLabel,
 			})
 		}
 	}
@@ -545,6 +724,8 @@ func (m *StateModel) RevertResources(snapshots []ResourceSnapshot) {
 		if res != nil {
 			res.State = snap.State
 			res.Properties = snap.Properties
+			res.CurrentLabel = snap.CurrentLabel
+			res.PreviousLabel = snap.PreviousLabel
 		}
 	}
 }
@@ -648,7 +829,15 @@ func mergePatchProperties(currentJSON, patchJSON string, hints map[string]pkgmod
 		cur, _ := merged[k].([]any)
 		switch hints[k].UpdateMethod {
 		case pkgmodel.FieldUpdateMethodArray:
-			merged[k] = arr
+			// EnsureExists never removes array elements: a desired array no
+			// shorter than the current one converges element-wise onto the
+			// desired value, while a shorter one leaves the current elements
+			// in place and appends only the elements not already present.
+			if len(arr) >= len(cur) {
+				merged[k] = arr
+			} else {
+				merged[k] = unionByValue(cur, arr)
+			}
 		case pkgmodel.FieldUpdateMethodEntitySet:
 			merged[k] = upsertByEntityKey(cur, arr, hints[k].IndexField)
 		default:

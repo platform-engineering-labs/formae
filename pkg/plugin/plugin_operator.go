@@ -362,7 +362,6 @@ type PluginUpdateData struct {
 	context     context.Context
 	requestedBy gen.PID
 
-
 	// Metrics
 	operationStartTime time.Time
 	operationDuration  otelmetric.Float64Histogram
@@ -420,10 +419,10 @@ func statusCheckAfterFailedCall(check PluginOperatorCheckStatus) PluginOperatorC
 }
 
 // statusCallFailure builds the failure progress for a status call that returned
-// an error instead of a result. A call that outran its deadline or was throttled
-// is safe to repeat, so it widens into a recoverable code; every other error
-// stays terminal. The check's identifiers are carried over because the retry
-// ladder rebuilds the next poll from the progress.
+// an error instead of a result. A throttled call is safe to repeat, so it
+// widens into a recoverable code; every other error stays terminal. The check's
+// identifiers are carried over because the retry ladder rebuilds the next poll
+// from the progress.
 func (data PluginUpdateData) statusCallFailure(check PluginOperatorCheckStatus, err error) *resource.ProgressResult {
 	errorCode := resource.OperationErrorCodeUnforeseenError
 	if isThrottlingError(err) {
@@ -490,6 +489,20 @@ func (o *PluginOperator) Init(args ...any) (statemachine.StateMachineSpec[Plugin
 				o.Log().Error("PluginOperator: failed to schedule requester link: %v", err)
 			}
 		}
+	}
+
+	// OidcCredentialBroker{Node,Name}: the broker the coordinator paired with
+	// this plugin's namespace. The pair is injected atomically, so exactly one
+	// key present is a broken pairing - refuse to start rather than serve
+	// operations as if no broker existed. The client goes on the operator's
+	// context, which is passed to every operation, including discovery.
+	brokerClient, err := oidcBrokerClientFromEnv(o, data.plugin.Namespace())
+	if err != nil {
+		o.Log().Error("%v", err)
+		return statemachine.StateMachineSpec[PluginUpdateData]{}, err
+	}
+	if brokerClient != nil {
+		data.context = withOidcBrokerClient(data.context, brokerClient)
 	}
 
 	// Initialize OTel metrics

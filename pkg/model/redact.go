@@ -74,6 +74,34 @@ func RedactOpaqueForLog(v any) any {
 	}
 }
 
+// RedactOpaqueJSONForLog renders a JSON document as a string that is safe to put
+// in a log line or a diagnostic message: the plaintext of every opaque envelope
+// is replaced by RedactedForLog, and the surrounding structure survives so the
+// document still names the properties it describes. An empty document renders
+// as the empty string. A document that cannot be decoded, or whose redacted form
+// cannot be re-encoded, is withheld whole: RedactedForLog stands in for it
+// rather than the bytes being rendered in the clear.
+//
+// Callers that hold a document as json.RawMessage should route it through here
+// rather than rendering it directly. A raw document reaches a log line as its
+// text under %s and as a decimal byte slice under %v or an slog attribute, and
+// the second of those spells the secret out just as completely while matching no
+// search for it.
+func RedactOpaqueJSONForLog(document json.RawMessage) string {
+	if len(document) == 0 {
+		return ""
+	}
+	var decoded any
+	if err := json.Unmarshal(document, &decoded); err != nil {
+		return RedactedForLog
+	}
+	out, err := marshalNoEscape(RedactOpaqueForLog(decoded))
+	if err != nil {
+		return RedactedForLog
+	}
+	return out
+}
+
 // redactEmbedTemplate redacts opaque $value fields carried inside the framed
 // spans of an $embed $template string, then re-frames each span so the template
 // stays structurally intact. If the template cannot be scanned (corrupt framing),

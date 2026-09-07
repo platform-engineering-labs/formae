@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
+	"github.com/platform-engineering-labs/formae/pkg/plugin"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
 
@@ -103,6 +104,43 @@ func TestSetupPluginFromDir_CreatesFullResourcePlugin(t *testing.T) {
 	// Verify config methods are delegated to the plugin
 	assert.Equal(t, 10, wrapped.RateLimit().MaxRequestsPerSecondForNamespace)
 	assert.Equal(t, "$.Name", wrapped.LabelConfig().DefaultQuery)
+}
+
+// oidcAwarePlugin records every OidcTokenSource installed on it.
+type oidcAwarePlugin struct {
+	mockPlugin
+	installs []plugin.OidcTokenSource
+}
+
+func (p *oidcAwarePlugin) SetOidcTokenSource(src plugin.OidcTokenSource) {
+	p.installs = append(p.installs, src)
+}
+
+func TestConfigureWrapped_InstallsSourceOnceAndForwards(t *testing.T) {
+	inner := &oidcAwarePlugin{}
+	manifest := &plugin.Manifest{Name: "fake-aws", Version: "1.0.0", Namespace: "FakeAWS"}
+	wrapped, err := plugin.WrapPlugin(inner, manifest, nil, nil)
+	require.NoError(t, err)
+
+	require.NoError(t, configureWrapped(wrapped, manifest))
+
+	require.Len(t, inner.installs, 1, "the SDK must install exactly one token source")
+	// The installed source reads the broker client off the per-call context, so
+	// outside an operation it has nothing to call.
+	_, err = inner.installs[0].IdentityToken(context.Background(), "sts.amazonaws.com")
+	assert.ErrorIs(t, err, plugin.ErrNoOidcBroker)
+}
+
+func TestSetupPluginFromDir_InstallsOidcTokenSource(t *testing.T) {
+	pluginDir, formaeSchemaPath := getTestPaths()
+	inner := &oidcAwarePlugin{}
+
+	_, err := SetupPluginFromDir(context.Background(), inner, pluginDir, RunConfig{
+		FormaeSchemaPath: formaeSchemaPath,
+	})
+	require.NoError(t, err)
+
+	assert.Len(t, inner.installs, 1)
 }
 
 func TestSetupPluginFromDir_ReturnsErrorForMissingManifest(t *testing.T) {

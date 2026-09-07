@@ -1,0 +1,22 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+forma {
+  local testStack = new formae.Stack {
+    label = "generator-test-stack"
+  }
+  testStack
+
+  new formae.PasswordGenerator {
+    label = "db-password"
+    stack = testStack.res
+    length = 24
+    excludeCharacters = "oO0"
+  }
+}

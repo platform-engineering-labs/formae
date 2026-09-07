@@ -30,9 +30,11 @@ type refVal struct {
 
 // simplifyValue collapses Forma's special-value wrappers into plain data:
 //
-//   - {$strategy, $visibility:Clear, $value}  → the $value (SetOnce/Update alike)
-//   - {$visibility:Opaque, ...}               → opaqueVal (masked on render)
-//   - {$ref|$res, $label, $property, $value}  → refVal{value, "label.property"}
+//   - {$strategy, $visibility:Clear, $value}     → the $value (SetOnce/Update alike)
+//   - {$visibility:Opaque, ...}                  → opaqueVal (masked on render)
+//   - {$ref|$res, $label, $property, $value}     → refVal{value, "label.property"}
+//   - {$gen, $generator|$label, $output, $value} → refVal{value, "generator[.output]"}
+//   - {$visibility:Opaque, $ref|$res|$gen, ...}  → refVal{opaqueVal{}, target} (masked value, visible target)
 //
 // Ordinary objects (no "$"-prefixed markers) are returned unchanged so nested
 // maps keep recursing. Nested $value payloads are simplified recursively.
@@ -46,16 +48,23 @@ func simplifyValue(v any) any {
 	_, hasStrat := m["$strategy"]
 	_, hasVis := m["$visibility"]
 	res, _ := m["$res"].(bool)
-	if !hasVal && !hasRef && !hasStrat && !hasVis && !res {
+	gen, _ := m["$gen"].(bool)
+	if !hasVal && !hasRef && !hasStrat && !hasVis && !res && !gen {
 		return v // ordinary object — recurse as-is
 	}
 
 	if vis, _ := m["$visibility"].(string); vis == pkgmodel.VisibilityOpaque {
+		// A reference is masked, not blanked: the resolved value is withheld
+		// like any opaque scalar, but which target it names (a resource
+		// property, or which generator) is safe metadata and still shows.
+		if hasRef || res || gen {
+			return refVal{value: opaqueVal{}, target: resolvableTarget(m)}
+		}
 		return opaqueVal{}
 	}
 
 	inner := simplifyValue(m["$value"])
-	if hasRef || res {
+	if hasRef || res || gen {
 		return refVal{value: inner, target: resolvableTarget(m)}
 	}
 	return inner
@@ -68,10 +77,16 @@ func resolvableTarget(m map[string]any) string {
 		if prop, _ := m["$property"].(string); prop != "" {
 			return label + "." + prop
 		}
+		if output, _ := m["$output"].(string); output != "" {
+			return label + "." + output
+		}
 		return label
 	}
 	if ref, _ := m["$ref"].(string); ref != "" {
 		return strings.TrimPrefix(ref, "formae://")
+	}
+	if generator, _ := m["$generator"].(string); generator != "" {
+		return generator
 	}
 	return ""
 }

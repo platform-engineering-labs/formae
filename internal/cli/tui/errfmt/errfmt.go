@@ -88,6 +88,30 @@ func (r *renderer) render(err error) (string, error) {
 		}
 	}
 
+	if errResp, ok := err.(*apimodel.ErrorResponse[apimodel.FormaReferencedGeneratorsNotFoundError]); ok {
+		var e error
+		msg, e = r.renderReferencedGeneratorsNotFound(&errResp.Data)
+		if e != nil {
+			return "", e
+		}
+	}
+
+	if errResp, ok := err.(*apimodel.ErrorResponse[apimodel.FormaGeneratorDestinationsUnreachableError]); ok {
+		var e error
+		msg, e = r.renderGeneratorDestinationsUnreachable(&errResp.Data)
+		if e != nil {
+			return "", e
+		}
+	}
+
+	if errResp, ok := err.(*apimodel.ErrorResponse[apimodel.FormaGeneratorBoundToSetOnceFieldError]); ok {
+		var e error
+		msg, e = r.renderGeneratorBoundToSetOnceField(&errResp.Data)
+		if e != nil {
+			return "", e
+		}
+	}
+
 	if errResp, ok := err.(*apimodel.ErrorResponse[apimodel.FormaPatchRejectedError]); ok {
 		var e error
 		msg, e = r.renderPatchRejected(&errResp.Data)
@@ -154,6 +178,10 @@ func (r *renderer) render(err error) (string, error) {
 
 	if errResp, ok := err.(*apimodel.ErrorResponse[apimodel.FormaResourceHasDependentsError]); ok {
 		msg = r.renderResourceHasDependents(&errResp.Data)
+	}
+
+	if errResp, ok := err.(*apimodel.ErrorResponse[apimodel.FormaGeneratorHasDependentsError]); ok {
+		msg = r.renderGeneratorHasDependents(&errResp.Data)
 	}
 
 	if errResp, ok := err.(*apimodel.ErrorResponse[apimodel.PluginNotFoundError]); ok {
@@ -245,6 +273,57 @@ func (r *renderer) renderReferencedResourcesNotFound(data *apimodel.FormaReferen
 		_, _ = fmt.Fprintf(&b, "    %s%s\n", r.subtle("of type "), resource.Type)
 		_, _ = fmt.Fprintf(&b, "    %s%s\n", r.subtle("from stack "), resource.Stack)
 	}
+	return b.String(), nil
+}
+
+// renderReferencedGeneratorsNotFound formats FormaReferencedGeneratorsNotFoundError
+// as an indented list (replaces gtree).
+func (r *renderer) renderReferencedGeneratorsNotFound(data *apimodel.FormaReferencedGeneratorsNotFoundError) (string, error) {
+	var b strings.Builder
+	_, _ = fmt.Fprintln(&b, r.error("forma command rejected because the following referenced generators were not found:"))
+	for _, generator := range data.Missing {
+		_, _ = fmt.Fprintf(&b, "  %s\n", generator.Label)
+		_, _ = fmt.Fprintf(&b, "    %s%s\n", r.subtle("from stack "), generator.Stack)
+		_, _ = fmt.Fprintf(&b, "    %s%s\n", r.subtle("output "), generator.Output)
+	}
+	return b.String(), nil
+}
+
+// renderGeneratorDestinationsUnreachable formats
+// FormaGeneratorDestinationsUnreachableError as an indented list of the
+// destinations the command does not reach, and says what to do about it.
+func (r *renderer) renderGeneratorDestinationsUnreachable(data *apimodel.FormaGeneratorDestinationsUnreachableError) (string, error) {
+	var b strings.Builder
+	_, _ = fmt.Fprintln(&b, r.error("forma rejected because a generator must draw a new value and the command does not reach every resource bound to it:"))
+	for _, destination := range data.Unreachable {
+		_, _ = fmt.Fprintf(&b, "  %s\n", destination.Label)
+		_, _ = fmt.Fprintf(&b, "    %s%s\n", r.subtle("of type "), destination.Type)
+		_, _ = fmt.Fprintf(&b, "    %s%s\n", r.subtle("from stack "), destination.Stack)
+		_, _ = fmt.Fprintf(&b, "    %s%s%s%s\n", r.subtle("bound to generator "), destination.GeneratorLabel,
+			r.subtle(" in stack "), destination.GeneratorStack)
+	}
+	b.WriteString("\n")
+	b.WriteString(r.warning("A generated value is never recoverable once the command that drew it ends, so apply every stack that binds the generator in one command.\n"))
+	return b.String(), nil
+}
+
+// renderGeneratorBoundToSetOnceField formats
+// FormaGeneratorBoundToSetOnceFieldError as an indented list of the fields
+// that will not accept the value the generator is about to draw, naming each
+// field so the operator knows what to edit.
+func (r *renderer) renderGeneratorBoundToSetOnceField(data *apimodel.FormaGeneratorBoundToSetOnceFieldError) (string, error) {
+	var b strings.Builder
+	_, _ = fmt.Fprintln(&b, r.error("forma rejected because a generator must draw a new value and a field it reaches will not accept one:"))
+	for _, field := range data.Fields {
+		_, _ = fmt.Fprintf(&b, "  %s%s\n", r.subtle("field "), field.Field)
+		_, _ = fmt.Fprintf(&b, "    %s%s\n", r.subtle("on "), field.Label)
+		_, _ = fmt.Fprintf(&b, "    %s%s\n", r.subtle("of type "), field.Type)
+		_, _ = fmt.Fprintf(&b, "    %s%s\n", r.subtle("from stack "), field.Stack)
+		_, _ = fmt.Fprintf(&b, "    %s%s%s%s\n", r.subtle("reached from generator "), field.GeneratorLabel,
+			r.subtle(" in stack "), field.GeneratorStack)
+	}
+	b.WriteString("\n")
+	b.WriteString(r.warning("A setOnce field keeps the value it was created with, so a drawn credential would move at the generator and stay put here. Drop setOnce from these fields, or stop routing the generator through them.\n"))
 	return b.String(), nil
 }
 
@@ -388,6 +467,31 @@ func (r *renderer) renderResourceHasDependents(data *apimodel.FormaResourceHasDe
 		"it would be torn down too.\n\n") +
 		"To proceed and tear the dependent resource(s) down as well, re-run with\n" +
 		"--on-dependents=cascade.\n"
+	return message
+}
+
+// renderGeneratorHasDependents formats FormaGeneratorHasDependentsError: a
+// delete of a generator that a live resource still binds a property to, either
+// a destroy of the generator's stack or a reconcile that drops its
+// declaration.
+func (r *renderer) renderGeneratorHasDependents(data *apimodel.FormaGeneratorHasDependentsError) string {
+	var message string
+	if len(data.Dependents) == 1 {
+		d := data.Dependents[0]
+		message = r.errorf("deleting generator '%s' in stack '%s' would leave '%s' in stack '%s' bound to nothing.\n\n",
+			d.GeneratorLabel, d.GeneratorStack, d.ResourceLabel, d.Stack)
+	} else {
+		message = r.error("this delete would leave the following resources bound to a deleted generator:\n\n")
+		for _, d := range data.Dependents {
+			message += fmt.Sprintf("  - %s (%s, stack %s; bound to generator %s in stack %s)\n",
+				d.ResourceLabel, d.ResourceType, d.Stack, d.GeneratorLabel, d.GeneratorStack)
+		}
+		message += "\n"
+	}
+	message += r.warning("A generated value is never recoverable once the generator is gone, so a resource left\n"+
+		"bound to one can never be given a value again.\n\n") +
+		"To proceed and tear the bound resource(s) down as well, re-run with\n" +
+		"--on-dependents=cascade. To keep them, stop them binding this generator first.\n"
 	return message
 }
 

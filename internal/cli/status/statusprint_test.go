@@ -137,6 +137,43 @@ func TestRenderStatusList_Detailed_Piped(t *testing.T) {
 	assert.Contains(t, plain, "Resources", "must contain Resources group header")
 }
 
+// TestRenderCommandHeader_Attribution covers the three-way attribution rule
+// on the detailed-list command header: SubjectName wins when present, a bare
+// Subject renders when there is no display name, and a command carrying
+// neither mentions no user at all in the header line.
+func TestRenderCommandHeader_Attribution(t *testing.T) {
+	th := theme.New("formae")
+	base := apimodel.Command{
+		CommandID: "cmd-abc123",
+		Command:   "apply",
+		Mode:      "reconcile",
+		State:     "Success",
+		StartTs:   fixedNow.Add(-90 * time.Second),
+		EndTs:     fixedNow,
+	}
+
+	t.Run("SubjectName and Subject both set renders the name", func(t *testing.T) {
+		c := base
+		c.Subject = "11111111-1111-4111-8111-111111111111"
+		c.SubjectName = "dpanders"
+		plain := stripANSI(renderCommandHeader(th, c, 120, fixedNow))
+		assert.Contains(t, plain, "dpanders")
+		assert.NotContains(t, plain, c.Subject)
+	})
+
+	t.Run("Subject only renders the subject", func(t *testing.T) {
+		c := base
+		c.Subject = "11111111-1111-4111-8111-111111111111"
+		plain := stripANSI(renderCommandHeader(th, c, 120, fixedNow))
+		assert.Contains(t, plain, c.Subject)
+	})
+
+	t.Run("neither field set mentions no user", func(t *testing.T) {
+		plain := stripANSI(renderCommandHeader(th, base, 120, fixedNow))
+		assert.Equal(t, "✓  cmd-abc123  apply  reconcile  01:30\n", plain)
+	})
+}
+
 // TestRenderStatusList_Empty renders an empty response (no commands).
 func TestRenderStatusList_Empty(t *testing.T) {
 	th := theme.New("formae")

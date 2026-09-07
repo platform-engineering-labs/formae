@@ -56,6 +56,15 @@ class PostgresConfig {
 
     password: String = "admin"
 
+    /// Resolve the password from this Secrets Manager secret on every new
+    /// connection instead of using `password`, so a credential rotated out
+    /// from under a running agent is picked up without restarting it.
+    ///
+    /// The region is taken from the ARN, so there is no second setting that
+    /// could disagree with it. Empty means `password` is used as-is and no
+    /// AWS client is built.
+    passwordSecretArn: String = ""
+
     database: String = ""
 
     schema: String = ""
@@ -112,10 +121,6 @@ class RetryConfig {
 
 class DiscoveryConfig {
     enabled: Boolean = true
-
-    labelTagKeys: Listing<String> = new Listing<String> {
-        "Name"
-    }
 
     interval: Duration = 10.min
 
@@ -217,8 +222,14 @@ class FilterCondition {
     propertyValue: String?
 }
 
+/// A rule that excludes matching resources from discovery.
 class MatchFilter {
+    /// Resource types this filter applies to. Leave it out to apply the
+    /// filter to every type the plugin discovers.
     resourceTypes: Listing<String>
+
+    /// Every condition must match for a resource to be excluded. A filter
+    /// naming no conditions excludes nothing.
     conditions: Listing<FilterCondition>
 }
 
@@ -227,9 +238,20 @@ open class BaseResourcePluginConfig {
     enabled: Boolean = true
     rateLimit: RateLimitConfig?
     labelConfig: LabelConfig?
+
+    /// Extra discovery filters for this plugin. These are added to the
+    /// filters the plugin declares for itself, never a replacement for them.
     discoveryFilters: Listing<MatchFilter>?
     resourceTypesToDiscover: Listing<String>?
     retry: RetryConfig?
+}
+
+/// Base class for an oidc-credential broker's configuration. A broker
+/// subclasses this to declare its own fields; everything beyond `type` and
+/// `enabled` reaches the broker process as its opaque config payload.
+open class BaseOidcCredentialPluginConfig {
+    type: String
+    enabled: Boolean = true
 }
 
 open class BaseAgentAuthConfig {
@@ -260,6 +282,10 @@ class AgentConfig {
     auth: (BaseAgentAuthConfig|Dynamic)?
 
     resourcePlugins: Listing<BaseResourcePluginConfig>(
+        this.toList().map((it) -> it.type).isDistinct
+    )?
+
+    oidcCredentialPlugins: Listing<BaseOidcCredentialPluginConfig>(
         this.toList().map((it) -> it.type).isDistinct
     )?
 }

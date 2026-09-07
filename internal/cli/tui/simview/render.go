@@ -24,7 +24,7 @@ func (m Model) renderSummaryCounts() string {
 	// stay in the row's base text color.
 	wordSt := lipgloss.NewStyle().Foreground(p.TextPrimary)
 
-	ordered := []opKind{opCreate, opUpdate, opDelete, opReplace, opDetach, opKeep}
+	ordered := []opKind{opCreate, opUpdate, opDelete, opReplace, opDraw, opDetach, opKeep}
 	var parts []string
 	for _, op := range ordered {
 		n := counts[op]
@@ -134,7 +134,7 @@ func groupLayout(kind rowKind, w int) (opW, labelW, typeW, stackW int) {
 	}
 	opW = opColW
 	switch kind {
-	case kindPolicy:
+	case kindPolicy, kindGenerator:
 		labelW = max(rem*2/5, 10)
 		typeW = max(rem/5, 8)
 		stackW = max(rem-labelW-typeW, 8)
@@ -232,7 +232,7 @@ func (m Model) renderGroupColHeader(kind rowKind, opW, labelW, typeW, stackW int
 	sb.WriteString(renderHdr("Operation", colOp, opW))
 
 	switch kind {
-	case kindPolicy:
+	case kindPolicy, kindGenerator:
 		sb.WriteString(renderHdr("Label", colLabel, labelW))
 		sb.WriteString(renderHdr("Type", colType, typeW))
 		sb.WriteString(renderHdrLast("Stack", colStack))
@@ -341,7 +341,7 @@ func (m Model) renderRow(r simRow, kind rowKind, opW, labelW, typeW, stackW int,
 	indent += lead
 
 	switch kind {
-	case kindPolicy:
+	case kindPolicy, kindGenerator:
 		rowStr = indent +
 			opSt.Render(opPadded) +
 			padStr(trunc(r.label, labelW), labelW, labelSt) +

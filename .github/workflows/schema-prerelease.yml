@@ -67,6 +67,12 @@ jobs:
       - name: Publish schema to S3
         run: aws s3 sync .out/formae@${{ inputs.version }} s3://hub.platform.engineering/plugins/pkl/schema/pkl/formae/
 
+      # Overwriting a canonical version invalidates the checksum every
+      # dependent plugin schema's metadata declares for it; refresh those
+      # declarations as part of the same publish.
+      - name: Refresh dependent plugin schema checksums
+        run: python3 scripts/fixup-schema-dependents.py '${{ inputs.version }}'
+
       - name: Summary
         run: |
           echo "## Schema Pre-release" >> $GITHUB_STEP_SUMMARY

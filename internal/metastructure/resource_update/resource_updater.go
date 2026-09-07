@@ -13,8 +13,6 @@ import (
 	"ergo.services/actor/statemachine"
 	"ergo.services/ergo/gen"
 	"github.com/google/uuid"
-	"github.com/theory/jsonpath"
-	"github.com/theory/jsonpath/registry"
 	"go.opentelemetry.io/otel"
 	otelmetric "go.opentelemetry.io/otel/metric"
 
@@ -29,9 +27,6 @@ import (
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
 
-// jsonpathParser is a package-level parser with RFC 9535 function extensions (match, search, etc.)
-var jsonpathParser = jsonpath.NewParser(jsonpath.WithRegistry(registry.New()))
-
 // convertResourceForPlugin converts a resource's properties to plugin format
 // by extracting $value from opaque value structures (e.g., {"$value": "secret", "$visibility": "Opaque"})
 // becomes just "secret". This must be done before sending to the plugin since the resolver
@@ -41,7 +36,17 @@ var jsonpathParser = jsonpath.NewParser(jsonpath.WithRegistry(registry.New()))
 // of nullable Listing/Mapping fields) to prevent cloud API rejections for fields like K8S probes
 // that require handler types when non-empty.
 func convertResourceForPlugin(res pkgmodel.Resource) (pkgmodel.Resource, error) {
-	return convertResourceForPluginWith(res, resolver.ConvertToPluginFormat)
+	converted, err := convertResourceForPluginWith(res, resolver.ConvertToPluginFormat)
+	if err != nil {
+		return res, err
+	}
+	// The provider boundary: this is the last point at which the properties
+	// are still formae's, and the only place that knows they are about to be
+	// written rather than diffed.
+	if err := resolver.GuardNoUnresolvedGenerators(converted.Properties); err != nil {
+		return res, err
+	}
+	return converted, nil
 }
 
 // convertResourceForPluginRead is the Read-context counterpart of
@@ -74,8 +79,10 @@ func convertResourceForPluginWith(res pkgmodel.Resource, convert func(json.RawMe
 	}
 
 	// Strip nested empty collections from PKL null rendering artifacts.
-	// Top-level empty collections are preserved (may be intentional clears).
-	cleanedProps, err := patch.StripNestedEmptyCollections(convertedProps)
+	// Top-level empty collections are preserved (may be intentional clears),
+	// and preserveEmptyValues-hinted fields keep their subtrees verbatim in
+	// every plugin-bound context: their empties are values, not artifacts.
+	cleanedProps, err := patch.StripNestedEmptyCollectionsExcept(convertedProps, patch.PreserveEmptyRootFields(res.Schema))
 	if err != nil {
 		return res, err
 	}
@@ -153,6 +160,11 @@ type StartResourceUpdate struct {
 	ResourceUpdate ResourceUpdate
 	CommandID      string
 	UpdateId       string
+	// Mode is the apply mode the owning command was planned under (reconcile
+	// vs patch). It flows into ResourceUpdateData.applyMode so a resolvable
+	// that resolves after planning regenerates its patch under the same
+	// semantics the command was planned with.
+	Mode pkgmodel.FormaApplyMode
 }
 
 type PluginOperatorMissingInAction struct{}
@@ -160,6 +172,16 @@ type PluginOperatorMissingInAction struct{}
 type ResolveTimedOut struct{}
 
 type Shutdown struct{}
+
+// PersistResourceUpdateResult is the reply to a PersistResourceUpdate call:
+// the stored version hash on success (empty when the update needed no
+// persist), or the failure that refused the write.
+type PersistResourceUpdateResult struct {
+	Version string
+	Error   string
+}
+
+func (r PersistResourceUpdateResult) CallError() string { return r.Error }
 
 // PersistResourceUpdate is sent to the ResourcePersister actor to store a resource update
 // in the datastore after a successful plugin operation.
@@ -200,11 +222,16 @@ type ResourceUpdateData struct {
 	resourceUpdate  *ResourceUpdate
 	commandID       string
 	labelConfig     pkgmodel.LabelConfig // JSONPath-based label extraction config from plugin
-	labelTagKeys    []string             // Legacy tag-based label keys for backwards compatibility
 	resourceLabeler *ResourceLabeler
 	retryConfig     pkgmodel.RetryConfig
 	requestedBy     gen.PID
 	commandSource   FormaCommandSource
+
+	// applyMode is the apply mode the owning command was planned under
+	// (reconcile vs patch), set from StartResourceUpdate.Mode in start().
+	// resourceResolved passes it to ResolveValue so execution-time patch
+	// regeneration derives its diff under the same semantics planning used.
+	applyMode pkgmodel.FormaApplyMode
 
 	// operatorRetryConfig is the retry config the PluginCoordinator spawned the
 	// watched plugin operator with, which is the per-plugin override wherever
@@ -245,13 +272,6 @@ func (r *ResourceUpdater) Init(args ...any) (statemachine.StateMachineSpec[Resou
 		return statemachine.StateMachineSpec[ResourceUpdateData]{}, fmt.Errorf("resourceUpdater: missing 'RetryConfig' environment variable")
 	}
 	data.retryConfig = pluginCfg.(pkgmodel.RetryConfig)
-
-	discoveryCfg, ok := r.Env("DiscoveryConfig")
-	if !ok {
-		r.Log().Error("ResourceUpdater: missing 'DiscoveryConfig' environment variable")
-		return statemachine.StateMachineSpec[ResourceUpdateData]{}, fmt.Errorf("resourceUpdater: missing 'DiscoveryConfig' environment variable")
-	}
-	data.labelTagKeys = discoveryCfg.(pkgmodel.DiscoveryConfig).LabelTagKeys
 
 	ds, ok := r.Env("Datastore")
 	if !ok {
@@ -338,7 +358,7 @@ func onStateChange(oldState gen.Atom, newState gen.Atom, data ResourceUpdateData
 
 	if newState == StateFinishedSuccessfully || newState == StateFinishedWithError || newState == StateRejected {
 		proc.Log().Debug("ResourceUpdater: sending completion message to forma command persister state=%s commandID=%s", newState, data.commandID)
-		_, err := proc.Call(
+		_, err := messages.UnwrapCall(proc.Call(
 			formaCommandPersisterProcess(proc),
 			messages.MarkResourceUpdateAsComplete{
 				CommandID:                  data.commandID,
@@ -350,8 +370,9 @@ func onStateChange(oldState gen.Atom, newState gen.Atom, data ResourceUpdateData
 				ResourceProperties:         data.resourceUpdate.DesiredState.Properties,
 				ResourceReadOnlyProperties: data.resourceUpdate.DesiredState.ReadOnlyProperties,
 				Version:                    data.resourceUpdate.Version,
+				FailureReason:              data.resourceUpdate.FailureReason,
 			},
-		)
+		))
 		if err != nil {
 			proc.Log().Error("Failed to send MarkAsComplete message to forma command persister commandID=%s ksuid=%s operation=%s: %v",
 				data.commandID, data.originalResourceKsuidURI.KSUID(), data.resourceUpdate.Operation, err)
@@ -387,6 +408,7 @@ func start(from gen.PID, state gen.Atom, data ResourceUpdateData, message StartR
 	data.resourceUpdate = &message.ResourceUpdate
 	data.commandID = message.CommandID
 	data.commandSource = message.ResourceUpdate.Source
+	data.applyMode = message.Mode
 	data.resourceUpdate.StartTs = util.TimeNow()
 	data.resourceUpdate.ModifiedTs = data.resourceUpdate.StartTs
 	data.originalResourceKsuidURI = data.resourceUpdate.DesiredState.URI()
@@ -399,13 +421,26 @@ func start(from gen.PID, state gen.Atom, data ResourceUpdateData, message StartR
 		if err == nil {
 			data.resourceUpdate.ResourceTarget.Config = pluginConfig
 		}
+		// The provider boundary for the target's config. It rides along on every
+		// plugin operation this update performs — reads and deletes included, both
+		// of which need the target's real credentials — so the guard runs on
+		// whatever config was settled on above, converted or not. A generator
+		// reference here is a credential that was never drawn; handing the
+		// envelope to the plugin puts a JSON object where a token belongs.
+		if err := resolver.GuardNoUnresolvedGenerators(data.resourceUpdate.ResourceTarget.Config); err != nil {
+			proc.Log().Error("target config is not writable to a plugin target=%s: %v",
+				data.resourceUpdate.ResourceTarget.Label, err)
+			data.resourceUpdate.FailureReason = failureReasonUndrawnGeneratorValueInTargetConfig
+			data.resourceUpdate.MarkAsFailed()
+			return StateFinishedWithError, data, nil, nil
+		}
 	}
 
 	// Get LabelConfig from PluginCoordinator (handles both external and local plugins)
 	namespace := data.resourceUpdate.DesiredState.Namespace()
-	result, err := proc.Call(
+	result, err := messages.UnwrapCall(proc.Call(
 		gen.ProcessID{Name: actornames.PluginCoordinator, Node: proc.Node().Name()},
-		messages.GetPluginInfo{Namespace: namespace})
+		messages.GetPluginInfo{Namespace: namespace}))
 	if err == nil {
 		if infoResp, ok := result.(messages.PluginInfoResponse); ok && infoResp.Found {
 			data.labelConfig = infoResp.LabelConfig
@@ -526,7 +561,7 @@ func delete(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 
 // resolvingTimeout sizes the ResolveCache timeout to outlive the cache's
 // worst-case resolve wall time: MaxRetries+1 reads (the initial read plus
-// MaxRetries retries, each up to the plugin call timeout) plus the exponential
+// MaxRetries retries, each up to the updater's own call timeout) plus the exponential
 // backoff budget the ResolveCache schedules with (RetryStrategy.MaxTotalDelay),
 // plus a margin. The backoff term is derived from the same RetryStrategy the
 // cache retries with, so a tuned or exponential policy cannot make the two
@@ -609,9 +644,27 @@ func resolve(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Ato
 }
 
 func resourceResolved(from gen.PID, state gen.Atom, data ResourceUpdateData, message messages.ValueResolved, proc gen.Process) (gen.Atom, ResourceUpdateData, []statemachine.Action, error) {
-	err := data.resourceUpdate.ResolveValue(message.ResourceURI, message.Value)
+	if message.SourceRootDigest != "" {
+		if data.resourceUpdate.ResolvedRootDigests == nil {
+			data.resourceUpdate.ResolvedRootDigests = make(map[string]string)
+		}
+		data.resourceUpdate.ResolvedRootDigests[string(message.ResourceURI)] = message.SourceRootDigest
+	}
+	err := data.resourceUpdate.ResolveValue(message.ResourceURI, message.Value, data.applyMode)
 	if err != nil {
 		proc.Log().Error("failed to resolve value for resource update resourceURI=%v: %v", message.ResourceURI, err)
+		// LateCreateOnlyChangeError is already a fixed, redacted text (it names
+		// only the changed field, never a value) — record it verbatim. Every
+		// other resolve/regen failure can carry error detail built from
+		// user-authored property paths (see updateRequestFailureReason's
+		// doc), so it must route through the same redaction mapping the rest
+		// of the update path uses rather than recording the raw error.
+		var late LateCreateOnlyChangeError
+		if errors.As(err, &late) {
+			data.resourceUpdate.FailureReason = late.Error()
+		} else {
+			data.resourceUpdate.FailureReason = updateRequestFailureReason(err)
+		}
 		data.resourceUpdate.MarkAsFailed()
 		return StateFinishedWithError, data, nil, nil
 	}
@@ -673,9 +726,16 @@ func create(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 const (
 	failureReasonUnrecoverableOpaqueValueOnUpdate = "cannot update this resource: formae holds only a stored hash of one of its secret properties, so it cannot send that value to the provider. Re-supply the value in your forma, or leave the provider's current value in place."
 	failureReasonPluginRequestPreparationOnUpdate = "cannot update this resource: formae could not build the provider request from its recorded state."
+	failureReasonUndrawnGeneratorValueOnUpdate    = "cannot update this resource: one of its properties is bound to a generator whose value has not been drawn, so formae has nothing to send to the provider. Declare the value directly instead of binding it to a generator."
 
 	failureReasonUnrecoverableOpaqueValueOnCreate = "cannot create this resource: the desired value of one of its secret properties is a stored hash, which formae cannot send to the provider as the live value. Re-supply the value in your forma."
-	failureReasonPluginRequestPreparationOnCreate = "cannot create this resource: formae could not build the provider request for it."
+	failureReasonUndrawnGeneratorValueOnCreate    = "cannot create this resource: one of its properties is bound to a generator whose value has not been drawn, so formae has nothing to send to the provider. Declare the value directly instead of binding it to a generator."
+
+	// Worded for the target rather than the operation: the target's config
+	// rides along on every plugin call this update makes, so the same text is
+	// right whether the update was creating, updating, reading or deleting.
+	failureReasonUndrawnGeneratorValueInTargetConfig = "cannot reach the provider for this resource: its target's configuration is bound to a generator whose value has not been drawn, so formae has nothing to authenticate with. Declare the value directly instead of binding it to a generator."
+	failureReasonPluginRequestPreparationOnCreate    = "cannot create this resource: formae could not build the provider request for it."
 	// Dispatching covers both a coordinator that never returned an operator and
 	// a call that did not complete after the create was handed to the plugin, so
 	// the text asserts neither that a plugin was reached nor that the create
@@ -683,10 +743,38 @@ const (
 	failureReasonPluginDispatchOnCreate = "cannot create this resource: formae could not complete the request to the provider plugin, so the resource may or may not have been created — check the provider before retrying."
 )
 
+// persistFailureReason is the operator-facing reason for a persist that failed
+// AFTER the provider finished an operation successfully: the cloud side is
+// done, but formae could not store the outcome, so the operator must be told
+// what survived. Worded per the operation that completed. Parameterized only
+// by the provider-assigned native id — never the underlying error, which
+// stays in the agent log.
+func persistFailureReason(op resource.Operation, nativeID string) string {
+	switch op {
+	case resource.OperationCreate:
+		if nativeID == "" {
+			return "cannot record this resource: the provider created it, but formae could not store its record, so it is not under formae's management. Check the provider before retrying: a re-apply may conflict with the existing object."
+		}
+		return fmt.Sprintf("cannot record this resource: the provider created it, but formae could not store its record, so it is not under formae's management. The object exists in the cloud with native id %q; check the provider before retrying, since a re-apply may conflict with it.", nativeID)
+	case resource.OperationUpdate:
+		return "cannot record this resource: the provider applied the update, but formae could not store the result, so formae's record of the resource is stale. A later synchronization will re-read it from the provider."
+	case resource.OperationDelete:
+		return "cannot record this resource: the provider deleted it, but formae could not remove its record, so formae still lists it. A later synchronization or a destroy retry will reconcile the record."
+	default:
+		return "cannot record this resource: formae read it from the provider but could not store the observation. The next synchronization will retry."
+	}
+}
+
 // isUnrecoverableOpaqueValue reports whether preparing a plugin request failed
 // because formae holds only a stored hash of an opaque value.
 func isUnrecoverableOpaqueValue(err error) bool {
 	return errors.Is(err, resolver.ErrHashedValueNotWritable)
+}
+
+// isUndrawnGeneratorValue reports whether preparing a plugin request failed
+// because a property still holds a generator reference rather than a value.
+func isUndrawnGeneratorValue(err error) bool {
+	return errors.Is(err, resolver.ErrUnresolvedGeneratorReferenceNotWritable)
 }
 
 // updateRequestFailureReason maps a plugin-request preparation error to the
@@ -694,6 +782,9 @@ func isUnrecoverableOpaqueValue(err error) bool {
 func updateRequestFailureReason(err error) string {
 	if isUnrecoverableOpaqueValue(err) {
 		return failureReasonUnrecoverableOpaqueValueOnUpdate
+	}
+	if isUndrawnGeneratorValue(err) {
+		return failureReasonUndrawnGeneratorValueOnUpdate
 	}
 	return failureReasonPluginRequestPreparationOnUpdate
 }
@@ -704,6 +795,9 @@ func updateRequestFailureReason(err error) string {
 func createRequestFailureReason(err error) string {
 	if isUnrecoverableOpaqueValue(err) {
 		return failureReasonUnrecoverableOpaqueValueOnCreate
+	}
+	if isUndrawnGeneratorValue(err) {
+		return failureReasonUndrawnGeneratorValueOnCreate
 	}
 	return failureReasonPluginRequestPreparationOnCreate
 }
@@ -732,11 +826,39 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 		data.resourceUpdate.PriorState.Stack == data.resourceUpdate.DesiredState.Stack &&
 		data.resourceUpdate.PriorState.Target == data.resourceUpdate.DesiredState.Target
 
-	if (isBringingUnderManagement || isLabelOnlyChange) && hasEmptyPatch {
-		if isLabelOnlyChange {
+	// A record-only update carries no property, stack, label, or target
+	// delta — planning built it solely to commit a shifted ownership record
+	// (see NewResourceUpdateForExisting). Its patch is always empty by
+	// construction, so hasEmptyPatch is included here only for symmetry with
+	// the other predicates, never as a distinguishing condition.
+	isRecordOnly := data.resourceUpdate.RecordOnly
+
+	// A rotation plans every transitive consumer of its destination so the
+	// drawn value can be delivered, and a consumer whose reference names a
+	// property the draw does not change resolves to the value it already
+	// holds: its patch is empty and there is nothing for the cloud to do. An
+	// empty patch is not a harmless payload — a provider may reject an update
+	// that changes nothing (CloudControl refuses an empty patchDocument) — so
+	// complete it here. Scoped to rotation-sourced updates: rotation is the
+	// only planner that co-plans consumers, and a forced user apply with an
+	// empty patch deliberately re-asserts state and must still dispatch.
+	isNoOpUpdate := data.resourceUpdate.Source == FormaCommandSourceGeneratorRotation &&
+		data.resourceUpdate.PriorState.Label == data.resourceUpdate.DesiredState.Label &&
+		data.resourceUpdate.PriorState.Stack == data.resourceUpdate.DesiredState.Stack &&
+		data.resourceUpdate.PriorState.Target == data.resourceUpdate.DesiredState.Target
+
+	if (isBringingUnderManagement || isLabelOnlyChange || isRecordOnly || isNoOpUpdate) && hasEmptyPatch {
+		switch {
+		case isLabelOnlyChange:
 			proc.Log().Debug("Renaming resource without property changes resourceURI=%v oldLabel=%s newLabel=%s",
 				data.resourceUpdate.DesiredState.URI(), data.resourceUpdate.PriorState.Label, data.resourceUpdate.DesiredState.Label)
-		} else {
+		case isRecordOnly:
+			proc.Log().Debug("Committing ownership record without property changes resourceURI=%v",
+				data.resourceUpdate.DesiredState.URI())
+		case isNoOpUpdate:
+			proc.Log().Debug("Completing update without property changes, skipping the provider call resourceURI=%v",
+				data.resourceUpdate.DesiredState.URI())
+		default:
 			proc.Log().Debug("Bringing resource under management without property changes resourceURI=%v oldStack=%s newStack=%s",
 				data.resourceUpdate.DesiredState.URI(), data.resourceUpdate.PriorState.Stack, data.resourceUpdate.DesiredState.Stack)
 		}
@@ -753,8 +875,13 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 		}
 
 		statusMessage := "Brought under management without property changes"
-		if isLabelOnlyChange {
+		switch {
+		case isLabelOnlyChange:
 			statusMessage = "Renamed without property changes"
+		case isRecordOnly:
+			statusMessage = "Committed ownership record without property changes"
+		case isNoOpUpdate:
+			statusMessage = "No property changes"
 		}
 
 		// Create synthetic ProgressResult with existing resource data
@@ -774,6 +901,14 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 		return handleProgressUpdate(proc.PID(), state, data, syntheticResult, proc)
 	}
 
+	// Metadata operations above never call the provider. Every real Update
+	// must satisfy this boundary, including an empty-patch stack move.
+	if err := validateFrozenSetOnceWrite(data.resourceUpdate.frozenSetOnceRefs(), data.resourceUpdate.DesiredState.Schema.RequiredOnUpdate()); err != nil {
+		data.resourceUpdate.FailureReason = fmt.Sprintf("Cannot update resource %s: %v; supply a usable secret value for this operation", data.resourceUpdate.DesiredState.Label, err)
+		data.resourceUpdate.MarkAsFailed()
+		return StateFinishedWithError, data, nil, nil
+	}
+
 	// setOnce keeps a value by substituting the STORED one into the desired
 	// properties, which for an opaque field is a digest. Swap such a leaf for a
 	// present-but-unusable sentinel before the guarded conversion below, so the
@@ -781,6 +916,25 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 	// resource. Only this copy changes; DesiredState.Properties stays the
 	// durable record of the stored hash.
 	desiredForPlugin := data.resourceUpdate.DesiredState
+	// Complete each co-owned collection to its intended post-write value
+	// (declared plus never-owned live members), so DesiredProperties and
+	// PatchDocument tell the plugin the same thing. Only this copy changes;
+	// DesiredState.Properties stays the declared-only durable record the
+	// write-echo recompute claims from.
+	projectedProperties, err := patch.ProjectDesiredForWrite(
+		desiredForPlugin.Properties,
+		data.resourceUpdate.PriorState.Properties,
+		data.resourceUpdate.PriorState.OwnedMembers,
+		desiredForPlugin.Schema,
+	)
+	if err != nil {
+		proc.Log().Error("failed to project co-owned desired properties for plugin: %v", err)
+		data.resourceUpdate.FailureReason = updateRequestFailureReason(err)
+		data.resourceUpdate.MarkAsFailed()
+		return StateFinishedWithError, data, nil, nil
+	}
+	desiredForPlugin.Properties = projectedProperties
+
 	frozenProperties, err := FreezeUnrecoverableOpaqueValues(
 		data.resourceUpdate.PriorState.Properties,
 		desiredForPlugin.Properties,
@@ -790,6 +944,32 @@ func update(state gen.Atom, data ResourceUpdateData, proc gen.Process) (gen.Atom
 	)
 	if err != nil {
 		proc.Log().Error("failed to prepare desired resource properties for plugin: %v", err)
+		data.resourceUpdate.FailureReason = updateRequestFailureReason(err)
+		data.resourceUpdate.MarkAsFailed()
+		return StateFinishedWithError, data, nil, nil
+	}
+	desiredForPlugin.Properties = frozenProperties
+
+	// A generator binding the planner classified stable draws no value, so its
+	// destination still holds the bare envelope here. Swap it for the same
+	// present-but-unusable sentinel, so the guard that refuses to send a
+	// reference in a secret's place stops blocking every other property on the
+	// resource. Only this copy changes; DesiredState.Properties stays the
+	// durable record of the binding.
+	frozenProperties, err = FreezeStableGeneratorBindings(
+		desiredForPlugin.Properties,
+		data.resourceUpdate.ProvenanceRecords,
+	)
+	if err != nil {
+		proc.Log().Error("failed to prepare desired resource properties for plugin: %v", err)
+		data.resourceUpdate.FailureReason = updateRequestFailureReason(err)
+		data.resourceUpdate.MarkAsFailed()
+		return StateFinishedWithError, data, nil, nil
+	}
+	desiredForPlugin.Properties = frozenProperties
+
+	frozenProperties, err = freezeSetOnceRefsForPlugin(desiredForPlugin.Properties, data.resourceUpdate.frozenSetOnceRefs())
+	if err != nil {
 		data.resourceUpdate.FailureReason = updateRequestFailureReason(err)
 		data.resourceUpdate.MarkAsFailed()
 		return StateFinishedWithError, data, nil, nil
@@ -936,6 +1116,12 @@ func handleProgressUpdate(from gen.PID, state gen.Atom, data ResourceUpdateData,
 	err := data.resourceUpdate.RecordProgress(&message)
 	if err != nil {
 		proc.Log().Error("failed to record progress for resource update: %v", err)
+		// A successful plugin operation whose progress cannot be recorded
+		// strands the cloud object the same way a failed persist does:
+		// done at the provider, unrecorded here.
+		if message.FinishedSuccessfully() {
+			data.resourceUpdate.FailureReason = persistFailureReason(currentOperation(state), message.NativeID)
+		}
 		data.resourceUpdate.MarkAsFailed()
 		return StateFinishedWithError, data, nil, nil
 	}
@@ -985,30 +1171,32 @@ func handleProgressUpdate(from gen.PID, state gen.Atom, data ResourceUpdateData,
 				data.resourceUpdate.DesiredState.Type,
 				data.resourceUpdate.DesiredState.Properties,
 				data.labelConfig,
-				data.labelTagKeys,
 			)
 		}
 
 		operation := currentOperation(state)
-		hash, err := proc.Call(resourcePersisterProcess(proc), PersistResourceUpdate{
+		persisted, err := messages.UnwrapCall(proc.Call(resourcePersisterProcess(proc), PersistResourceUpdate{
 			CommandID:         data.commandID,
 			ResourceOperation: data.resourceUpdate.Operation,
 			PluginOperation:   operation,
 			ResourceUpdate:    *data.resourceUpdate,
-		})
+		}))
 
 		if err != nil {
 			proc.Log().Error("failed to persist resource update: %v", err)
+			data.resourceUpdate.FailureReason = persistFailureReason(operation, data.resourceUpdate.DesiredState.NativeID)
 			data.resourceUpdate.MarkAsFailed()
 			return StateFinishedWithError, data, nil, nil
 		}
-		data.resourceUpdate.Version = hash.(string)
+		version := persisted.(PersistResourceUpdateResult).Version
+		data.resourceUpdate.Version = version
 
 		// If we successfully persisted the read operation in the Synchronizing state, we should reject the resource update
 		// and exit the state machine.
-		if state == StateSynchronizing && data.resourceUpdate.Operation != OperationRead && operation == resource.OperationRead && hash != "" && !data.resourceUpdate.IsDelete() {
+		if state == StateSynchronizing && data.resourceUpdate.Operation != OperationRead && operation == resource.OperationRead && version != "" && !data.resourceUpdate.IsDelete() {
 			proc.Log().Debug("Resource update rejected as a change to the resource was detected previousProperties=%s currentProperties=%s",
-				string(data.resourceUpdate.PreviousProperties), string(data.resourceUpdate.DesiredState.Properties))
+				pkgmodel.RedactOpaqueJSONForLog(data.resourceUpdate.PreviousProperties),
+				pkgmodel.RedactOpaqueJSONForLog(data.resourceUpdate.DesiredState.Properties))
 			data.resourceUpdate.Reject()
 
 			return StateRejected, data, nil, nil
@@ -1020,18 +1208,19 @@ func handleProgressUpdate(from gen.PID, state gen.Atom, data ResourceUpdateData,
 		// command re-run will handle it correctly (idempotent).
 		proc.Log().Debug("ResourceUpdater: persisting success progress after resource persist state=%s resourceURI=%v",
 			state, data.resourceUpdate.DesiredState.URI())
-		_, err = proc.Call(
+		_, err = messages.UnwrapCall(proc.Call(
 			formaCommandPersisterProcess(proc),
 			messages.UpdateResourceProgress{
-				CommandID:          data.commandID,
-				ResourceURI:        data.resourceUpdate.DesiredState.URI(),
-				Operation:          data.resourceUpdate.Operation,
-				ResourceStartTs:    data.resourceUpdate.StartTs,
-				ResourceModifiedTs: data.resourceUpdate.ModifiedTs,
-				ResourceState:      data.resourceUpdate.State,
-				Progress:           message,
+				CommandID:           data.commandID,
+				ResourceURI:         data.resourceUpdate.DesiredState.URI(),
+				Operation:           data.resourceUpdate.Operation,
+				ResourceStartTs:     data.resourceUpdate.StartTs,
+				ResourceModifiedTs:  data.resourceUpdate.ModifiedTs,
+				ResourceState:       data.resourceUpdate.State,
+				Progress:            message,
+				ResolvedRootDigests: data.resourceUpdate.ResolvedRootDigests,
 			},
-		)
+		))
 		if err != nil {
 			proc.Log().Error("failed to send UpdateResourceProgress after resource persist: %v", err)
 			// Resource is already persisted; don't fail the update for a
@@ -1046,18 +1235,19 @@ func handleProgressUpdate(from gen.PID, state gen.Atom, data ResourceUpdateData,
 	// to the command record immediately.
 	proc.Log().Debug("ResourceUpdater: sending progress update to the forma command persister state=%s resourceURI=%v progress=%s",
 		state, data.resourceUpdate.DesiredState.URI(), message.Operation)
-	_, err = proc.Call(
+	_, err = messages.UnwrapCall(proc.Call(
 		formaCommandPersisterProcess(proc),
 		messages.UpdateResourceProgress{
-			CommandID:          data.commandID,
-			ResourceURI:        data.resourceUpdate.DesiredState.URI(),
-			Operation:          data.resourceUpdate.Operation,
-			ResourceStartTs:    data.resourceUpdate.StartTs,
-			ResourceModifiedTs: data.resourceUpdate.ModifiedTs,
-			ResourceState:      data.resourceUpdate.State,
-			Progress:           message,
+			CommandID:           data.commandID,
+			ResourceURI:         data.resourceUpdate.DesiredState.URI(),
+			Operation:           data.resourceUpdate.Operation,
+			ResourceStartTs:     data.resourceUpdate.StartTs,
+			ResourceModifiedTs:  data.resourceUpdate.ModifiedTs,
+			ResourceState:       data.resourceUpdate.State,
+			Progress:            message,
+			ResolvedRootDigests: data.resourceUpdate.ResolvedRootDigests,
 		},
-	)
+	))
 	if err != nil {
 		proc.Log().Error("failed to send UpdateResourceProgress message to forma command persister: %v", err)
 		data.resourceUpdate.MarkAsFailed()
@@ -1150,7 +1340,7 @@ func doPluginOperation(resourceURI pkgmodel.FormaeURI, operation plugin.PluginOp
 	proc.Log().Debug("Spawning plugin operator via PluginCoordinator resourceURI=%v operation=%s namespace=%s",
 		resourceURI, string(operation.Operation()), operation.PluginNamespace())
 
-	spawnResult, err := proc.Call(
+	spawnResult, err := messages.UnwrapCall(proc.Call(
 		gen.ProcessID{Name: actornames.PluginCoordinator, Node: proc.Node().Name()},
 		messages.SpawnPluginOperator{
 			Namespace:   operation.PluginNamespace(),
@@ -1158,7 +1348,7 @@ func doPluginOperation(resourceURI pkgmodel.FormaeURI, operation plugin.PluginOp
 			Operation:   string(operation.Operation()),
 			OperationID: operationID,
 			RequestedBy: proc.PID(),
-		})
+		}))
 	if err != nil {
 		proc.Log().Error("failed to spawn plugin operator: %v", err)
 		return nil, nil, fmt.Errorf("failed to spawn plugin operator: %w", err)
@@ -1212,81 +1402,14 @@ func resourceFailedToResolve(from gen.PID, state gen.Atom, data ResourceUpdateDa
 }
 
 // ShouldFilterByMatchFilter checks if a resource should be filtered using declarative MatchFilter.
-// Returns true if all conditions match (AND logic), indicating the resource should be excluded.
+//
+// The evaluation itself lives on the filter, in pkg/model, so that plugins can
+// test the filters they declare against the same code the agent runs.
 func ShouldFilterByMatchFilter(filter *pkgmodel.MatchFilter, properties json.RawMessage) bool {
 	if filter == nil {
 		return false
 	}
-
-	// All conditions must match (AND logic) to exclude
-	for _, cond := range filter.Conditions {
-		if !evaluateCondition(cond, properties) {
-			return false
-		}
-	}
-
-	return true // All conditions matched - exclude this resource
-}
-
-// evaluateCondition evaluates a single filter condition using JSONPath.
-// PropertyPath is a JSONPath expression to query properties.
-// PropertyValue: empty = existence check, non-empty = exact string match.
-func evaluateCondition(cond pkgmodel.FilterCondition, properties json.RawMessage) bool {
-	var data any
-	if err := json.Unmarshal(properties, &data); err != nil {
-		return false
-	}
-
-	path, err := jsonpathParser.Parse(cond.PropertyPath)
-	if err != nil {
-		// Invalid JSONPath expression - no match
-		return false
-	}
-
-	nodes := path.Select(data)
-	if len(nodes) == 0 {
-		// No value found
-		return false
-	}
-
-	// Empty PropertyValue = existence check (path returned something)
-	if cond.PropertyValue == "" {
-		return true
-	}
-
-	// Non-empty PropertyValue = exact string match against any result
-	for _, node := range nodes {
-		if matchValue(node, cond.PropertyValue) {
-			return true
-		}
-	}
-	return false
-}
-
-// matchValue compares a JSONPath result against an expected string value.
-// Handles various result types including arrays and nested structures.
-func matchValue(val any, expected string) bool {
-	switch v := val.(type) {
-	case string:
-		return v == expected
-	case []any:
-		// JSONPath filter expressions can return arrays
-		for _, item := range v {
-			if matchValue(item, expected) {
-				return true
-			}
-		}
-		return false
-	case map[string]any:
-		// Check if it's a tag-like structure with Value field
-		if value, ok := v["Value"]; ok {
-			return matchValue(value, expected)
-		}
-		return false
-	default:
-		// Convert other types to string for comparison
-		return fmt.Sprintf("%v", v) == expected
-	}
+	return filter.Excludes(properties)
 }
 
 func currentOperation(state gen.Atom) resource.Operation {

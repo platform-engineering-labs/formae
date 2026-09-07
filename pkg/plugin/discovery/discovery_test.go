@@ -173,6 +173,21 @@ func TestDiscoverPlugins_Auth_SkipsPluginsWithoutManifest(t *testing.T) {
 	assert.Nil(t, DiscoverPlugins(baseDir, Auth))
 }
 
+func TestDiscoverPlugins_OidcCredentialClassifiesOnlyToItsOwnScan(t *testing.T) {
+	dir := t.TempDir()
+	createFakePlugin(t, dir, "fai", "0.1.0", `name = "fai"
+type = "oidc-credential"
+version = "0.1.0"
+namespaces { "aws"; "Azure" }
+license = "FSL-1.1-ALv2"
+minFormaeVersion = "0.90.0"`)
+	oidc := DiscoverPlugins(dir, OidcCredential)
+	require.Len(t, oidc, 1)
+	require.Equal(t, []string{"AWS", "AZURE"}, oidc[0].Namespaces)
+	require.Empty(t, DiscoverPlugins(dir, Resource), "an oidc-credential binary must not classify as a resource plugin")
+	require.Empty(t, DiscoverPlugins(dir, Auth))
+}
+
 func TestDiscoverPluginsMulti_DevOverridesSystem(t *testing.T) {
 	systemDir := t.TempDir()
 	devDir := t.TempDir()

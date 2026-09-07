@@ -23,6 +23,13 @@ var ErrResourceWriteRejected = errors.New("resource write rejected by reaped/inc
 // ResourcesAreEqual compares two resources and returns two booleans: the first
 // one indicating whether the non-readonly properties of the resources are equal,
 // and the second one indicating whether the readonly properties are equal.
+//
+// OwnedMembers is compared as part of the first boolean: it is declared state
+// alongside Properties, not provider-observed metadata, so a resource whose
+// ownership record alone changed must not be reported identical — a
+// record-only update (see resource_update.ResourceUpdate.RecordOnly) carries
+// byte-identical Properties/ReadOnlyProperties by construction, and this is
+// the only signal that distinguishes it from a genuine no-op write.
 func ResourcesAreEqual(resource1, resource2 *pkgmodel.Resource) (bool, bool) {
 	readWriteEqual, readOnlyEqual := true, true
 
@@ -34,6 +41,10 @@ func ResourcesAreEqual(resource1, resource2 *pkgmodel.Resource) (bool, bool) {
 	}
 
 	if !util.JsonEqualRaw(resource1.Properties, resource2.Properties) {
+		readWriteEqual = false
+	}
+
+	if !pkgmodel.OwnedMembersEqual(resource1.OwnedMembers, resource2.OwnedMembers) {
 		readWriteEqual = false
 	}
 

@@ -29,6 +29,33 @@ func TestAuroraDataAPIConfigRoundTrips(t *testing.T) {
 	assert.Equal(t, "http://localhost:8080", aurora.Endpoint)
 }
 
+// The credential's authority travels from the authored PKL all the way to the
+// model the datastore is built from. Asserted end to end, through real
+// evaluation, because the field crosses three representations: a PKL class, the
+// struct it decodes into, and the domain model. Testing the decode and the
+// translation separately would let both share the same wrong tag and pass
+// twice, while the authored config still did nothing.
+func TestPostgresPasswordSecretArnRoundTrips(t *testing.T) {
+	config, err := PKL{}.FormaeConfig("./testdata/config/datastore_postgres_secret.pkl")
+	require.NoError(t, err)
+
+	pg := config.Agent.Datastore.Postgres
+	assert.Equal(t,
+		"arn:aws:secretsmanager:us-west-2:123456789012:secret:app/db-password-AbCdEf",
+		pg.PasswordSecretArn)
+	assert.Equal(t, "static-fallback", pg.Password,
+		"the static password survives alongside it, as the fallback for a deployment that sets no ARN")
+}
+
+// A config that names no secret leaves the field empty, which is what keeps an
+// existing deployment on the static path and builds no AWS client.
+func TestPostgresPasswordSecretArnDefaultsToEmpty(t *testing.T) {
+	config, err := PKL{}.FormaeConfig("./testdata/config/test_config.pkl")
+	require.NoError(t, err)
+
+	assert.Empty(t, config.Agent.Datastore.Postgres.PasswordSecretArn)
+}
+
 // A config with no auroraDataAPI block leaves the endpoint empty, which is what
 // makes the AWS SDK resolve its default endpoint for the region.
 func TestAuroraDataAPIEndpointDefaultsToEmpty(t *testing.T) {

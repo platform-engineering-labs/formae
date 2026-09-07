@@ -116,6 +116,15 @@ func TestTTY_Policies_LaunchesWithTabPolicies(t *testing.T) {
 	assert.Equal(t, inventoryview.TabPolicies, sr.lastFocus)
 }
 
+func TestTTY_Generators_LaunchesWithTabGenerators(t *testing.T) {
+	sr := stubSeams(t, true)
+	opts := &InventoryOptions{OutputConsumer: printer.ConsumerHuman, MaxResults: 10}
+	err := runGeneratorsForHumans(nil, opts)
+	require.NoError(t, err)
+	assert.Equal(t, 1, sr.launcherCalls)
+	assert.Equal(t, inventoryview.TabGenerators, sr.lastFocus)
+}
+
 // Bare `formae inventory` routes like resources → TabResources.
 func TestTTY_BareInventory_LaunchesWithTabResources(t *testing.T) {
 	sr := stubSeams(t, true)

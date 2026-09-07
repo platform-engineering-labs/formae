@@ -185,6 +185,152 @@ func TestChangesetHasUserUpdates_TargetUpdatesIgnored(t *testing.T) {
 	assert.False(t, changesetHasUserUpdates(cs))
 }
 
+// The synchronizer exclusion exists to stop a sync cycle reading and
+// persisting a resource in the window between this changeset writing it at the
+// provider and persisting it itself. That race does not care who asked for the
+// write, so the gate is "does this changeset write" rather than "is this a
+// user's changeset".
+//
+// A rotation is the case that made the distinction matter. Gated on user
+// updates alone, a rotation registers nothing, the sync records the value the
+// rotation just wrote as out-of-band drift, and because a rotation is itself
+// the reconcile that would clear the drift window every later rotation is
+// refused. The credential then stops turning over permanently, with no
+// user-visible signal beyond a repeating log line.
+
+func TestChangesetWritesResources_GeneratorRotationWrites(t *testing.T) {
+	uri := pkgmodel.NewFormaeURI(util.NewID(), "")
+	opURI := createOperationURI(uri, resource_update.OperationUpdate)
+
+	cs := Changeset{
+		CommandID: "test",
+		DAG: &ExecutionDAG{
+			Nodes: map[pkgmodel.FormaeURI]*DAGNode{
+				opURI: {
+					URI: opURI,
+					Update: &resource_update.ResourceUpdate{
+						Source: resource_update.FormaCommandSourceGeneratorRotation,
+					},
+				},
+			},
+		},
+	}
+	assert.True(t, changesetWritesResources(cs),
+		"a rotation writes resources and must exclude them from sync")
+}
+
+func TestChangesetWritesResources_AutoReconcileWrites(t *testing.T) {
+	uri := pkgmodel.NewFormaeURI(util.NewID(), "")
+	opURI := createOperationURI(uri, resource_update.OperationUpdate)
+
+	cs := Changeset{
+		CommandID: "test",
+		DAG: &ExecutionDAG{
+			Nodes: map[pkgmodel.FormaeURI]*DAGNode{
+				opURI: {
+					URI: opURI,
+					Update: &resource_update.ResourceUpdate{
+						Source: resource_update.FormaCommandSourcePolicyAutoReconcile,
+					},
+				},
+			},
+		},
+	}
+	assert.True(t, changesetWritesResources(cs),
+		"an auto-reconcile writes resources and must exclude them from sync")
+}
+
+func TestChangesetWritesResources_UserWrites(t *testing.T) {
+	uri := pkgmodel.NewFormaeURI(util.NewID(), "")
+	opURI := createOperationURI(uri, resource_update.OperationUpdate)
+
+	cs := Changeset{
+		CommandID: "test",
+		DAG: &ExecutionDAG{
+			Nodes: map[pkgmodel.FormaeURI]*DAGNode{
+				opURI: {
+					URI: opURI,
+					Update: &resource_update.ResourceUpdate{
+						Source: resource_update.FormaCommandSourceUser,
+					},
+				},
+			},
+		},
+	}
+	assert.True(t, changesetWritesResources(cs))
+}
+
+// Sync and discovery read rather than write. Excluding a resource from sync on
+// behalf of a sync changeset would be circular, and would stop sync doing the
+// only thing it is for.
+func TestChangesetWritesResources_SyncDoesNotWrite(t *testing.T) {
+	uri := pkgmodel.NewFormaeURI(util.NewID(), "")
+	opURI := createOperationURI(uri, resource_update.OperationUpdate)
+
+	cs := Changeset{
+		CommandID: "test",
+		DAG: &ExecutionDAG{
+			Nodes: map[pkgmodel.FormaeURI]*DAGNode{
+				opURI: {
+					URI: opURI,
+					Update: &resource_update.ResourceUpdate{
+						Source: resource_update.FormaCommandSourceSynchronize,
+					},
+				},
+			},
+		},
+	}
+	assert.False(t, changesetWritesResources(cs))
+}
+
+func TestChangesetWritesResources_DiscoveryDoesNotWrite(t *testing.T) {
+	uri := pkgmodel.NewFormaeURI(util.NewID(), "")
+	opURI := createOperationURI(uri, resource_update.OperationUpdate)
+
+	cs := Changeset{
+		CommandID: "test",
+		DAG: &ExecutionDAG{
+			Nodes: map[pkgmodel.FormaeURI]*DAGNode{
+				opURI: {
+					URI: opURI,
+					Update: &resource_update.ResourceUpdate{
+						Source: resource_update.FormaCommandSourceDiscovery,
+					},
+				},
+			},
+		},
+	}
+	assert.False(t, changesetWritesResources(cs))
+}
+
+func TestChangesetWritesResources_EmptyChangeset(t *testing.T) {
+	cs := Changeset{
+		CommandID: "test",
+		DAG:       &ExecutionDAG{Nodes: map[pkgmodel.FormaeURI]*DAGNode{}},
+	}
+	assert.False(t, changesetWritesResources(cs))
+}
+
+// A target update is not a resource write, so it registers nothing.
+func TestChangesetWritesResources_TargetUpdatesIgnored(t *testing.T) {
+	cs := Changeset{
+		CommandID: "test",
+		DAG: &ExecutionDAG{
+			Nodes: map[pkgmodel.FormaeURI]*DAGNode{
+				"target://t": {
+					URI: "target://t",
+					Update: &target_update.TargetUpdate{
+						Target:    pkgmodel.Target{Label: "t", Namespace: "AWS"},
+						Operation: target_update.TargetOperationCreate,
+						State:     target_update.TargetUpdateStateNotStarted,
+					},
+				},
+			},
+		},
+	}
+	assert.False(t, changesetWritesResources(cs))
+}
+
 func TestCollectStacksWithDeletes_DeleteOps(t *testing.T) {
 	uri := pkgmodel.NewFormaeURI(util.NewID(), "")
 	opURI := createOperationURI(uri, resource_update.OperationDelete)

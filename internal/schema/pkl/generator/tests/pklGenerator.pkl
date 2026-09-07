@@ -19,6 +19,7 @@ local computeServerJson = new json.Parser {}.parse(read("../examples/json/comput
 local appRunnerServiceJson = new json.Parser {}.parse(read("../examples/json/apprunner_service.json"))
 local crossStackRefJson = new json.Parser {}.parse(read("../examples/json/cross_stack_ref.json"))
 local hashedValueJson = new json.Parser {}.parse(read("../examples/json/hashed_value.json"))
+local secretJsonSelectorJson = new json.Parser {}.parse(read("../examples/json/secret_json_selector_ref.json"))
 
 facts {
     ["SQS Queue - generates correct imports"] {
@@ -281,6 +282,14 @@ facts {
     ["Cross-stack ref - resolvable stack uses .res.label not .res"] {
         let (result = generator.generateFormaFile(crossStackRefJson))
         result.contains("infraStack.res.label")
+    }
+
+    ["Selector ref - renders the sub-key selector through the secret-value accessor"] {
+        let (result = generator.generateFormaFile(secretJsonSelectorJson))
+        // The selector names one member of the secret document. It must survive
+        // regeneration, and it must hang off secretValue: json() is defined on the
+        // secret-value resolvable, not on the accessor the property mapping picks.
+        result.contains(".secretValue.json(\"password\")")
     }
 
     ["Cross-stack ref - generates resolvable with VPCResolvable type"] {

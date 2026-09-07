@@ -5,7 +5,7 @@
 // Package inventoryview implements the data layer for the inventory TUI
 // browser. It exposes the Client seam, tab specs, and fetch commands that the
 // tab engine (later tasks) drives to populate tabbed views over resources,
-// targets, stacks and policies.
+// targets, stacks, policies and generators.
 package inventoryview
 
 import (
@@ -20,7 +20,7 @@ import (
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
-// Tab identifies one of the four inventory entity tabs.
+// Tab identifies one of the inventory entity tabs.
 type Tab int
 
 const (
@@ -28,7 +28,13 @@ const (
 	TabTargets
 	TabStacks
 	TabPolicies
+	TabGenerators
 )
+
+// tabCount is the number of inventory tabs. The specs and the per-tab models
+// are fixed-size arrays indexed by Tab, so this is the one place the count is
+// written down.
+const tabCount = 5
 
 // Client is the data-fetching seam consumed by inventoryview. *app.App satisfies
 // this interface directly — no adapter required.
@@ -37,6 +43,7 @@ type Client interface {
 	ExtractTargets(query string, fromTUI bool) ([]*pkgmodel.Target, []string, error)
 	ExtractStacks(fromTUI bool) ([]*pkgmodel.Stack, []string, error)
 	ExtractPolicies(fromTUI bool) ([]apimodel.PolicyInventoryItem, []string, error)
+	ExtractGenerators(fromTUI bool) ([]apimodel.GeneratorInventoryItem, []string, error)
 	// ListResourceSummaries returns lightweight resource summaries; detail is
 	// fetched lazily by ksuid via ResourceDetailByKsuid.
 	ListResourceSummaries(query string, fromTUI bool) ([]pkgmodel.ResourceSummary, []string, error)
@@ -100,9 +107,9 @@ type resourceDetailLoadedMsg struct {
 	err      error
 }
 
-// newSpecs returns the four tab specifications.
-func newSpecs(now func() time.Time) [4]tabSpec {
-	return [4]tabSpec{
+// newSpecs returns the tab specifications.
+func newSpecs(now func() time.Time) [tabCount]tabSpec {
+	return [tabCount]tabSpec{
 		TabResources: {
 			title:       "Resources",
 			entity:      "resources",
@@ -208,12 +215,48 @@ func newSpecs(now func() time.Time) [4]tabSpec {
 				return rows, nags, nil
 			},
 		},
+		TabGenerators: {
+			title:  "Generators",
+			entity: "generators",
+			columns: []components.Column{
+				{Title: "Label", Width: 20, Priority: 0},
+				{Title: "Stack", Width: 14, Priority: 2},
+				{Title: "Type", Width: 12, Priority: 4},
+				{Title: "Every", Width: 8, Priority: 3},
+				{Title: "LastRotated", Width: 14, Priority: 1},
+				{Title: "Destinations", Width: 12, Priority: 5},
+			},
+			// col 4 = LastRotated: a generator that has never rotated is due
+			// immediately, which is the one cell in this table an operator has
+			// to see rather than read past.
+			styleCell: func(th *theme.Theme, col int, cell string) string {
+				if col == 4 && th != nil && cell == rotationNever {
+					return th.Styles.Unmanaged.Render(cell)
+				}
+				return cell
+			},
+			fetch: func(c Client, _ string, fromTUI bool) ([]row, []string, error) {
+				generators, nags, err := c.ExtractGenerators(fromTUI)
+				if err != nil {
+					return nil, nags, err
+				}
+				clockNow := time.Now()
+				if now != nil {
+					clockNow = now()
+				}
+				rows := make([]row, 0, len(generators))
+				for _, g := range generators {
+					rows = append(rows, generatorRow(g, clockNow))
+				}
+				return rows, nags, nil
+			},
+		},
 	}
 }
 
 // fetchCmd returns a bubbletea Cmd that calls the spec's fetch function and
 // delivers a tabLoadedMsg.
-func fetchCmd(c Client, specs [4]tabSpec, tab Tab, query string, fromTUI bool) tea.Cmd {
+func fetchCmd(c Client, specs [tabCount]tabSpec, tab Tab, query string, fromTUI bool) tea.Cmd {
 	return func() tea.Msg {
 		spec := specs[tab]
 		rows, nags, err := spec.fetch(c, query, fromTUI)

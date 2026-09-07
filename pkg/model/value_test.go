@@ -59,3 +59,28 @@ func TestValue_JSONPathRoundTrip(t *testing.T) {
 		t.Fatalf("round-trip failed: %+v err %v", back, err)
 	}
 }
+
+// A Value carrying resolution provenance survives the JSON round trip, and
+// Hash() preserves both provenance and the extraction path alongside the
+// digested value.
+func TestValue_ResolvedFromRoundTripAndHash(t *testing.T) {
+	v := &Value{
+		Strategy:     StrategyUpdate,
+		Visibility:   VisibilityOpaque,
+		Value:        "plain",
+		JSONPath:     "password",
+		ResolvedFrom: "v1:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+	}
+
+	data, err := json.Marshal(v)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), `"$resolvedFrom"`)
+	var back Value
+	require.NoError(t, json.Unmarshal(data, &back))
+	assert.Equal(t, v.ResolvedFrom, back.ResolvedFrom)
+
+	hashed := v.Hash()
+	assert.True(t, hashed.Hashed)
+	assert.Equal(t, v.ResolvedFrom, hashed.ResolvedFrom, "hashing must not drop provenance")
+	assert.Equal(t, v.JSONPath, hashed.JSONPath, "hashing must not drop the extraction path")
+}

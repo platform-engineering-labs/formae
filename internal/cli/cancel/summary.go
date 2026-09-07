@@ -12,6 +12,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
+	"github.com/platform-engineering-labs/formae/internal/cli/tui/statuswatch"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 )
@@ -171,10 +172,15 @@ func renderCancelSummary(th *theme.Theme, cmds []apimodel.Command, exps map[stri
 			cmd.State == "Failed" || cmd.State == "Canceled"
 		bar := components.ProgressBar(th, 10, counts, failed)
 
-		cmdLine := fmt.Sprintf("    %s  %s %s  %s %d/%d  %s",
+		userSeg := ""
+		if u := statuswatch.UserLabel(cmd); u != "" {
+			userSeg = subtle.Render(u) + "  "
+		}
+		cmdLine := fmt.Sprintf("    %s  %s %s  %s%s %d/%d  %s",
 			accent.Render(cmd.CommandID),
 			subtle.Render(cmd.Command),
 			subtle.Render(cmd.Mode),
+			userSeg,
 			bar,
 			done, total,
 			hint.Render(elapsedStr),

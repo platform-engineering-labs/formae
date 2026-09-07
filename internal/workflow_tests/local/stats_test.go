@@ -55,7 +55,7 @@ func operationFailureCount(reader *sdkmetric.ManualReader, want map[string]strin
 				matches := true
 				for k, v := range want {
 					got, found := dp.Attributes.Value(attribute.Key(k))
-					if !found || got.Emit() != v {
+					if !found || got.String() != v {
 						matches = false
 						break
 					}

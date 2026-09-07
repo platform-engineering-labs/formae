@@ -29,6 +29,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/plugin_manager"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/querier"
 	"github.com/platform-engineering-labs/formae/internal/network"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
@@ -46,6 +47,7 @@ const (
 	ListTargetsRoute                    = BasePath + "/targets"
 	ListStacksRoute                     = BasePath + "/stacks"
 	ListPoliciesRoute                   = BasePath + "/policies"
+	ListGeneratorsRoute                 = BasePath + "/generators"
 	StackDriftRoute                     = BasePath + "/stacks/:stack/drift"
 	StackChangesSinceLastReconcileRoute = BasePath + "/stacks/:stack/changes-since-last-reconcile"
 	StackReconcileRoute                 = BasePath + "/stacks/:stack/reconcile"
@@ -237,6 +239,7 @@ func (s *Server) configureEcho() *echo.Echo {
 	e.GET(ListTargetsRoute, s.ListTargets)
 	e.GET(ListStacksRoute, s.ListStacks)
 	e.GET(ListPoliciesRoute, s.ListPolicies)
+	e.GET(ListGeneratorsRoute, s.ListGenerators)
 	e.GET(StackDriftRoute, s.ListDrift)
 	e.GET(StackChangesSinceLastReconcileRoute, s.ListDrift)
 	e.POST(StackReconcileRoute, s.ForceReconcile)
@@ -551,6 +554,28 @@ func (s *Server) ListStacks(c echo.Context) error {
 	return c.JSON(http.StatusOK, stacks)
 }
 
+// @Summary List generators
+// @Description Retrieves all live generators with their cadence, the instant of their last committed rotation, and the resources bound to them
+// @Tags generators
+// @Produce json
+// @Success 200 {array} apimodel.GeneratorInventoryItem "OK: List of generators."
+// @Failure 404 {string} string "Not Found: No generators found."
+// @Failure 500 {string} string "Internal Server Error."
+// @Router /generators [get]
+func (s *Server) ListGenerators(c echo.Context) error {
+	generators, err := s.metastructure.ExtractGenerators()
+	if err != nil {
+		return mapError(c, err)
+	}
+	if len(generators) == 0 {
+		return c.JSON(http.StatusNotFound, map[string]string{
+			"error": "No generators found",
+		})
+	}
+
+	return c.JSON(http.StatusOK, generators)
+}
+
 // @Summary List standalone policies
 // @Description Retrieves all standalone policies with their attached stacks
 // @Tags policies
@@ -714,7 +739,9 @@ func (s *Server) ForceReap(c echo.Context) error {
 
 // getCommandStatus is a helper to retrieve command status and handle common error/status logic
 func (s *Server) getCommandStatus(c echo.Context, clientID, query string, n int, scope apimodel.CommandScope) error {
-	result, err := s.metastructure.ListFormaCommandStatus(query, clientID, n, scope)
+	subject, _ := subjectFromContext(c)
+	caller := querier.Caller{ClientID: clientID, Subject: subject}
+	result, err := s.metastructure.ListFormaCommandStatus(query, caller, n, scope)
 	if err != nil {
 		return mapError(c, err)
 	}
@@ -810,6 +837,21 @@ func mapError(c echo.Context, err error) error {
 		return apiError(c, http.StatusBadRequest, apimodel.ReferencedResourcesNotFound, resourceNotFoundError)
 	}
 
+	var generatorNotFoundError apimodel.FormaReferencedGeneratorsNotFoundError
+	if errors.As(err, &generatorNotFoundError) {
+		return apiError(c, http.StatusBadRequest, apimodel.ReferencedGeneratorsNotFound, generatorNotFoundError)
+	}
+
+	var unreachableDestinationsError apimodel.FormaGeneratorDestinationsUnreachableError
+	if errors.As(err, &unreachableDestinationsError) {
+		return apiError(c, http.StatusUnprocessableEntity, apimodel.GeneratorDestinationsUnreachable, unreachableDestinationsError)
+	}
+
+	var setOnceGeneratorFieldError apimodel.FormaGeneratorBoundToSetOnceFieldError
+	if errors.As(err, &setOnceGeneratorFieldError) {
+		return apiError(c, http.StatusUnprocessableEntity, apimodel.GeneratorBoundToSetOnceField, setOnceGeneratorFieldError)
+	}
+
 	var targetExistsError apimodel.TargetAlreadyExistsError
 	if errors.As(err, &targetExistsError) {
 		return apiError(c, http.StatusConflict, apimodel.TargetAlreadyExists, targetExistsError)
@@ -833,6 +875,14 @@ func mapError(c echo.Context, err error) error {
 	var resourceHasDependentsError apimodel.FormaResourceHasDependentsError
 	if errors.As(err, &resourceHasDependentsError) {
 		return apiError(c, http.StatusConflict, apimodel.ResourceHasDependents, resourceHasDependentsError)
+	}
+
+	// Conflict, not 422: the client's destroy entry points decode only 400 and
+	// 409, so a 422 would reach the caller as an opaque error on the very path
+	// this refusal exists for.
+	var generatorHasDependentsError apimodel.FormaGeneratorHasDependentsError
+	if errors.As(err, &generatorHasDependentsError) {
+		return apiError(c, http.StatusConflict, apimodel.GeneratorHasDependents, generatorHasDependentsError)
 	}
 
 	var requiredFieldMissingError apimodel.RequiredFieldMissingOnCreateError
@@ -893,7 +943,9 @@ func (s *Server) CancelCommands(c echo.Context) error {
 	query := c.QueryParam("query")
 	force := c.QueryParam("force") == "true"
 
-	result, err := s.metastructure.CancelCommandsByQuery(query, force, clientID)
+	subject, _ := subjectFromContext(c)
+	caller := querier.Caller{ClientID: clientID, Subject: subject}
+	result, err := s.metastructure.CancelCommandsByQuery(query, force, caller)
 	if err != nil {
 		return mapError(c, err)
 	}

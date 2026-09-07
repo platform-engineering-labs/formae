@@ -347,6 +347,7 @@ func prepareReconcile(ds datastore.Datastore, stackLabel string, clientID string
 		existingTargets,
 		ds,
 		nil, nil,
+		false,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate resource updates: %w", err)
@@ -368,6 +369,7 @@ func prepareReconcile(ds datastore.Datastore, stackLabel string, clientID string
 		nil, // No target updates
 		nil, // No stack updates
 		nil, // No policy updates
+		nil, // No generator updates
 		clientID,
 		subject,
 		subjectName,
@@ -382,7 +384,10 @@ func prepareReconcile(ds datastore.Datastore, stackLabel string, clientID string
 	if err != nil {
 		return nil, fmt.Errorf("failed to create changeset: %w", err)
 	}
-	cs, err := changeset.NewChangeset(resourceUpdates, synth, reconcileCommand.ID, pkgmodel.CommandApply)
+	// No generator draws: an auto-reconcile re-asserts persisted desired
+	// state, whose $gen destinations already carry the value that was
+	// drawn for them. Rotating a credential is a user-initiated apply.
+	cs, err := changeset.NewChangeset(resourceUpdates, synth, nil, reconcileCommand.ID, pkgmodel.CommandApply, reconcileCommand.Config.Mode)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create changeset: %w", err)
 	}
@@ -416,10 +421,10 @@ func startReconcile(proc gen.Process, data *AutoReconcilerData, stackLabel strin
 	proc.Log().Debug("Generated resource updates for stack=%s, starting reconcile command=%s", stackLabel, result.command.ID)
 
 	// Store the forma command
-	_, err = proc.Call(
+	_, err = messages.UnwrapCall(proc.Call(
 		gen.ProcessID{Name: actornames.FormaCommandPersister, Node: proc.Node().Name()},
 		forma_persister.StoreNewFormaCommand{Command: *result.command},
-	)
+	))
 	if err != nil {
 		return "", fmt.Errorf("failed to store reconcile command: %w", err)
 	}

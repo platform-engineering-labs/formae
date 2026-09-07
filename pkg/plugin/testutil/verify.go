@@ -24,20 +24,31 @@ var pklFiles embed.FS
 
 // VerifyResult contains the results of schema verification.
 type VerifyResult struct {
-	Status             string               `json:"status"`
-	HasErrors          bool                 `json:"hasErrors"`
-	TotalModules       int                  `json:"totalModules"`
-	TotalResourceTypes int                  `json:"totalResourceTypes"`
-	DuplicateFileCount int                  `json:"duplicateFileCount"`
-	DuplicateTypeCount int                  `json:"duplicateTypeCount"`
-	DuplicateFiles     []DuplicateFileError `json:"duplicateFiles"`
-	DuplicateTypes     []string             `json:"duplicateTypes"`
+	Status               string               `json:"status"`
+	HasErrors            bool                 `json:"hasErrors"`
+	TotalModules         int                  `json:"totalModules"`
+	TotalResourceTypes   int                  `json:"totalResourceTypes"`
+	DuplicateFileCount   int                  `json:"duplicateFileCount"`
+	DuplicateTypeCount   int                  `json:"duplicateTypeCount"`
+	DuplicateFiles       []DuplicateFileError `json:"duplicateFiles"`
+	DuplicateTypes       []string             `json:"duplicateTypes"`
+	OrphanFieldHintCount int                  `json:"orphanFieldHintCount"`
+	OrphanFieldHints     []OrphanFieldHint    `json:"orphanFieldHints"`
 }
 
 // DuplicateFileError represents a file that appears multiple times in the schema.
 type DuplicateFileError struct {
 	FileName string   `json:"fileName"`
 	Modules  []string `json:"modules"`
+}
+
+// OrphanFieldHint represents a class that carries a @FieldHint on one of its
+// properties but does not extend formae.Resource or formae.SubResource, so the
+// hint never reaches Schema.Hints.
+type OrphanFieldHint struct {
+	ModuleName string   `json:"moduleName"`
+	ClassName  string   `json:"className"`
+	Fields     []string `json:"fields"`
 }
 
 // VerifySchema runs PKL schema verification for a plugin.
@@ -258,7 +269,8 @@ func (r *VerifyResult) FormatReport(namespace string) string {
 	fmt.Fprintf(&sb, "- Total modules: %d\n", r.TotalModules)
 	fmt.Fprintf(&sb, "- Total resource types: %d\n", r.TotalResourceTypes)
 	fmt.Fprintf(&sb, "- Duplicate files found: %d\n", r.DuplicateFileCount)
-	fmt.Fprintf(&sb, "- Duplicate types found: %d\n\n", r.DuplicateTypeCount)
+	fmt.Fprintf(&sb, "- Duplicate types found: %d\n", r.DuplicateTypeCount)
+	fmt.Fprintf(&sb, "- Orphan @FieldHint classes found: %d\n\n", r.OrphanFieldHintCount)
 
 	if len(r.DuplicateFiles) > 0 {
 		sb.WriteString("DUPLICATE FILES DETECTED:\n")
@@ -283,12 +295,25 @@ func (r *VerifyResult) FormatReport(namespace string) string {
 		sb.WriteString("No duplicate resource types found\n\n")
 	}
 
+	if len(r.OrphanFieldHints) > 0 {
+		sb.WriteString("ORPHAN @FieldHint CLASSES DETECTED:\n")
+		sb.WriteString("  A @FieldHint on a class that does not extend formae.Resource or\n")
+		sb.WriteString("  formae.SubResource (directly or transitively) never reaches Schema.Hints,\n")
+		sb.WriteString("  and the class also misses the SubResource render path. Add\n")
+		sb.WriteString("  \"extends formae.SubResource\" to the class.\n")
+		for _, o := range r.OrphanFieldHints {
+			fmt.Fprintf(&sb, "  %s#%s: %s\n", o.ModuleName, o.ClassName, strings.Join(o.Fields, ", "))
+		}
+		sb.WriteString("\n")
+	} else {
+		sb.WriteString("No orphan @FieldHint classes found\n\n")
+	}
+
 	if r.HasErrors {
-		sb.WriteString("VERIFICATION FAILED - Please resolve duplicate files/types before proceeding\n")
+		sb.WriteString("VERIFICATION FAILED - Please resolve the issues listed above before proceeding\n")
 	} else {
 		sb.WriteString("VERIFICATION PASSED - Schema is valid\n")
 	}
 
 	return sb.String()
 }
-

@@ -151,6 +151,7 @@ func TestProperty_FullChaos(t *testing.T) {
 				EnableForceReconcile: true,
 				EnableTTL:            true,
 				EnableCrashInjection: true,
+				EnableRename:         true,
 			}
 
 			h.ResetAgentState(t)
@@ -175,5 +176,57 @@ func TestProperty_FullChaos(t *testing.T) {
 
 			h.AssertAllInvariants(t, model)
 		})
+	})
+}
+
+// TestProperty_RenameViaApply exercises the rename-folded-into-OpApply
+// path in isolation. Single stack, applies only (reconcile + patch),
+// EnableRename on, no chaos ops. The generator may decide on each apply
+// whether to also rename one slot from ResourceIDs; combined with the
+// usual property template the apply models an update as label-only,
+// property-only, or both.
+//
+// This is the focused regression for RFC-0041: any rename-shaped failure
+// (duplicate NativeID, old label still in inventory, slot label drift
+// from the overlay) fires from CheckInvariants + CheckRenameInvariants
+// inside AssertAllInvariants.
+func TestProperty_RenameViaApply(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		h := NewTestHarness(t, 10*time.Second)
+		defer h.Cleanup()
+
+		rapid.Check(t, func(rt *rapid.T) {
+			config := PropertyTestConfig{
+				ResourceCount:  10,
+				OperationCount: Range{Min: 3, Max: 10},
+				StackCount:     1,
+				EnableRename:   true,
+			}
+
+			h.ResetAgentState(t)
+			model := NewStateModel(config.StackCount, config.ResourceCount)
+			h.SetupStacks(t, model, config)
+
+			ops := OperationSequenceGen(config).Draw(rt, "ops")
+			for i, op := range ops {
+				op.SequenceNum = i
+				h.ExecuteOperation(t, &op, model)
+				// Drain after every operation: with a single stack, a second
+				// apply submitted while the first is in flight is rejected by
+				// the agent's stack-overlap admission check. Rename needs the
+				// slot to already exist, i.e. exactly those later applies —
+				// serializing keeps them (and their renames) landing.
+				h.DrainPendingCommands(t, model, 30*time.Second)
+			}
+
+			h.TriggerSyncAndWait(t, model)
+			h.AssertAllInvariants(t, model)
+		})
+
+		// Whether any generated sequence exercises a rename depends on the
+		// draws (the slot must already exist when the rename-carrying apply
+		// executes), so the count is informational here. Guaranteed rename
+		// coverage lives in TestRenameViaApply_Deterministic.
+		t.Logf("TestProperty_RenameViaApply: %d renames accepted across the run", h.RenamesAccepted)
 	})
 }

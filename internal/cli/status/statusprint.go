@@ -59,12 +59,19 @@ func renderDetailedList(th *theme.Theme, cmds []apimodel.Command, width int, now
 		sb.WriteString(renderCommandHeader(th, c, width, now))
 		// Resource groups
 		sb.WriteString(statuswatch.RenderDetailTable(th, c, width, now))
+		// Generator work. The status watch TUI's group engine does not carry a
+		// generator kind, so this section is rendered here rather than inherited
+		// from RenderDetailTable.
+		sb.WriteString(renderGeneratorSection(th, c, width))
 	}
 	return sb.String()
 }
 
 // renderCommandHeader renders a single command's summary line (ID, state, type,
-// mode, duration) using the same style roles as the multi-view table.
+// mode, submitting user, duration) using the same style roles as the multi-view
+// table. The user segment is omitted entirely for a command with no
+// attribution (scheduler-originated commands never set it) rather than
+// showing an empty field — see statuswatch.UserLabel for the display rule.
 func renderCommandHeader(th *theme.Theme, c apimodel.Command, width int, now time.Time) string {
 	p := th.Palette
 
@@ -107,6 +114,9 @@ func renderCommandHeader(th *theme.Theme, c apimodel.Command, width int, now tim
 	}
 	if c.Mode != "" {
 		parts = append(parts, dimSt.Render(c.Mode))
+	}
+	if u := statuswatch.UserLabel(c); u != "" {
+		parts = append(parts, dimSt.Render(u))
 	}
 	parts = append(parts, dimSt.Render(components.FormatDuration(dur)))
 

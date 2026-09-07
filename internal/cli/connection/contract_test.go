@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -62,7 +63,18 @@ func seed(t *testing.T, active string, profiles map[string]string) string {
 			t.Fatal(err)
 		}
 	}
+	// Isolating the config directory alone is not enough. Plugin discovery reads
+	// pluginDir, which defaults to a path under the caller's home, so a test whose
+	// premise is "no auth plugin is installed" is answered by whatever the
+	// developer running it happens to have installed: it passes in CI and fails on
+	// any machine carrying the oidc plugin, for a reason unrelated to the
+	// behaviour under test.
+	empty := filepath.Join(root, "empty-plugins")
+	if err := os.MkdirAll(empty, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	for name, body := range profiles {
+		body += "\npluginDir = " + strconv.Quote(empty) + "\n"
 		if err := os.WriteFile(filepath.Join(root, "profiles", name+".pkl"), []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -185,13 +197,13 @@ func TestContractAuthFailure(t *testing.T) {
 
 	out, err := run(t, machine("resolve", "--profile", "prod")...)
 	if err == nil {
-		t.Fatalf("expected a failure without an auth plugin: %s", out)
+		t.Fatalf("expected a failure without an auth plugin: %s", redactCredentials(out))
 	}
 	if got := decode(t, out); got["code"] != "auth_failed" {
-		t.Fatalf("code: %s", out)
+		t.Fatalf("code: %s", redactCredentials(out))
 	}
 	if strings.Contains(out, "Bearer") {
-		t.Fatalf("a failure must never carry a credential: %s", out)
+		t.Fatal("a failure must never carry a credential")
 	}
 }
 

@@ -12,6 +12,13 @@ const (
 	FormaCommandSourceSynchronize         FormaCommandSource = "synchronize"
 	FormaCommandSourceDiscovery           FormaCommandSource = "discovery"
 	FormaCommandSourcePolicyAutoReconcile FormaCommandSource = "policy:auto-reconcile"
+	// FormaCommandSourceGeneratorRotation marks the resource updates a
+	// scheduled generator rotation plans. It is deliberately not
+	// FormaCommandSourceUser: the reconcile baseline is read from user-source
+	// rows, and a rotation plans only one generator's destinations, so
+	// counting it would shrink the baseline to those and leave the rest of
+	// the stack unenforced.
+	FormaCommandSourceGeneratorRotation FormaCommandSource = "generator-rotation"
 )
 
 // OperationType is the high-level operation being performed on a resource or target.
@@ -41,6 +48,14 @@ const (
 	// in-memory for an otherwise-unchanged target. It is never persisted and does
 	// not trigger discovery or cloud-side mutations.
 	OperationResolve OperationType = "resolve"
+
+	// OperationDraw is a synthetic op that draws a generator's value in
+	// memory for the destinations bound to it. Like OperationResolve it is
+	// never persisted and never reaches a provider: it exists only to
+	// produce a value the destinations in the same changeset consume. The
+	// generator's own row is created, updated or deleted by the ordinary
+	// Create/Update/Delete ops, which a draw never stands in for.
+	OperationDraw OperationType = "draw"
 )
 
 // ResourceUpdateState represents the current state of a resource update operation
@@ -94,4 +109,29 @@ const (
 	PolicyUpdateStateNotStarted PolicyUpdateState = "NotStarted"
 	PolicyUpdateStateSuccess    PolicyUpdateState = "Success"
 	PolicyUpdateStateFailed     PolicyUpdateState = "Failed"
+)
+
+// GeneratorUpdateState represents the state of a generator update.
+//
+// InProgress is required to make a generator update schedulable as an
+// ExecutionDAG node: without a state distinct from NotStarted/Success/Failed,
+// MarkInProgress and IsRunning cannot be told apart, and GetExecutableUpdates,
+// findRunningUpdate, and handleUpdateFinished all misbehave.
+//
+// Canceled is deliberately NOT included, unlike TargetUpdateState (whose
+// terminal set is Success | Failed | Canceled per isTargetInFinalState). A
+// target update reaches Canceled because the changeset executor's cancel
+// paths (changeset_executor.go's cancel/forceCancel) range over
+// data.changeset.DAG.Nodes and act only on *resource_update.ResourceUpdate
+// and *target_update.TargetUpdate. Changeset construction does put a
+// *generator_update.GeneratorUpdate in that DAG, but neither cancel path has
+// a case for it, so a generator node never reaches Canceled. Add the state if
+// and when a cancel path terminalizes generator nodes.
+type GeneratorUpdateState string
+
+const (
+	GeneratorUpdateStateNotStarted GeneratorUpdateState = "NotStarted"
+	GeneratorUpdateStateInProgress GeneratorUpdateState = "InProgress"
+	GeneratorUpdateStateSuccess    GeneratorUpdateState = "Success"
+	GeneratorUpdateStateFailed     GeneratorUpdateState = "Failed"
 )

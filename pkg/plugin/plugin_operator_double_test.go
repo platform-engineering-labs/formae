@@ -292,7 +292,7 @@ func TestFailedStatusCallNeverReissuesTheOriginalOperation(t *testing.T) {
 			scheduled := proc.scheduled()
 			require.Len(t, scheduled, 1)
 			rescheduledCheck, ok := scheduled[0].(PluginOperatorCheckStatus)
-			require.True(t, ok, "a status check that outran its deadline must reschedule a status check, got %T", scheduled[0])
+			require.True(t, ok, "a recoverably failed status check must reschedule a status check, got %T", scheduled[0])
 			assert.Nil(t, rescheduledCheck.Request, "the rescheduled check must not carry the request that would re-issue the operation")
 			assert.Equal(t, check.RequestID, rescheduledCheck.RequestID)
 			assert.Equal(t, check.NativeID, rescheduledCheck.NativeID)

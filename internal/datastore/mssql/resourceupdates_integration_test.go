@@ -243,11 +243,11 @@ func TestMSSQLResourceUpdatesProgress(t *testing.T) {
 	}
 
 	p1 := plugin.TrackedProgress{ProgressResult: resource.ProgressResult{RequestID: "req-1", StatusMessage: "step 1"}}
-	if err := ds.UpdateResourceUpdateProgress(commandID, "k-p", types.OperationCreate, resource_update.ResourceUpdateStateInProgress, now, now.Add(time.Second), p1); err != nil {
+	if err := ds.UpdateResourceUpdateProgress(commandID, "k-p", types.OperationCreate, resource_update.ResourceUpdateStateInProgress, now, now.Add(time.Second), p1, nil); err != nil {
 		t.Fatalf("UpdateResourceUpdateProgress 1: %v", err)
 	}
 	p2 := plugin.TrackedProgress{ProgressResult: resource.ProgressResult{RequestID: "req-2", StatusMessage: "step 2"}}
-	if err := ds.UpdateResourceUpdateProgress(commandID, "k-p", types.OperationCreate, resource_update.ResourceUpdateStateSuccess, now, now.Add(2*time.Second), p2); err != nil {
+	if err := ds.UpdateResourceUpdateProgress(commandID, "k-p", types.OperationCreate, resource_update.ResourceUpdateStateSuccess, now, now.Add(2*time.Second), p2, nil); err != nil {
 		t.Fatalf("UpdateResourceUpdateProgress 2: %v", err)
 	}
 
@@ -270,7 +270,7 @@ func TestMSSQLResourceUpdatesProgress(t *testing.T) {
 	}
 
 	// Progress on a missing row errors (the SELECT finds no row).
-	if err := ds.UpdateResourceUpdateProgress(commandID, "nope", types.OperationCreate, resource_update.ResourceUpdateStateSuccess, now, now, p1); err == nil {
+	if err := ds.UpdateResourceUpdateProgress(commandID, "nope", types.OperationCreate, resource_update.ResourceUpdateStateSuccess, now, now, p1, nil); err == nil {
 		t.Errorf("expected error for missing ksuid, got nil")
 	}
 }
@@ -296,16 +296,15 @@ func TestMSSQLResourceUpdatesKSUIDTriplet(t *testing.T) {
 		t.Errorf("GetKSUIDByTriplet = %q, want k1", got)
 	}
 
-	// k2's latest version is a delete, but GetKSUIDByTriplet (like
-	// postgres/sqlite) returns the latest NON-deleted version (v001 -> k2)
-	// rather than excluding the triplet entirely. The NOT-EXISTS-based Batch
-	// variant below is the one that drops it.
+	// k2's latest version is a delete: the triplet is excluded entirely, the
+	// same semantics as the Batch variant. Resolving through an older live
+	// version is how a dangling reference to a deleted resource is minted.
 	got, err = ds.GetKSUIDByTriplet("stack-a", "label-2", "AWS::EC2::Instance")
 	if err != nil {
 		t.Fatalf("GetKSUIDByTriplet(deleted): %v", err)
 	}
-	if got != "k2" {
-		t.Errorf("GetKSUIDByTriplet(deleted) = %q, want k2 (latest non-deleted)", got)
+	if got != "" {
+		t.Errorf("GetKSUIDByTriplet(deleted) = %q, want excluded (empty)", got)
 	}
 
 	// Missing triplet returns empty string, no error.

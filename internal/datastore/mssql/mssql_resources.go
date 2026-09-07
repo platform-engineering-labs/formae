@@ -603,6 +603,63 @@ func (d *DatastoreMSSQL) FindResourcesDependingOn(ksuid string) ([]*pkgmodel.Res
 	return resources, rows.Err()
 }
 
+// FindResourcesReferencingGenerator finds the live resources that bind a property
+// to the given generator through a $gen envelope. It matches
+// `"$generator":"<ksuid>"` over the nvarchar(max) data column with LIKE. Full
+// scan (same TODO as the $ref lookup). The LIKE is a prefilter kept
+// deliberately loose (it is blind to the database collation's case rules, and
+// to whether the key sits inside an envelope), and pkgmodel.BindsGenerator
+// decides which candidates are really destinations.
+func (d *DatastoreMSSQL) FindResourcesReferencingGenerator(generatorKsuid string) ([]*pkgmodel.Resource, error) {
+	ctx, span := mssqlTracer.Start(context.Background(), "FindResourcesReferencingGenerator")
+	defer span.End()
+
+	pattern := fmt.Sprintf("%%\"$generator\":\"%s\"%%", generatorKsuid)
+
+	query := fmt.Sprintf(`
+	SELECT data, ksuid
+	FROM resources r1
+	WHERE data LIKE @p1
+	AND NOT EXISTS (
+		SELECT 1
+		FROM resources r2
+		WHERE r1.uri = r2.uri
+		AND r2.version %[1]s > r1.version %[1]s
+	)
+	AND operation != @p2 AND operation != 'reaped'
+	`, binColl)
+
+	rows, err := d.conn.QueryContext(ctx, query, pattern, string(resource_update.OperationDelete))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var resources []*pkgmodel.Resource
+	for rows.Next() {
+		var jsonData, ksuidResult string
+		if err := rows.Scan(&jsonData, &ksuidResult); err != nil {
+			return nil, err
+		}
+
+		// The SQL above is only a prefilter: it is deliberately broader than
+		// the truth so no destination is missed. pkgmodel.BindsGenerator is
+		// authoritative, and drops any candidate it matched for another reason.
+		if !pkgmodel.BindsGenerator([]byte(jsonData), generatorKsuid) {
+			continue
+		}
+
+		var resource pkgmodel.Resource
+		if err := json.Unmarshal([]byte(jsonData), &resource); err != nil {
+			return nil, err
+		}
+		resource.Ksuid = ksuidResult
+		resources = append(resources, &resource)
+	}
+
+	return resources, rows.Err()
+}
+
 func (d *DatastoreMSSQL) FindResourcesDependingOnMany(ksuids []string) (map[string][]*pkgmodel.Resource, error) {
 	ctx, span := mssqlTracer.Start(context.Background(), "FindResourcesDependingOnMany")
 	defer span.End()

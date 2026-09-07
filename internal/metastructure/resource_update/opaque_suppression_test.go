@@ -57,8 +57,8 @@ func planUpdates(t *testing.T, existing, desired pkgmodel.Resource) []ResourceUp
 	t.Helper()
 	target := pkgmodel.Target{Label: "test-target", Namespace: "aws", Config: json.RawMessage(`{}`)}
 	updates, err := NewResourceUpdateForExisting(
-		resolver.ResolvableProperties{}, existing, desired,
-		target, target, pkgmodel.FormaApplyModeReconcile, FormaCommandSourceUser)
+		resolver.ResolvableProperties{}, nil, existing, desired,
+		target, target, pkgmodel.FormaApplyModeReconcile, FormaCommandSourceUser, false, false)
 	require.NoError(t, err)
 	return updates
 }

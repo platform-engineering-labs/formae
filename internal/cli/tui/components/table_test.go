@@ -166,3 +166,47 @@ func TestTable_SetThemeRebuildsHeaderAndCellStyles(t *testing.T) {
 	assert.Equal(t, testRows()[0], tbl.SelectedRow())
 	assert.Equal(t, 0, tbl.Cursor())
 }
+
+// manyRows returns n distinct rows, more than any test viewport can show.
+func manyRows(n int) [][]string {
+	rows := make([][]string, n)
+	for i := range rows {
+		id := string(rune('a' + i%26))
+		rows[i] = []string{"row-" + id, "AWS::EC2::Instance", "production", "Done"}
+	}
+	return rows
+}
+
+// TestTable_SetSizeFitsHeightBudget pins that a sized table renders exactly the
+// requested number of lines. bubbles derives the row viewport height by
+// subtracting the rendered header height, so measuring a stale header made the
+// table one line taller than its budget — and the caller trimmed that line,
+// which is the cursor's line once the table is scrolled to the bottom.
+func TestTable_SetSizeFitsHeightBudget(t *testing.T) {
+	// Size first, then fill: that is the order the inventory view uses, and the
+	// order that exposed the stale header measurement.
+	tbl := NewTable(theme.New("quiet"), testColumns())
+	tbl = tbl.SetSize(80, 12).SetRows(manyRows(40))
+	assert.Equal(t, 12, lipgloss.Height(tbl.View()))
+}
+
+// TestTable_ScrollSurvivesIdenticalSetRows pins that re-pushing unchanged rows
+// (the inventory engine re-syncs on every keypress) does not scroll the cursor
+// row off screen: reprojecting resets the wrapped viewport's offset, so an
+// unchanged data set must be a no-op.
+func TestTable_ScrollSurvivesIdenticalSetRows(t *testing.T) {
+	rows := manyRows(40)
+	tbl := NewTable(theme.New("quiet"), testColumns())
+	tbl = tbl.SetRows(rows).SetSize(80, 12)
+
+	down := tea.KeyMsg{Type: tea.KeyDown}
+	for i := 0; i < len(rows)-1; i++ {
+		tbl, _ = tbl.Update(down)
+		tbl = tbl.SetSortState(-1, SortNone).SetRows(rows).SetSize(80, 12)
+	}
+
+	assert.Equal(t, len(rows)-1, tbl.Cursor())
+	last := ansi.Strip(tbl.View())
+	assert.Contains(t, last, tbl.SelectedRow()[0],
+		"the cursor row must still be rendered after scrolling to the bottom")
+}

@@ -87,8 +87,14 @@ plugin_dep() {
 # clear PKL error, which is the right failure mode.
 AWS_DEP=$(plugin_dep "aws" "aws" false)
 AZURE_DEP=$(plugin_dep "azure" "azure" false)
+GCP_DEP=$(plugin_dep "gcp" "gcp" false)
 COMPOSE_DEP=$(plugin_dep "compose" "compose" false)
 GRAFANA_DEP=$(plugin_dep "grafana" "grafana" false)
+
+# The echo plugin lives in this repo and is never published, so it is always
+# imported from its source schema directory rather than resolved through
+# $PLUGINS_DIR. Its formae pin must unify with $FORMAE_URI above.
+OIDC_ECHO_DEP="  [\"oidcecho\"] = import(\"$FIXTURES_DIR/oidc-echo-plugin/schema/pkl/PklProject\")"
 
 # Generate PklProject. formae core is always pinned via hub URI (matches a
 # real user's setup); each plugin is resolved by plugin_dep, which picks hub
@@ -102,9 +108,11 @@ dependencies {
   ["formae"] { uri = "$FORMAE_URI" }
 ${AWS_DEP:+$AWS_DEP
 }${AZURE_DEP:+$AZURE_DEP
+}${GCP_DEP:+$GCP_DEP
 }${COMPOSE_DEP:+$COMPOSE_DEP
 }${GRAFANA_DEP:+$GRAFANA_DEP
-}}
+}$OIDC_ECHO_DEP
+}
 EOF
 
 echo "Generated $PKLPROJECT_PATH"

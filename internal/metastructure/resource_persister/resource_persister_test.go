@@ -20,6 +20,7 @@ import (
 
 	"github.com/platform-engineering-labs/formae/internal/datastore"
 	dssqlite "github.com/platform-engineering-labs/formae/internal/datastore/sqlite"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/generator_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/policy_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
@@ -74,7 +75,11 @@ func TestResourcePersister_StoresResourceUpdate(t *testing.T) {
 	})
 
 	assert.NoError(t, result.Error)
-	hash, ok := result.Response.(string)
+	hashRes, ok := result.Response.(resource_update.PersistResourceUpdateResult)
+	var hash string
+	if ok {
+		hash = hashRes.Version
+	}
 	assert.True(t, ok)
 	assert.NotEmpty(t, hash)
 
@@ -194,7 +199,11 @@ func TestResourcePersister_Create(t *testing.T) {
 	})
 
 	assert.NoError(t, result.Error)
-	hash, ok := result.Response.(string)
+	hashRes, ok := result.Response.(resource_update.PersistResourceUpdateResult)
+	var hash string
+	if ok {
+		hash = hashRes.Version
+	}
 	assert.True(t, ok)
 	assert.NotEmpty(t, hash)
 
@@ -254,7 +263,11 @@ func TestResourcePersister_Update(t *testing.T) {
 		ResourceUpdate:    initialResource,
 	})
 	assert.NoError(t, createResult.Error)
-	hash, ok := createResult.Response.(string)
+	hashRes, ok := createResult.Response.(resource_update.PersistResourceUpdateResult)
+	var hash string
+	if ok {
+		hash = hashRes.Version
+	}
 	assert.True(t, ok)
 	assert.NotEmpty(t, hash)
 
@@ -302,7 +315,11 @@ func TestResourcePersister_Update(t *testing.T) {
 	})
 
 	assert.NoError(t, updateResult.Error)
-	latestHash, ok := updateResult.Response.(string)
+	latestHashRes, ok := updateResult.Response.(resource_update.PersistResourceUpdateResult)
+	var latestHash string
+	if ok {
+		latestHash = latestHashRes.Version
+	}
 	assert.True(t, ok)
 	assert.NotEmpty(t, latestHash)
 
@@ -321,6 +338,119 @@ func TestResourcePersister_Update(t *testing.T) {
 	assert.Equal(t, "barbar", props["foo"])
 	assert.Contains(t, props, "a")
 	assert.Equal(t, []interface{}{float64(7), float64(8)}, props["a"])
+}
+
+// TestResourcePersister_RecordOnlyUpdateChangesOwnershipRecordOnly is the
+// persistence-invariant check for a record-only update: DesiredState carries
+// the exact same Properties and ReadOnlyProperties already stored, differing
+// only in OwnedMembers. This exercises processResourceUpdate's OperationUpdate
+// path directly (the seam TestResourcePersister_Update exercises) — there is
+// no unit seam inside package resource_update itself, since the executor
+// answers PersistResourceUpdate synthetically there rather than driving this
+// function.
+func TestResourcePersister_RecordOnlyUpdateChangesOwnershipRecordOnly(t *testing.T) {
+	persister, sender, ds, err := newResourcePersisterForTest(t)
+	assert.NoError(t, err)
+
+	resourceKsuid := util.NewID()
+	schema := pkgmodel.Schema{
+		Fields: []string{"Tags"},
+		Hints:  map[string]pkgmodel.FieldHint{"Tags": {UpdateMethod: pkgmodel.FieldUpdateMethodSet, CoOwned: &pkgmodel.CoOwnership{}}},
+	}
+	props := json.RawMessage(`{"Tags":["a","b"]}`)
+	readOnlyProps := json.RawMessage(`{"Arn":"arn:aws:ec2:sg/test"}`)
+
+	initialResource := resource_update.ResourceUpdate{
+		DesiredState: pkgmodel.Resource{
+			Label:              "test-resource",
+			Type:               "FakeAWS::EC2::SecurityGroup",
+			Properties:         props,
+			ReadOnlyProperties: readOnlyProps,
+			Stack:              "test-stack",
+			Ksuid:              resourceKsuid,
+			Schema:             schema,
+		},
+		ResourceTarget: pkgmodel.Target{Label: "test-target", Namespace: "test-namespace"},
+		State:          resource_update.ResourceUpdateStateSuccess,
+		StackLabel:     "test-stack",
+		ProgressResult: []plugin.TrackedProgress{
+			{
+				ProgressResult: resource.ProgressResult{
+					Operation:          resource.OperationCreate,
+					OperationStatus:    resource.OperationStatusSuccess,
+					RequestID:          "test-request-id",
+					NativeID:           "test-native-id",
+					ResourceProperties: props,
+				},
+				ResourceType: "FakeAWS::EC2::SecurityGroup",
+				StartTs:      util.TimeNow(),
+				ModifiedTs:   util.TimeNow(),
+				Attempts:     1,
+			},
+		},
+		GroupID: "test-group-id",
+	}
+
+	createResult := persister.Call(sender, resource_update.PersistResourceUpdate{
+		CommandID:         "test-command-id",
+		ResourceOperation: resource_update.OperationCreate,
+		PluginOperation:   resource.OperationCreate,
+		ResourceUpdate:    initialResource,
+	})
+	require.NoError(t, createResult.Error)
+
+	newRecord := pkgmodel.OwnedMembers{"Tags": {Rule: "Set", Members: []string{`"a"`}}}
+	recordOnlyResource := resource_update.ResourceUpdate{
+		DesiredState: pkgmodel.Resource{
+			Label:              "test-resource",
+			Type:               "FakeAWS::EC2::SecurityGroup",
+			Properties:         props,
+			ReadOnlyProperties: readOnlyProps,
+			Stack:              "test-stack",
+			Ksuid:              resourceKsuid,
+			Schema:             schema,
+			OwnedMembers:       newRecord,
+		},
+		ResourceTarget: pkgmodel.Target{Label: "test-target", Namespace: "test-namespace"},
+		State:          resource_update.ResourceUpdateStateSuccess,
+		StackLabel:     "test-stack",
+		RecordOnly:     true,
+		ProgressResult: []plugin.TrackedProgress{
+			{
+				ProgressResult: resource.ProgressResult{
+					Operation:          resource.OperationUpdate,
+					OperationStatus:    resource.OperationStatusSuccess,
+					RequestID:          "test-request-id-2",
+					NativeID:           "test-native-id",
+					ResourceProperties: props,
+				},
+				ResourceType: "FakeAWS::EC2::SecurityGroup",
+				StartTs:      util.TimeNow(),
+				ModifiedTs:   util.TimeNow(),
+				Attempts:     1,
+			},
+		},
+		GroupID: "test-group-id",
+	}
+
+	updateResult := persister.Call(sender, resource_update.PersistResourceUpdate{
+		CommandID:         "test-command-id-2",
+		ResourceOperation: resource_update.OperationUpdate,
+		PluginOperation:   resource.OperationUpdate,
+		ResourceUpdate:    recordOnlyResource,
+	})
+	require.NoError(t, updateResult.Error)
+
+	loaded, err := ds.LoadResource(pkgmodel.NewFormaeURI(resourceKsuid, ""))
+	require.NoError(t, err)
+	require.NotNil(t, loaded)
+
+	assert.JSONEq(t, string(props), string(loaded.Properties),
+		"Properties must be unchanged by a record-only update")
+	assert.JSONEq(t, string(readOnlyProps), string(loaded.ReadOnlyProperties),
+		"ReadOnlyProperties must be unchanged by a record-only update")
+	assert.True(t, pkgmodel.OwnedMembersEqual(newRecord, loaded.OwnedMembers),
+		"OwnedMembers must reflect the newly committed record")
 }
 
 func TestResourcePersister_Delete(t *testing.T) {
@@ -564,15 +694,22 @@ func TestResourcePersister_MissingRequiredFields(t *testing.T) {
 
 	// Validation should fail, returning empty hash
 	assert.NoError(t, result.Error)
-	hash, ok := result.Response.(string)
+	hashRes, ok := result.Response.(resource_update.PersistResourceUpdateResult)
+	var hash string
+	if ok {
+		hash = hashRes.Version
+	}
 	assert.True(t, ok)
 	assert.Empty(t, hash)
 
-	// Verify the resource was not loaded
+	// Verify the resource was not stored: the load is answered with a failure.
 	loadResult := persister.Call(sender, messages.LoadResource{
 		ResourceURI: resourceUpdate.URI(),
 	})
-	assert.Error(t, loadResult.Error)
+	assert.NoError(t, loadResult.Error)
+	loadRes, ok := loadResult.Response.(messages.LoadResourceResult)
+	assert.True(t, ok, "expected a typed load reply, got %T", loadResult.Response)
+	assert.NotEmpty(t, loadRes.Error, "loading the never-stored resource must be answered with a failure")
 }
 
 func TestResourcePersister_IdempotentCreate(t *testing.T) {
@@ -618,7 +755,11 @@ func TestResourcePersister_IdempotentCreate(t *testing.T) {
 		ResourceUpdate:    resourceUpdate,
 	})
 	assert.NoError(t, result1.Error)
-	hash1, ok := result1.Response.(string)
+	hash1Res, ok := result1.Response.(resource_update.PersistResourceUpdateResult)
+	var hash1 string
+	if ok {
+		hash1 = hash1Res.Version
+	}
 	assert.True(t, ok)
 	assert.NotEmpty(t, hash1)
 
@@ -629,7 +770,11 @@ func TestResourcePersister_IdempotentCreate(t *testing.T) {
 		ResourceUpdate:    resourceUpdate,
 	})
 	assert.NoError(t, result2.Error)
-	hash2, ok := result2.Response.(string)
+	hash2Res, ok := result2.Response.(resource_update.PersistResourceUpdateResult)
+	var hash2 string
+	if ok {
+		hash2 = hash2Res.Version
+	}
 	assert.True(t, ok)
 	assert.NotEmpty(t, hash2)
 
@@ -1534,14 +1679,14 @@ func syncReadUpdate(ksuid string, props, readOnlyProps json.RawMessage, matchFil
 func seedUnmanagedRow(t *testing.T, ds datastore.Datastore, ksuid string, props json.RawMessage, managed bool) {
 	t.Helper()
 	_, err := ds.StoreResource(&pkgmodel.Resource{
-		Label:    "discovered-resource",
-		Type:     "FakeAWS::EC2::Instance",
-		NativeID: "i-abc123",
+		Label:      "discovered-resource",
+		Type:       "FakeAWS::EC2::Instance",
+		NativeID:   "i-abc123",
 		Properties: props,
-		Stack:    "$unmanaged",
-		Target:   "test-target",
-		Ksuid:    ksuid,
-		Managed:  managed,
+		Stack:      "$unmanaged",
+		Target:     "test-target",
+		Ksuid:      ksuid,
+		Managed:    managed,
 	}, "seed-cmd")
 	require.NoError(t, err)
 }
@@ -1890,7 +2035,11 @@ func TestResourcePersister_ReadOfUnchangedSecretDoesNotDrift(t *testing.T) {
 		ResourceUpdate:    createUpdate,
 	})
 	require.NoError(t, createResult.Error)
-	createHash, ok := createResult.Response.(string)
+	createHashRes, ok := createResult.Response.(resource_update.PersistResourceUpdateResult)
+	var createHash string
+	if ok {
+		createHash = createHashRes.Version
+	}
 	require.True(t, ok)
 	require.NotEmpty(t, createHash)
 
@@ -1939,7 +2088,11 @@ func TestResourcePersister_ReadOfUnchangedSecretDoesNotDrift(t *testing.T) {
 		ResourceUpdate:    readUpdate,
 	})
 	require.NoError(t, readResult.Error)
-	readHash, ok := readResult.Response.(string)
+	readHashRes, ok := readResult.Response.(resource_update.PersistResourceUpdateResult)
+	var readHash string
+	if ok {
+		readHash = readHashRes.Version
+	}
 	require.True(t, ok)
 	assert.Empty(t, readHash,
 		"a read-back of an unchanged secret must not be treated as drift and re-persisted")
@@ -2060,7 +2213,10 @@ func TestResourcePersister_InlinePolicyDeleteFailsWithoutStackID(t *testing.T) {
 		},
 		StackIDMap: map[string]string{},
 	})
-	require.Error(t, result.Error, "an inline delete without a resolvable stack ID must fail")
+	require.NoError(t, result.Error, "the failed delete must be answered, not terminate the persister")
+	failedReply, ok := result.Response.(messages.PersistVersionsResult)
+	require.True(t, ok, "expected a typed persist reply, got %T", result.Response)
+	require.NotEmpty(t, failedReply.Error, "an inline delete without a resolvable stack ID must fail")
 
 	inlinePolicies, err := ds.GetInlinePoliciesForStack(stack.ID)
 	require.NoError(t, err)
@@ -2199,6 +2355,139 @@ func TestResourcePersister_DetachNotifiesAutoReconcilerWhenNoPolicyRemains(t *te
 		Message(messages.PolicyRemoved{StackLabel: stack.Label}).
 		Once().
 		Assert()
+}
+
+// createGeneratorStack creates a stack for the generator persister tests and
+// returns it with its generated ID populated.
+func createGeneratorStack(t *testing.T, ds datastore.Datastore, label string) *pkgmodel.Stack {
+	t.Helper()
+	stack := &pkgmodel.Stack{Label: label, Description: "generator persistence"}
+	_, err := ds.CreateStack(stack, "cmd-stack")
+	require.NoError(t, err)
+	require.NotEmpty(t, stack.ID)
+	return stack
+}
+
+// TestResourcePersister_CreateGenerator covers a bare create: the stack label
+// is resolved to its KSUID from StackIDMap and set on the generator with
+// SetStackID before the datastore write, exactly as the policy path does.
+func TestResourcePersister_CreateGenerator(t *testing.T) {
+	persister, sender, ds, err := newResourcePersisterForTest(t)
+	require.NoError(t, err)
+
+	stack := createGeneratorStack(t, ds, "generator-create-stack")
+
+	result := persister.Call(sender, generator_update.PersistGeneratorUpdates{
+		CommandID: "cmd-create",
+		GeneratorUpdates: []generator_update.GeneratorUpdate{
+			{
+				Operation: generator_update.GeneratorOperationCreate,
+				Generator: &pkgmodel.PasswordGenerator{
+					Label: "db-password", Stack: stack.Label,
+					Length: 24, Uppercase: true, Lowercase: true, Digits: true, RequireEachIncludedType: true,
+				},
+				StackLabel: stack.Label,
+			},
+		},
+		StackIDMap: map[string]string{stack.Label: stack.ID},
+	})
+	require.NoError(t, result.Error)
+
+	got, err := ds.GetGenerator("db-password", stack.Label)
+	require.NoError(t, err)
+	require.NotNil(t, got, "the generator must be retrievable under the resolved stack KSUID")
+	assert.Equal(t, "db-password", got.GetLabel())
+}
+
+// TestResourcePersister_CreateGeneratorFailsWithoutStackID pins that a
+// generator update whose stack label is absent from StackIDMap fails rather
+// than being written with an empty stack_id — a generator has no standalone
+// form, so there is no fallback scope to write it to.
+func TestResourcePersister_CreateGeneratorFailsWithoutStackID(t *testing.T) {
+	persister, sender, _, err := newResourcePersisterForTest(t)
+	require.NoError(t, err)
+
+	result := persister.Call(sender, generator_update.PersistGeneratorUpdates{
+		CommandID: "cmd-create",
+		GeneratorUpdates: []generator_update.GeneratorUpdate{
+			{
+				Operation:  generator_update.GeneratorOperationCreate,
+				Generator:  &pkgmodel.PasswordGenerator{Label: "db-password", Stack: "unmapped-stack", Length: 24},
+				StackLabel: "unmapped-stack",
+			},
+		},
+		StackIDMap: map[string]string{},
+	})
+	require.NoError(t, result.Error, "a failed generator write must be answered, not terminate the persister")
+	failed, ok := result.Response.(messages.PersistVersionsResult)
+	require.True(t, ok, "the caller must receive a typed reply, got %T", result.Response)
+	require.NotEmpty(t, failed.Error)
+}
+
+// TestResourcePersister_UpdateGenerator covers an in-place spec change: the
+// existing row's KSUID identity is preserved (checked via GetGenerator
+// reading back the updated spec, since the datastore's version bump is the
+// observable proxy for "the row was updated, not recreated" at this layer).
+func TestResourcePersister_UpdateGenerator(t *testing.T) {
+	persister, sender, ds, err := newResourcePersisterForTest(t)
+	require.NoError(t, err)
+
+	stack := createGeneratorStack(t, ds, "generator-update-stack")
+	_, err = ds.CreateGenerator(&pkgmodel.PasswordGenerator{
+		Label: "db-password", Stack: stack.Label, StackID: stack.ID, Length: 24,
+	}, "cmd-seed")
+	require.NoError(t, err)
+
+	result := persister.Call(sender, generator_update.PersistGeneratorUpdates{
+		CommandID: "cmd-update",
+		GeneratorUpdates: []generator_update.GeneratorUpdate{
+			{
+				Operation:  generator_update.GeneratorOperationUpdate,
+				Generator:  &pkgmodel.PasswordGenerator{Label: "db-password", Stack: stack.Label, Length: 32},
+				StackLabel: stack.Label,
+			},
+		},
+		StackIDMap: map[string]string{stack.Label: stack.ID},
+	})
+	require.NoError(t, result.Error)
+
+	got, err := ds.GetGenerator("db-password", stack.Label)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	pw, ok := got.(*pkgmodel.PasswordGenerator)
+	require.True(t, ok)
+	assert.Equal(t, 32, pw.Length, "the read-back generator must reflect the update")
+}
+
+// TestResourcePersister_DeleteGenerator covers a delete: DeleteGenerator is
+// scoped by label and stack label directly, with no StackIDMap resolution
+// needed (unlike Create/Update, which write gen.SetStackID onto the
+// generator itself).
+func TestResourcePersister_DeleteGenerator(t *testing.T) {
+	persister, sender, ds, err := newResourcePersisterForTest(t)
+	require.NoError(t, err)
+
+	stack := createGeneratorStack(t, ds, "generator-delete-stack")
+	_, err = ds.CreateGenerator(&pkgmodel.PasswordGenerator{
+		Label: "temp-secret", Stack: stack.Label, StackID: stack.ID, Length: 20,
+	}, "cmd-seed")
+	require.NoError(t, err)
+
+	result := persister.Call(sender, generator_update.PersistGeneratorUpdates{
+		CommandID: "cmd-delete",
+		GeneratorUpdates: []generator_update.GeneratorUpdate{
+			{
+				Operation:  generator_update.GeneratorOperationDelete,
+				Generator:  &pkgmodel.PasswordGenerator{Label: "temp-secret", Stack: stack.Label},
+				StackLabel: stack.Label,
+			},
+		},
+	})
+	require.NoError(t, result.Error)
+
+	got, err := ds.GetGenerator("temp-secret", stack.Label)
+	require.NoError(t, err)
+	assert.Nil(t, got, "the deleted generator must no longer be live")
 }
 
 // persistCreateForTest stores a resource through the persister the way a

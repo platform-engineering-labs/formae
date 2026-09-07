@@ -14,6 +14,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/constants"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_persister"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/generator_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
@@ -110,6 +111,11 @@ type ChangesetData struct {
 	discoveryPaused          bool     // Tracks if this changeset paused Discovery
 	stacksWithDeletes        []string // Stacks that had delete operations, captured at start
 	syncExcludedResourceURIs []string // Resource URIs registered with Synchronizer, captured at start
+	// Whether any update in this changeset finished failed. It cannot be
+	// recovered from the DAG at completion: UpdateDAG removes failed nodes
+	// exactly as it removes successful ones, so the DAG is empty either way
+	// and an empty DAG says nothing about the outcome.
+	sawFailure bool
 }
 
 type RegisterEvents struct{}
@@ -129,24 +135,33 @@ func (s *ChangesetExecutor) Init(args ...any) (statemachine.StateMachineSpec[Cha
 		statemachine.WithStateCallHandler(StateNotStarted, cancelBeforeStart),
 		statemachine.WithStateMessageHandler(StateProcessing, resourceUpdateFinished),
 		statemachine.WithStateMessageHandler(StateProcessing, targetUpdateFinished),
+		statemachine.WithStateMessageHandler(StateProcessing, generatorUpdateFinished),
 		statemachine.WithStateMessageHandler(StateProcessing, resume),
 		statemachine.WithStateCallHandler(StateProcessing, cancel),
 		statemachine.WithStateCallHandler(StateCanceling, cancelWhileCanceling),
 		statemachine.WithStateMessageHandler(StateCanceling, resourceUpdateFinished),
 		statemachine.WithStateMessageHandler(StateCanceling, targetUpdateFinished),
+		statemachine.WithStateMessageHandler(StateCanceling, generatorUpdateFinished),
 		statemachine.WithStateMessageHandler(StateCanceling, resumeWhileCanceling), // Ignore a late rate-limit Resume timer
 		statemachine.WithStateMessageHandler(StateFinishedWithError, shutdown),
 		statemachine.WithStateMessageHandler(StateFinishedSuccessfully, shutdown),
 		statemachine.WithStateMessageHandler(StateCanceled, resourceUpdateFinished),  // Ignore late messages from ResourceUpdaters
 		statemachine.WithStateMessageHandler(StateCanceled, targetUpdateFinished),    // Ignore late messages from TargetUpdaters
+		statemachine.WithStateMessageHandler(StateCanceled, generatorUpdateFinished), // Ignore late messages from GeneratorUpdaters
 		statemachine.WithStateMessageHandler(StateCanceled, ignoreStartWhenCanceled), // Ignore a Start that lost the race to a cancel-before-start
 		statemachine.WithStateMessageHandler(StateCanceled, shutdown),
 	), nil
 }
 
 func onStateChange(oldState gen.Atom, newState gen.Atom, data ChangesetData, proc gen.Process) (gen.Atom, ChangesetData, error) {
-	// Cleanup empty stacks after successful completion
-	if newState == StateFinishedSuccessfully {
+	// Cleanup empty stacks once execution is over, whether or not every update
+	// in it succeeded. Eligibility is about what the deletes actually did, not
+	// about the changeset's aggregate verdict: one delete can succeed and take
+	// the last resource out of a stack while an unrelated update fails, and
+	// that stack is just as empty either way. Gating this on success alone
+	// left the record behind. Safe to run on both, because the persister
+	// re-checks emptiness and the labels were captured at start.
+	if newState == StateFinishedSuccessfully || newState == StateFinishedWithError {
 		// Use the stacks captured at start, since the DAG is empty by now
 		proc.Log().Debug("Using pre-captured stacks for cleanup stacks=%v commandID=%s", data.stacksWithDeletes, data.changeset.CommandID)
 		if len(data.stacksWithDeletes) > 0 {
@@ -253,7 +268,12 @@ func start(from gen.PID, state gen.Atom, data ChangesetData, message Start, proc
 	// resource before the ResourceUpdater's own sync-Read runs. Without this,
 	// the sync-Read would see no diff (sync already equalised DB and cloud)
 	// and the update would proceed when it should have been rejected.
-	if changesetHasUserUpdates(data.changeset) {
+	//
+	// The gate is "does this changeset write" rather than "is this the user's
+	// changeset": the race is between a provider write and its persist, and it
+	// does not care who asked for the write. Gating it on user updates left an
+	// agent-initiated changeset registering nothing at all.
+	if changesetWritesResources(data.changeset) {
 		data.syncExcludedResourceURIs = registerAllResourcesWithSynchronizer(data.changeset.DAG, proc)
 	}
 
@@ -320,7 +340,7 @@ func resume(from gen.PID, state gen.Atom, data ChangesetData, message Resume, pr
 			finished = false
 		}
 		updates := data.changeset.GetExecutableUpdates(namespace, n)
-		err = startUpdates(updates, data.changeset.CommandID, proc)
+		err = startUpdates(updates, data.changeset.CommandID, data.changeset.Mode, proc)
 		if err != nil {
 			proc.Log().Error("Failed to start executable updates for changeset commandID=%s: %v", data.changeset.CommandID, err)
 			return StateFinishedWithError, data, nil, nil
@@ -350,10 +370,10 @@ func resume(from gen.PID, state gen.Atom, data ChangesetData, message Resume, pr
 func cancelBeforeStart(from gen.PID, state gen.Atom, data ChangesetData, message Cancel, proc gen.Process) (gen.Atom, ChangesetData, CancelResponse, []statemachine.Action, error) {
 	proc.Log().Debug("ChangesetExecutor received cancel before start commandID=%s force=%t", message.CommandID, message.Force)
 
-	_, err := proc.Call(
+	_, err := messages.UnwrapCall(proc.Call(
 		gen.ProcessID{Node: proc.Node().Name(), Name: gen.Atom("FormaCommandPersister")},
 		forma_persister.MarkCommandResourcesAsCanceled{CommandID: message.CommandID},
-	)
+	))
 	if err != nil {
 		proc.Log().Error("Failed to cancel command before start commandID=%s: %v", message.CommandID, err)
 		return state, data, CancelResponse{ErrorMessage: fmt.Sprintf("cancel-before-start persist failed: %v", err)}, nil, nil
@@ -383,11 +403,17 @@ func resumeWhileCanceling(from gen.PID, state gen.Atom, data ChangesetData, mess
 	return StateCanceling, data, nil, nil
 }
 
-// updateFinishedEvent normalizes the incoming completion message from either
-// a ResourceUpdater or TargetUpdater into a common shape for handleUpdateFinished.
+// updateFinishedEvent normalizes the incoming completion message from a
+// ResourceUpdater, TargetUpdater or GeneratorUpdater into a common shape for
+// handleUpdateFinished.
 type updateFinishedEvent struct {
 	nodeURI   pkgmodel.FormaeURI // URI to look up in the DAG
 	isSuccess bool
+	// failureReason is the operator-facing explanation the finished update
+	// reported, carried so the cascade can stamp it on the resource updates it
+	// fails. Those never run, so they have no plugin progress of their own to
+	// explain them. Empty on success and on failures that carry no reason.
+	failureReason string
 }
 
 func resourceUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, message resource_update.ResourceUpdateFinished, proc gen.Process) (gen.Atom, ChangesetData, []statemachine.Action, error) {
@@ -415,7 +441,7 @@ func targetUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, mess
 	node, exists := data.changeset.DAG.Nodes[message.NodeURI]
 	if exists {
 		if tu, ok := node.Update.(*target_update.TargetUpdate); ok && tu.Operation != target_update.TargetOperationResolve {
-			_, err := proc.Call(
+			_, err := messages.UnwrapCall(proc.Call(
 				gen.ProcessID{Name: gen.Atom("FormaCommandPersister"), Node: proc.Node().Name()},
 				messages.MarkTargetUpdateAsComplete{
 					CommandID:       data.changeset.CommandID,
@@ -424,7 +450,7 @@ func targetUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, mess
 					FinalState:      message.State,
 					ModifiedTs:      util.TimeNow(),
 				},
-			)
+			))
 			if err != nil {
 				proc.Log().Error("Failed to update target state in persister target=%s: %v", tu.Target.Label, err)
 			}
@@ -480,6 +506,60 @@ func targetUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, mess
 	return handleUpdateFinished(from, state, data, updateFinishedEvent{
 		nodeURI:   message.NodeURI,
 		isSuccess: message.State == target_update.TargetUpdateStateSuccess,
+	}, proc)
+}
+
+// generatorUpdateFinished handles a completed draw. On success it delivers the
+// drawn value to every destination bound to the generator before the draw node
+// leaves the DAG and those destinations become schedulable.
+//
+// Nothing is persisted here, unlike the target path: a draw writes no row, and
+// the drawn value must not reach one. GeneratorUpdateFinished is its only
+// carrier, this handler its only reader, and the destinations' in-memory
+// DesiredState its only destination.
+//
+// Delivery failure is routed through handleUpdateFinished's failure branch
+// rather than reported as a success, exactly as the target path does on a
+// conversion error: a destination that never received its value would
+// otherwise dispatch its $gen envelope undrawn, and marking the node failed
+// here instead would make handleUpdateFinished treat it as already-completed
+// and skip the cascade. The error is structural and names identities only;
+// message.DrawnValue is never logged.
+//
+// On failure the draw's reason travels with the event, so the destinations the
+// cascade fails carry it. They never ran and have no plugin progress of their
+// own, so without it the apply reports them failed and says nothing about why.
+func generatorUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, message generator_update.GeneratorUpdateFinished, proc gen.Process) (gen.Atom, ChangesetData, []statemachine.Action, error) {
+	if message.State == generator_update.GeneratorUpdateStateSuccess {
+		node, exists := data.changeset.DAG.Nodes[message.NodeURI]
+		if exists {
+			if gu, ok := node.Update.(*generator_update.GeneratorUpdate); ok {
+				generatorKsuid := ""
+				if gu.Generator != nil {
+					generatorKsuid = gu.Generator.GetID()
+				}
+				if err := data.changeset.DAG.propagateDrawnGeneratorValue(generatorKsuid, message.DrawnValues, message.GenerationID, data.changeset.Mode); err != nil {
+					proc.Log().Error("Failed to deliver a drawn generator value, failing its destinations node=%s: %v",
+						message.NodeURI, err)
+					// The delivery error is structural — it names the
+					// generator, the destination and the output, never a
+					// value — and it travels as the failure reason so the
+					// refusal is visible on the command's failed resources,
+					// not only in this log line.
+					return handleUpdateFinished(from, state, data, updateFinishedEvent{
+						nodeURI:       message.NodeURI,
+						isSuccess:     false,
+						failureReason: err.Error(),
+					}, proc)
+				}
+			}
+		}
+	}
+
+	return handleUpdateFinished(from, state, data, updateFinishedEvent{
+		nodeURI:       message.NodeURI,
+		isSuccess:     message.State == generator_update.GeneratorUpdateStateSuccess,
+		failureReason: message.ErrorMessage,
 	}, proc)
 }
 
@@ -555,9 +635,12 @@ func handleUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, even
 			u.State = resource_update.ResourceUpdateStateSuccess
 		case *target_update.TargetUpdate:
 			u.State = target_update.TargetUpdateStateSuccess
+		case *generator_update.GeneratorUpdate:
+			u.State = generator_update.GeneratorUpdateStateSuccess
 		}
 	} else {
 		node.Update.MarkFailed()
+		data.sawFailure = true
 	}
 
 	// Update DAG and get any cascading failures
@@ -604,22 +687,23 @@ func handleUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, even
 		now := util.TimeNow()
 
 		if len(failedResources) > 0 {
-			_, err = proc.Call(persisterPID, forma_persister.MarkResourcesAsFailed{
+			_, err = messages.UnwrapCall(proc.Call(persisterPID, forma_persister.MarkResourcesAsFailed{
 				CommandID:          data.changeset.CommandID,
 				Resources:          failedResources,
 				ResourceModifiedTs: now,
-			})
+				FailureReason:      event.failureReason,
+			}))
 			if err != nil {
 				proc.Log().Error("Failed to mark resources as failed in persister commandID=%s: %v", data.changeset.CommandID, err)
 			}
 		}
 
 		if len(failedTargets) > 0 {
-			_, err = proc.Call(persisterPID, forma_persister.MarkTargetsAsFailed{
+			_, err = messages.UnwrapCall(proc.Call(persisterPID, forma_persister.MarkTargetsAsFailed{
 				CommandID:        data.changeset.CommandID,
 				Targets:          failedTargets,
 				TargetModifiedTs: now,
-			})
+			}))
 			if err != nil {
 				proc.Log().Error("Failed to mark targets as failed in persister commandID=%s: %v", data.changeset.CommandID, err)
 			}
@@ -627,6 +711,16 @@ func handleUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, even
 	}
 
 	if data.changeset.IsComplete() {
+		// The requester is told nothing else about the outcome, and some of
+		// them retry on it. The generator rotator clears its backoff on a
+		// success and derives its cadence from the command's own state, so a
+		// changeset that failed but reported success leaves it with no
+		// backoff and no advanced cadence — it rotates again on the next
+		// sweep, and every sweep after that.
+		if data.sawFailure {
+			proc.Log().Debug("Changeset execution finished with failures for command commandID=%s", data.changeset.CommandID)
+			return StateFinishedWithError, data, nil, nil
+		}
 		proc.Log().Debug("Changeset execution finished for command commandID=%s", data.changeset.CommandID)
 		return StateFinishedSuccessfully, data, nil, nil
 	}
@@ -634,26 +728,36 @@ func handleUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, even
 	return resume(from, state, data, Resume{}, proc)
 }
 
-func startUpdates(updates []Update, commandID string, proc gen.Process) error {
+func startUpdates(updates []Update, commandID string, mode pkgmodel.FormaApplyMode, proc gen.Process) error {
 	for _, update := range updates {
 		switch u := update.(type) {
 		case *resource_update.ResourceUpdate:
-			if err := startResourceUpdate(u, commandID, proc); err != nil {
+			if err := startResourceUpdate(u, commandID, mode, proc); err != nil {
 				return err
 			}
 		case *target_update.TargetUpdate:
 			if err := startTargetUpdate(u, commandID, proc); err != nil {
 				return err
 			}
+		case *generator_update.GeneratorUpdate:
+			if err := startGeneratorUpdate(u, commandID, proc); err != nil {
+				return err
+			}
 		default:
-			proc.Log().Error("Unknown update type in startUpdates uri=%v", update.NodeURI())
+			// GetExecutableUpdates has already marked this update in progress,
+			// so dropping it here would leave a node nothing ever finishes and
+			// every dependent blocked behind it — the changeset would never
+			// reach a terminal state. Fail the changeset instead: an update
+			// kind the executor cannot start is a wiring error, and a
+			// diagnosable failure beats a hang.
+			return fmt.Errorf("changeset contains an update this executor cannot start: %s", update.NodeURI())
 		}
 	}
 
 	return nil
 }
 
-func startResourceUpdate(ru *resource_update.ResourceUpdate, commandID string, proc gen.Process) error {
+func startResourceUpdate(ru *resource_update.ResourceUpdate, commandID string, mode pkgmodel.FormaApplyMode, proc gen.Process) error {
 	proc.Log().Debug("Starting resource updater uri=%v operation=%s", ru.URI(), ru.Operation)
 
 	// Sync exclusion is handled in bulk by registerAllResourcesWithSynchronizer
@@ -678,6 +782,7 @@ func startResourceUpdate(ru *resource_update.ResourceUpdate, commandID string, p
 		resource_update.StartResourceUpdate{
 			ResourceUpdate: *ru,
 			CommandID:      commandID,
+			Mode:           mode,
 		})
 	if err != nil {
 		proc.Log().Error("Failed to send start message to resource updater: %v", err)
@@ -712,6 +817,44 @@ func startTargetUpdate(tu *target_update.TargetUpdate, commandID string, proc ge
 		})
 	if err != nil {
 		proc.Log().Error("Failed to send start message to target updater: %v", err)
+		return err
+	}
+
+	return nil
+}
+
+// startGeneratorUpdate spawns a GeneratorUpdater and hands it the draw.
+//
+// The actor is named by the draw's node URI rather than the generator's label:
+// a label is unique only within its stack, and one command may draw for the
+// same label in two stacks (see actornames.GeneratorUpdater).
+//
+// No apply mode is passed, unlike startResourceUpdate: a draw calls no
+// provider and derives no patch, so nothing about it depends on the mode. The
+// mode matters where the drawn value LANDS, which is the destination's patch
+// regeneration in propagateDrawnGeneratorValue.
+func startGeneratorUpdate(gu *generator_update.GeneratorUpdate, commandID string, proc gen.Process) error {
+	proc.Log().Debug("Starting generator updater node=%s", gu.NodeURI())
+
+	// Spawn the GeneratorUpdater as a direct child of this ChangesetExecutor
+	// with LinkParent, for the same reason the other two updaters are: when
+	// the executor terminates the child receives an exit signal and terminates
+	// too, and the link is unidirectional so a crashing updater does not kill
+	// the executor.
+	name := actornames.GeneratorUpdater(gu.NodeURI(), commandID)
+	_, err := proc.SpawnRegister(name, generator_update.NewGeneratorUpdater, gen.ProcessOptions{LinkParent: true}, proc.PID())
+	if err != nil && err != gen.ErrTaken {
+		proc.Log().Error("Failed to spawn generator updater: %v", err)
+		return err
+	}
+
+	err = proc.Send(gen.ProcessID{Name: name, Node: proc.Node().Name()},
+		generator_update.StartGeneratorUpdate{
+			GeneratorUpdate: *gu,
+			CommandID:       commandID,
+		})
+	if err != nil {
+		proc.Log().Error("Failed to send start message to generator updater: %v", err)
 		return err
 	}
 
@@ -759,13 +902,13 @@ func cancel(from gen.PID, state gen.Atom, data ChangesetData, message Cancel, pr
 
 	// Mark NotStarted resources as canceled
 	if len(resourcesToCancel) > 0 {
-		_, err := proc.Call(
+		_, err := messages.UnwrapCall(proc.Call(
 			gen.ProcessID{Node: proc.Node().Name(), Name: gen.Atom("FormaCommandPersister")},
 			forma_persister.MarkResourcesAsCanceled{
 				CommandID: data.changeset.CommandID,
 				Resources: resourcesToCancel,
 			},
-		)
+		))
 		if err != nil {
 			proc.Log().Error("Failed to mark resources as canceled commandID=%s: %v", data.changeset.CommandID, err)
 		}
@@ -844,14 +987,14 @@ func forceCancel(state gen.Atom, data ChangesetData, message Cancel, proc gen.Pr
 
 	// Persist FIRST. BulkForceCancel terminalizes all in-flight resource and target
 	// updates and recomputes the command's derived state to terminal Canceled at commit.
-	result, err := proc.Call(
+	result, err := messages.UnwrapCall(proc.Call(
 		gen.ProcessID{Node: proc.Node().Name(), Name: gen.Atom("FormaCommandPersister")},
 		forma_persister.BulkForceCancel{
 			CommandID: data.changeset.CommandID,
 			Resources: resourcesToCancel,
 			Targets:   targetsToCancel,
 		},
-	)
+	))
 	if err != nil {
 		// Persist-before-terminate: on persister error, terminate NO actors and stay
 		// in the current state. The durable DB state is still non-terminal; the user
@@ -951,6 +1094,37 @@ func targetUpdateRecoveredReaped(tu *target_update.TargetUpdate) bool {
 
 // changesetHasUserUpdates checks if the changeset contains any updates from user operations.
 // Returns true if at least one update has Source == FormaCommandSourceUser.
+// changesetWritesResources reports whether the changeset will write any
+// resource through a provider.
+//
+// Sync and discovery only read, and excluding a resource from sync on behalf
+// of a sync changeset would be circular. Every other source writes, so every
+// other source needs its resources held out of a concurrent sync cycle for the
+// duration.
+//
+// The case that made this necessary is a generator rotation. A rotation runs
+// in reconcile mode, so it re-baselines the drift window each time it
+// succeeds. A sync landing between a rotation's provider write and its own
+// persist records the just-written value as out-of-band drift, in patch mode,
+// which does not re-baseline. From then on the drift window is permanently
+// non-empty, so refuseRotationOnDrift refuses every later rotation, and since
+// the rotation is itself the reconcile that would have cleared the window
+// nothing recovers it. The credential silently stops rotating.
+func changesetWritesResources(changeset Changeset) bool {
+	for _, node := range changeset.DAG.Nodes {
+		ru, ok := node.Update.(*resource_update.ResourceUpdate)
+		if !ok {
+			continue
+		}
+		if ru.Source == resource_update.FormaCommandSourceSynchronize ||
+			ru.Source == resource_update.FormaCommandSourceDiscovery {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 func changesetHasUserUpdates(changeset Changeset) bool {
 	for _, node := range changeset.DAG.Nodes {
 		if ru, ok := node.Update.(*resource_update.ResourceUpdate); ok {

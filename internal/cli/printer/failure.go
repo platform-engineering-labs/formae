@@ -49,6 +49,75 @@ const (
 	// consumer parses one protocol on every path; PrintFailure only reports
 	// that it did not recognise them.
 	CodeInternal Code = "internal"
+	// CodeHostedRequired: connect ran against a classic profile; only a hosted
+	// installation can be connected to a cloud account.
+	CodeHostedRequired Code = "hosted_required"
+	// CodeAccountMismatch: the stated account is not the one the credentials
+	// (or the role ARN) belong to. Refused before any IAM call.
+	CodeAccountMismatch Code = "account_mismatch"
+	// CodeSSOLoginRequired: the shared-config profile's SSO token is expired;
+	// details carry the exact `aws sso login --profile <p>` command.
+	CodeSSOLoginRequired Code = "sso_login_required"
+	// CodeProvisionFailed: provisioning stopped partway; the message states
+	// what stands, because re-running converges.
+	CodeProvisionFailed Code = "provision_failed"
+	// CodeRoleCollision: the role exists and is not provx-owned for this
+	// subject; never treated as repairable drift.
+	CodeRoleCollision Code = "role_collision"
+	// CodeProviderConflict: the OIDC provider exists with an unexpected shape.
+	CodeProviderConflict Code = "provider_conflict"
+	// CodeRegistrationConflict: a different role ARN is already registered for
+	// this account on this installation.
+	CodeRegistrationConflict Code = "registration_conflict"
+	// CodeNotAuthorized: the caller lacks the access this operation needs on
+	// this installation. Provisioning uses it for a 403 meaning the caller is
+	// not an admin; listing uses it both for a 403 meaning a member's tenant
+	// grant excludes this installation, and for a 404 meaning the
+	// installation is not visible to the caller at all. Terminal, not
+	// retried.
+	CodeNotAuthorized Code = "not_authorized"
+	// CodeUnsupportedPartition: a non-commercial region, ARN, or STS caller.
+	CodeUnsupportedPartition Code = "unsupported_partition"
+	// CodeControlPlaneTooOld: the installation is listed but the setup
+	// endpoint 404s, so the control plane predates connect.
+	CodeControlPlaneTooOld Code = "control_plane_too_old"
+	// CodeInstallationNotReady: the installation has not applied the
+	// split-key template version yet, or is destroying.
+	CodeInstallationNotReady Code = "installation_not_ready"
+	// CodeGcloudMissing: the local path needs the gcloud CLI to obtain
+	// credentials and it is not on PATH. Its own code because the remedy is a
+	// specific install step and a consumer names it.
+	CodeGcloudMissing Code = "gcloud_missing"
+	// CodeAzMissing: no usable Azure credentials were found, and the az CLI -
+	// one of DefaultAzureCredential's chained sources, and the one the
+	// reported login command needs - is not on PATH. Its own code, distinct
+	// from credentials_required, because the remedy is an install step, not a
+	// sign-in: running the reported `az login` against a missing binary would
+	// just fail with "command not found".
+	CodeAzMissing Code = "az_missing"
+	// CodeCredentialsRequired: no usable cloud credentials, in a run that may
+	// not prompt (--no-input, or machine output). Details carry the exact
+	// command to run (GCP: gcloud auth application-default login; Azure: az
+	// login).
+	CodeCredentialsRequired Code = "credentials_required"
+	// CodeProjectUnreachable: the stated project or subscription could not be
+	// read with these credentials — it does not exist, or this principal
+	// cannot see it. Deliberately distinct from a credential problem: signing
+	// in again returns the same principal and would overwrite deliberately
+	// configured credentials.
+	CodeProjectUnreachable Code = "project_unreachable"
+	// CodeApiDisabled: a cloud API or resource provider the connection needs
+	// is not enabled/registered on the project or subscription. Details name
+	// it, because the remedy is one command and formae does not enable it
+	// uninvited.
+	CodeApiDisabled Code = "api_disabled"
+	// CodeOrphanedTrust: provisioning succeeded and registration did not, so
+	// the cloud side now grants access to an installation the control plane
+	// does not know about. Its own code, not a wrapped generic failure: a
+	// machine consumer needs the surviving coordinates (details name what was
+	// created) to finish the job itself, not an internal-error code it cannot
+	// act on. There is no rollback; re-running converges.
+	CodeOrphanedTrust Code = "orphaned_trust"
 )
 
 // registeredCodes is what may reach the wire. A code absent from here is a
@@ -62,6 +131,25 @@ var registeredCodes = map[Code]bool{
 	CodePluginMissing:    true,
 	CodeSyncIncomplete:   true,
 	CodeInternal:         true,
+
+	CodeHostedRequired:       true,
+	CodeAccountMismatch:      true,
+	CodeSSOLoginRequired:     true,
+	CodeProvisionFailed:      true,
+	CodeRoleCollision:        true,
+	CodeProviderConflict:     true,
+	CodeRegistrationConflict: true,
+	CodeNotAuthorized:        true,
+	CodeUnsupportedPartition: true,
+	CodeControlPlaneTooOld:   true,
+	CodeInstallationNotReady: true,
+
+	CodeGcloudMissing:       true,
+	CodeAzMissing:           true,
+	CodeCredentialsRequired: true,
+	CodeProjectUnreachable:  true,
+	CodeApiDisabled:         true,
+	CodeOrphanedTrust:       true,
 }
 
 // Failure is an error a command declares, carrying a code a machine consumer

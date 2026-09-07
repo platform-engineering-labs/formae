@@ -134,10 +134,21 @@ add_untested_package() {
   fixture_commit "$repo" "change $pkg"
 }
 
+# add_base_package <repo> <pkg>: adds a Go source file in <pkg> and folds it
+# into origin/main, so the package is in the tree the script runs over but out
+# of the diff the script reads. Moving origin/main takes every commit made so
+# far with it, so this comes before the changed packages a test wants in view.
+add_base_package() {
+  local repo="$1" pkg="$2"
+  add_untested_package "$repo" "$pkg"
+  git -C "$repo" update-ref refs/remotes/origin/main HEAD
+}
+
 # stub_gremlins <bin_dir> <body>: installs an executable `gremlins` in
 # <bin_dir> that runs <body> instead of the real tool. The body sees gremlins'
-# own arguments plus $report_path, the value passed to gremlins' -o flag, and
-# $target, the ./package argument, so a stub can behave differently per package.
+# own arguments plus $report_path, the value passed to gremlins' -o flag,
+# $target, the ./package argument, and $exclude_files, the value passed to
+# gremlins' --exclude-files flag, so a stub can behave differently per package.
 stub_gremlins() {
   local bin_dir="$1" body="$2"
   mkdir -p "$bin_dir"
@@ -145,9 +156,11 @@ stub_gremlins() {
     printf '#!/usr/bin/env bash\n'
     printf 'report_path=""\n'
     printf 'target=""\n'
+    printf 'exclude_files=""\n'
     printf 'while [[ $# -gt 0 ]]; do\n'
     printf '  case "$1" in\n'
     printf '    -o) report_path="$2"; shift 2 ;;\n'
+    printf '    --exclude-files) exclude_files="$2"; shift 2 ;;\n'
     printf '    ./*) target="$1"; shift ;;\n'
     printf '    *) shift ;;\n'
     printf '  esac\n'
@@ -225,6 +238,33 @@ esac
 printf '%s' '$report' > \"\$report_path\"
 exit 0"
   stub_gremlins "$bin_dir" "$body"
+}
+
+# stub_gremlins_walking <bin_dir>: installs a stub that emulates gremlins' file
+# selection — it walks the whole directory subtree below the target, drops every
+# walked path matching the --exclude-files regex it was given, names what is
+# left on stdout and writes a report carrying one killed mutant per named file.
+# The report names the files the stub selected, so it builds its own body rather
+# than taking one from mutation_report. The emulation goes as far as a single
+# pattern that means the same thing to grep as it does to the tool's own regex
+# engine, which is what the script passes and all this needs to tell apart.
+stub_gremlins_walking() {
+  local bin_dir="$1"
+  stub_gremlins "$bin_dir" '
+walked=$(cd "$target" && find . -name "*.go" ! -name "*_test.go" -printf "%P\n" | sort)
+if [[ -n "$exclude_files" ]]; then
+  walked=$(grep -Ev "$exclude_files" <<< "$walked" || true)
+fi
+entries=""
+separator=""
+while IFS= read -r file; do
+  [[ -n "$file" ]] || continue
+  echo "mutating $file"
+  entries+="$separator{\"file_name\": \"$file\", \"mutations\": [{\"status\": \"KILLED\"}]}"
+  separator=", "
+done <<< "$walked"
+printf "{\"files\": [%s]}" "$entries" > "$report_path"
+exit 0'
 }
 
 # run_script <repo> <bin_dir> [summary_file]: runs the script under test inside
@@ -308,13 +348,14 @@ run_script_signalled() {
   script_output=$(cat "$out_file")
 }
 
-# classify_report_with_path <path> <report>: writes <report> to a throwaway
-# file and puts classify_result's verdict for it in $classify_output, with
-# $PATH set to <path> for the classification. Pass the literal ABSENT for a
-# report gremlins never wrote. The script is sourced in a subshell, so its own
-# definitions cannot leak into the test run.
+# classify_report_with_path <path> <report> [exit-status]: writes <report> to a
+# throwaway file and puts classify_result's verdict for it in $classify_output,
+# with $PATH set to <path> for the classification. Pass the literal ABSENT for a
+# report gremlins never wrote, and <exit-status> for a run that ended with
+# anything other than the 0 assumed here. The script is sourced in a subshell,
+# so its own definitions cannot leak into the test run.
 classify_report_with_path() {
-  local path="$1" report="$2" report_file
+  local path="$1" report="$2" exit_status="${3:-0}" report_file
   report_file="$(new_workdir)/report.json"
   if [[ "$report" != "ABSENT" ]]; then
     printf '%s' "$report" > "$report_file"
@@ -324,13 +365,14 @@ classify_report_with_path() {
   classify_output=$(
     PATH="$path"
     source "$SCRIPT_UNDER_TEST"
-    classify_result "$report_file"
+    classify_result "$report_file" "$exit_status"
   ) || true
 }
 
-# classify_report <report>: classify_report_with_path on the test's own PATH.
+# classify_report <report> [exit-status]: classify_report_with_path on the
+# test's own PATH.
 classify_report() {
-  classify_report_with_path "$PATH" "$1"
+  classify_report_with_path "$PATH" "$@"
 }
 
 # ── 3. Tests ────────────────────────────────────────────────────────────────
@@ -353,6 +395,28 @@ test_exit_zero_without_report_is_a_failure() {
   assert_status_nonzero "the script fails when a package produced no result"
 }
 
+# A gremlins that dies leaves no report either, but it exits non-zero doing it.
+# The row names the status, so a run that died is not read as a cancelled one.
+test_a_non_zero_exit_without_a_report_names_the_status() {
+  local work repo bin
+  work=$(new_workdir)
+  repo="$work/repo"
+  bin="$work/bin"
+
+  make_fixture_repo "$repo"
+  add_changed_package "$repo" "example/pkg"
+  stub_gremlins "$bin" 'echo "Gathering coverage"; exit 2'
+
+  run_script "$repo" "$bin"
+
+  assert_output_matches \
+    '\| `example/pkg` \| failed \| gremlins exited 2 without a report \|' \
+    "the package row names the exit status"
+  assert_output_matches 'gremlins exit status: 2' \
+    "the exit status is recorded in the step log"
+  assert_status_nonzero "a run that produced no report fails the run"
+}
+
 # A completed run is reported with its score whatever gremlins exited with.
 test_a_report_with_a_zero_exit_is_ok() {
   local work repo bin
@@ -369,6 +433,37 @@ test_a_report_with_a_zero_exit_is_ok() {
   assert_output_matches '\| `example/pkg` \| ok \| - \| 66\.7% \| 2 \| 1 \| 0 \|' \
     "the package row carries the score"
   assert_status 0 "a completed run passes"
+}
+
+# A changed package that is its own module root (it holds a go.mod) is invoked
+# on itself: gremlins runs in that directory targeting the directory, not a
+# path re-rooted below it.
+test_a_module_root_package_is_invoked_on_itself() {
+  local work repo bin invocation
+  work=$(new_workdir)
+  repo="$work/repo"
+  bin="$work/bin"
+  invocation="$work/invocation"
+
+  make_fixture_repo "$repo"
+  add_changed_package "$repo" "pkg/plugin"
+  printf 'module example/plugin\n\ngo 1.26\n' > "$repo/pkg/plugin/go.mod"
+  fixture_commit "$repo" "make pkg/plugin its own module"
+
+  stub_gremlins "$bin" "pwd > '$invocation'; echo \"\$target\" >> '$invocation'
+printf '%s' '$(mutation_report KILLED)' > \"\$report_path\"; exit 0"
+
+  run_script "$repo" "$bin"
+
+  assert_status 0 "a module-root package produces a usable result"
+  assert_output_matches '\| `pkg/plugin` \| ok \|' \
+    "the module-root package row is ok"
+  if [[ "$(sed -n 1p "$invocation" 2>/dev/null)" != "$repo/pkg/plugin" ]]; then
+    fail "gremlins did not run in the package's own module root (got '$(sed -n 1p "$invocation" 2>/dev/null)')"
+  fi
+  if [[ "$(sed -n 2p "$invocation" 2>/dev/null)" != "./." ]]; then
+    fail "gremlins was not invoked on the module root itself (got '$(sed -n 2p "$invocation" 2>/dev/null)')"
+  fi
 }
 
 # Surviving mutants make gremlins exit non-zero: advisory content, not a crash.
@@ -407,6 +502,32 @@ test_an_unknown_non_zero_exit_with_a_report_is_ok() {
   assert_output_matches 'gremlins exit status: 42' \
     "the exit status is recorded in the step log"
   assert_status 0 "an unknown exit status alone does not fail the run"
+}
+
+# gremlins prints the coverage run's own output when coverage fails, so a unit
+# test that panics puts panic text in gremlins' output without gremlins having
+# died. The output is never read for a verdict: a run that wrote a report is a
+# result whatever it printed and whatever it exited with.
+test_panic_text_beside_a_report_is_still_ok() {
+  local work repo bin
+  work=$(new_workdir)
+  repo="$work/repo"
+  bin="$work/bin"
+
+  make_fixture_repo "$repo"
+  add_changed_package "$repo" "example/pkg"
+  stub_gremlins "$bin" "echo 'panic: send on closed channel'
+echo 'goroutine 1 [running]:'
+printf '%s' '$(mutation_report KILLED)' > \"\$report_path\"
+exit 1"
+
+  run_script "$repo" "$bin"
+
+  assert_output_matches '\| `example/pkg` \| ok \| - \| 100\.0% \| 1 \| 0 \| 0 \|' \
+    "a panicking test does not cost the package its result"
+  assert_output_matches 'panic: send on closed channel' \
+    "the panic text is still there for a reader to find"
+  assert_status 0 "panic text in the output does not fail the run"
 }
 
 # A package with no mutants is the only legitimate source of an n/a score.
@@ -562,10 +683,12 @@ test_a_report_that_is_not_a_gremlins_report_fails_the_package() {
   assert_status_nonzero "an unusable report fails the run"
 }
 
-# With no report it is the presence of the tool, not the exit status of the run,
-# that names the reason: a gremlins that ran and wrote nothing produced no
-# output, and one that is not installed at all is named.
-test_a_missing_report_is_named_from_the_tool_on_path() {
+# With no report the tool on PATH is checked before the exit status, because a
+# gremlins that is not installed leaves the shell exiting 127 and that status
+# says nothing about a run that never happened. An installed gremlins is named
+# from its status: 0 is the shape of a cancelled run, non-zero one that ended
+# before it could write.
+test_a_missing_report_is_named_from_the_tool_and_the_exit_status() {
   local work bin
   work=$(new_workdir)
   bin="$work/bin"
@@ -575,9 +698,17 @@ test_a_missing_report_is_named_from_the_tool_on_path() {
   assert_classification "failed|no output|n/a|0|0|0" \
     "a gremlins that wrote nothing is a failure"
 
+  classify_report_with_path "$bin" ABSENT 2
+  assert_classification "failed|gremlins exited 2 without a report|n/a|0|0|0" \
+    "a gremlins that ended without writing is named by its status"
+
   classify_report_with_path "" ABSENT
   assert_classification "failed|gremlins not found|n/a|0|0|0" \
     "an uninstalled gremlins is named"
+
+  classify_report_with_path "" ABSENT 127
+  assert_classification "failed|gremlins not found|n/a|0|0|0" \
+    "an uninstalled gremlins is named whatever status the shell left behind"
 }
 
 # A report the script cannot read for want of an interpreter is a broken
@@ -697,6 +828,52 @@ test_packages_without_unit_tests_are_a_no_op() {
   assert_output_count '^## Mutation Testing' 0 \
     "a no-op run prints no table"
   assert_status 0 "a package with no unit tests passes"
+}
+
+# The filter is what puts a package in front of gremlins, so a package carrying
+# its own unit-tagged test has to come out of it and be run.
+test_a_package_with_its_own_unit_tests_is_selected() {
+  local work repo bin
+  work=$(new_workdir)
+  repo="$work/repo"
+  bin="$work/bin"
+
+  make_fixture_repo "$repo"
+  add_changed_package "$repo" "example/pkg"
+  stub_gremlins_writing "$bin" 0 "$(mutation_report KILLED)"
+
+  run_script "$repo" "$bin"
+
+  assert_output_matches '^Packages to test: example/pkg$' \
+    "the package with its own unit-tagged test is selected"
+  assert_output_matches '\| `example/pkg` \| ok \| - \| 100\.0% \| 1 \| 0 \| 0 \|' \
+    "the selected package is run and reported"
+  assert_status 0 "a package with its own unit tests passes"
+}
+
+# The unit-tagged tests that make a package mutable are the ones beside its own
+# source: a sub-package's tests run its code, not its parent's, so they must not
+# put the parent in front of gremlins.
+test_a_sub_packages_unit_tests_do_not_select_its_parent() {
+  local work repo bin
+  work=$(new_workdir)
+  repo="$work/repo"
+  bin="$work/bin"
+
+  make_fixture_repo "$repo"
+  add_untested_package "$repo" "example/pkg"
+  add_changed_package "$repo" "example/pkg/sub"
+  stub_gremlins_writing "$bin" 0 "$(mutation_report KILLED)"
+
+  run_script "$repo" "$bin"
+
+  assert_output_matches '^Packages to test: example/pkg/sub$' \
+    "only the package with its own unit-tagged test is selected"
+  assert_output_count '^\| `example/pkg` \|' 0 \
+    "the parent package is not run"
+  assert_output_matches '\| `example/pkg/sub` \| ok \| - \| 100\.0% \| 1 \| 0 \| 0 \|' \
+    "the sub-package is still run"
+  assert_status 0 "a parent package left unrun does not fail the run"
 }
 
 # A run with nothing to mutate has no table for the job summary to take, so it
@@ -864,6 +1041,32 @@ test_an_interrupted_package_is_annotated_and_its_output_kept() {
   assert_interrupted_by TERM 143
 }
 
+# gremlins walks the whole directory subtree below the package it is invoked on,
+# so a package that has sub-packages under it would be charged with mutants from
+# code the run was never asked about. The run has to cover the invoked package's
+# own files and nothing below them.
+test_only_the_invoked_package_is_mutated() {
+  local work repo bin
+  work=$(new_workdir)
+  repo="$work/repo"
+  bin="$work/bin"
+
+  make_fixture_repo "$repo"
+  add_base_package "$repo" "example/pkg/sub"
+  add_changed_package "$repo" "example/pkg"
+  stub_gremlins_walking "$bin"
+
+  run_script "$repo" "$bin"
+
+  assert_output_matches '^mutating code\.go$' \
+    "the invoked package's own file is mutated"
+  assert_output_count '^mutating sub/code\.go$' 0 \
+    "the sub-package's file is not mutated"
+  assert_output_matches '\| `example/pkg` \| ok \| - \| 100\.0% \| 1 \| 0 \| 0 \|' \
+    "the report counts one mutant, from the one file that was selected"
+  assert_status 0 "a run confined to the invoked package passes"
+}
+
 # ── 4. Runner ───────────────────────────────────────────────────────────────
 run_test() {
   local test_name="$1"
@@ -882,9 +1085,12 @@ run_test() {
 
 main() {
   run_test test_exit_zero_without_report_is_a_failure
+  run_test test_a_non_zero_exit_without_a_report_names_the_status
   run_test test_a_report_with_a_zero_exit_is_ok
+  run_test test_a_module_root_package_is_invoked_on_itself
   run_test test_surviving_mutants_are_not_a_failure
   run_test test_an_unknown_non_zero_exit_with_a_report_is_ok
+  run_test test_panic_text_beside_a_report_is_still_ok
   run_test test_a_zero_mutant_report_is_ok_without_a_score
   run_test test_a_report_with_no_scored_mutants_says_why_it_has_no_score
   run_test test_an_n_a_score_always_names_its_cause
@@ -893,19 +1099,22 @@ main() {
   run_test test_a_missing_gremlins_is_reported_by_name
   run_test test_invalid_reports_are_classified_as_invalid_output
   run_test test_a_report_that_is_not_a_gremlins_report_fails_the_package
-  run_test test_a_missing_report_is_named_from_the_tool_on_path
+  run_test test_a_missing_report_is_named_from_the_tool_and_the_exit_status
   run_test test_a_missing_interpreter_is_reported_by_name
   run_test test_every_package_runs_when_the_first_one_fails
   run_test test_two_failures_produce_two_rows
   run_test test_colliding_package_paths_do_not_share_a_report
   run_test test_no_changed_go_files_is_a_no_op
   run_test test_packages_without_unit_tests_are_a_no_op
+  run_test test_a_package_with_its_own_unit_tests_is_selected
+  run_test test_a_sub_packages_unit_tests_do_not_select_its_parent
   run_test test_a_no_op_run_reports_no_job_summary
   run_test test_a_failing_summary_write_fails_the_run
   run_test test_a_summary_write_that_fails_part_way_keeps_the_whole_table
   run_test test_a_written_summary_is_not_repeated_in_the_step_log
   run_test test_the_table_is_printed_once
   run_test test_an_interrupted_package_is_annotated_and_its_output_kept
+  run_test test_only_the_invoked_package_is_mutated
 
   echo ""
   if [[ "$tests_failed" -gt 0 ]]; then

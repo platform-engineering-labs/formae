@@ -15,5 +15,5 @@ import "../formae.pkl"
 open class Consumer extends formae.Resource {
   
   @formae.FieldHint
-  value: Dynamic|String|formae.Value|formae.Resolvable
+  value: Dynamic|String|formae.Value|formae.Resolvable|formae.GeneratorOutput
 }

@@ -205,26 +205,45 @@ func SetupPlugin(ctx context.Context, p plugin.ResourcePlugin, config RunConfig)
 		return nil, fmt.Errorf("failed to wrap plugin: %w", err)
 	}
 
-	// 8. Configure observability if the wrapped plugin supports it
+	// 8. Apply the post-wrap configuration every setup path shares
+	if err := configureWrapped(wrapped, manifest); err != nil {
+		return nil, err
+	}
+
+	return wrapped, nil
+}
+
+// configureWrapped applies the configuration every setup path shares once the
+// plugin is wrapped: observability, the OIDC token source, and plugin-specific
+// settings from the environment.
+func configureWrapped(wrapped plugin.FullResourcePlugin, manifest *plugin.Manifest) error {
+	// Configure observability if the wrapped plugin supports it
 	if obs, ok := wrapped.(plugin.ObservablePlugin); ok {
 		logger := setupPluginLogger(manifest.Namespace)
 		obs.SetObservability(logger, nil) // Metrics can be added later
 	}
 
-	// 9. Configure plugin-specific settings if the plugin supports it
+	// Install the OIDC token source if the wrapped plugin supports it. One
+	// source serves every operation: it resolves the paired broker from the
+	// context of the call it is made from.
+	if aware, ok := wrapped.(plugin.OidcAware); ok {
+		aware.SetOidcTokenSource(plugin.NewOidcTokenSource())
+	}
+
+	// Configure plugin-specific settings if the plugin supports it
 	if cfg, ok := wrapped.(plugin.Configurable); ok {
 		if pluginConfigB64 := os.Getenv("FORMAE_PLUGIN_CONFIG"); pluginConfigB64 != "" {
 			pluginConfigJSON, err := base64.StdEncoding.DecodeString(pluginConfigB64)
 			if err != nil {
-				return nil, fmt.Errorf("failed to decode FORMAE_PLUGIN_CONFIG: %w", err)
+				return fmt.Errorf("failed to decode FORMAE_PLUGIN_CONFIG: %w", err)
 			}
 			if err := cfg.Configure(pluginConfigJSON); err != nil {
-				return nil, fmt.Errorf("plugin configuration failed: %w", err)
+				return fmt.Errorf("plugin configuration failed: %w", err)
 			}
 		}
 	}
 
-	return wrapped, nil
+	return nil
 }
 
 // getPluginDir returns the directory containing the running plugin binary.
@@ -292,23 +311,9 @@ func SetupPluginFromDir(ctx context.Context, p plugin.ResourcePlugin, pluginDir 
 		return nil, fmt.Errorf("failed to wrap plugin: %w", err)
 	}
 
-	// 7. Configure observability if the wrapped plugin supports it
-	if obs, ok := wrapped.(plugin.ObservablePlugin); ok {
-		logger := setupPluginLogger(manifest.Namespace)
-		obs.SetObservability(logger, nil) // Metrics can be added later
-	}
-
-	// 8. Configure plugin-specific settings if the plugin supports it
-	if cfg, ok := wrapped.(plugin.Configurable); ok {
-		if pluginConfigB64 := os.Getenv("FORMAE_PLUGIN_CONFIG"); pluginConfigB64 != "" {
-			pluginConfigJSON, err := base64.StdEncoding.DecodeString(pluginConfigB64)
-			if err != nil {
-				return nil, fmt.Errorf("failed to decode FORMAE_PLUGIN_CONFIG: %w", err)
-			}
-			if err := cfg.Configure(pluginConfigJSON); err != nil {
-				return nil, fmt.Errorf("plugin configuration failed: %w", err)
-			}
-		}
+	// 7. Apply the post-wrap configuration every setup path shares
+	if err := configureWrapped(wrapped, manifest); err != nil {
+		return nil, err
 	}
 
 	return wrapped, nil

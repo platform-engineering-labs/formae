@@ -48,7 +48,7 @@ func TestTranslatePropertiesJSON_PreservesJSONKeyOnFlatRewrite(t *testing.T) {
 	require.NoError(t, err)
 
 	tripletToKsuid := map[pkgmodel.TripletKey]string{triplet: secretKsuid}
-	result, _, err := translatePropertiesJSON(json.RawMessage(properties), tripletToKsuid, ds)
+	result, _, err := translatePropertiesJSON(json.RawMessage(properties), tripletToKsuid, nil, ds)
 	require.NoError(t, err)
 
 	// After rewrite the $ref envelope must still carry $json.
@@ -89,7 +89,7 @@ func TestTranslatePropertiesJSON_NoJSONKeyUnchanged(t *testing.T) {
 	require.NoError(t, err)
 
 	tripletToKsuid := map[pkgmodel.TripletKey]string{triplet: ksuid}
-	result, _, err := translatePropertiesJSON(json.RawMessage(properties), tripletToKsuid, ds)
+	result, _, err := translatePropertiesJSON(json.RawMessage(properties), tripletToKsuid, nil, ds)
 	require.NoError(t, err)
 
 	assert.False(t, gjson.GetBytes(result, "SecretString.$json").Exists(),

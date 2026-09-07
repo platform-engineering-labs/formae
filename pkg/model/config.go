@@ -5,11 +5,13 @@
 package model
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/url"
 	"regexp"
+	"slices"
 	"time"
 )
 
@@ -53,10 +55,35 @@ func (c LabelConfig) QueryForResourceType(resourceType string) string {
 }
 
 // MatchFilter is a declarative, serializable filter definition for discovery.
-// Resources matching ALL conditions in a filter are excluded from discovery.
+// A resource is excluded when it is of a type the filter applies to and every
+// one of the filter's conditions matches. A filter naming no conditions
+// excludes nothing.
 type MatchFilter struct {
-	ResourceTypes []string          // Resource types this filter applies to
+	ResourceTypes []string          // Resource types this filter applies to; empty means every type
 	Conditions    []FilterCondition // All conditions must match (AND logic) to exclude
+}
+
+// AppliesTo reports whether this filter is scoped to the given resource type.
+//
+// An empty ResourceTypes list applies to every type. That is what a filter
+// naming only conditions reads as, and writing one is the ordinary way to say
+// "exclude anything tagged like this, whatever it is".
+func (f MatchFilter) AppliesTo(resourceType string) bool {
+	if len(f.ResourceTypes) == 0 {
+		return true
+	}
+	return slices.Contains(f.ResourceTypes, resourceType)
+}
+
+// FiltersForType returns the filters that apply to the given resource type.
+func FiltersForType(filters []MatchFilter, resourceType string) []MatchFilter {
+	var result []MatchFilter
+	for i := range filters {
+		if filters[i].AppliesTo(resourceType) {
+			result = append(result, filters[i])
+		}
+	}
+	return result
 }
 
 // FilterCondition defines a single condition for filtering resources.
@@ -111,14 +138,33 @@ type SqliteConfig struct {
 	FilePath string
 }
 
+// PasswordProvider resolves a datastore password. It is consulted once per new
+// database connection, so a deployment whose credential is rotated out from
+// under a long-running process can hand back the current value without the
+// process being restarted. Returning an error fails that connection attempt.
+type PasswordProvider func(context.Context) (string, error)
+
 type PostgresConfig struct {
-	Host             string
-	Port             int
-	User             string
-	Password         string
-	Database         string
-	Schema           string
-	ConnectionParams string
+	Host     string
+	Port     int
+	User     string
+	Password string
+	// PasswordSecretArn names a Secrets Manager secret holding the password.
+	// When set, the datastore resolves the credential from it on every new
+	// connection instead of using Password, so a rotation is picked up without
+	// restarting the process. Empty means Password is used as-is.
+	PasswordSecretArn string
+	// PasswordProvider, when set, supersedes Password: it is called for every
+	// new connection the pool opens. Nil means Password is used as-is.
+	PasswordProvider PasswordProvider
+	// PasswordProviderFactory builds the provider for PasswordSecretArn.
+	// Production leaves it nil and gets the Secrets Manager provider; tests set
+	// it to inject a controllable authority at the datastore boundary, which is
+	// the only place the wiring can actually be observed.
+	PasswordProviderFactory func(ctx context.Context, secretARN string) (PasswordProvider, error)
+	Database                string
+	Schema                  string
+	ConnectionParams        string
 }
 
 type AuroraDataAPIConfig struct {
@@ -165,7 +211,6 @@ type LoggingConfig struct {
 type DiscoveryConfig struct {
 	Enabled                 bool
 	Interval                time.Duration
-	LabelTagKeys            []string
 	ResourceTypesToDiscover []string
 }
 
@@ -240,17 +285,28 @@ type ResourcePluginUserConfig struct {
 	PluginConfig            json.RawMessage
 }
 
+// OidcCredentialPluginUserConfig holds per-broker configuration from the
+// user's formae.conf.pkl. PluginConfig is the broker's own opaque payload:
+// everything the user declared beyond the two base fields, handed to the
+// broker process verbatim.
+type OidcCredentialPluginUserConfig struct {
+	Type         string
+	Enabled      bool
+	PluginConfig json.RawMessage
+}
+
 type AgentConfig struct {
-	Server          ServerConfig
-	Datastore       DatastoreConfig
-	Retry           RetryConfig
-	Synchronization SynchronizationConfig
-	Discovery       DiscoveryConfig
-	Logging         LoggingConfig
-	OTel            OTelConfig
-	StackExpirer    StackExpirerConfig
-	Auth            json.RawMessage
-	ResourcePlugins []ResourcePluginUserConfig
+	Server                ServerConfig
+	Datastore             DatastoreConfig
+	Retry                 RetryConfig
+	Synchronization       SynchronizationConfig
+	Discovery             DiscoveryConfig
+	Logging               LoggingConfig
+	OTel                  OTelConfig
+	StackExpirer          StackExpirerConfig
+	Auth                  json.RawMessage
+	ResourcePlugins       []ResourcePluginUserConfig
+	OidcCredentialPlugins []OidcCredentialPluginUserConfig
 }
 
 // Connection is where the CLI sends commands. It has exactly two arms, so a

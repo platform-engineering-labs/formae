@@ -200,3 +200,18 @@ func escapeGjsonKey(key string) string {
 	}
 	return escaped.String()
 }
+
+// isOpaquePreservedSentinel reports whether v is the present-but-unusable
+// marker the freezes substitute for a value the agent must not send. It is
+// matched structurally rather than by raw bytes so re-encoding on the way
+// through a plugin cannot change the answer.
+func isOpaquePreservedSentinel(v gjson.Result) bool {
+	if !v.IsObject() {
+		return false
+	}
+	fields := v.Map()
+	if len(fields) != 1 {
+		return false
+	}
+	return fields["$opaque"].String() == "preserved"
+}

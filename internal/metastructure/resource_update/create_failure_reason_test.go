@@ -281,3 +281,20 @@ func TestCreateRequestFailureReason_Categories(t *testing.T) {
 	assert.NotEqual(t, failureReasonPluginRequestPreparationOnUpdate, failureReasonPluginRequestPreparationOnCreate,
 		"create must not report the update wording")
 }
+
+// A property bound to a generator whose value has not been drawn is its own
+// category: the remedy is to declare the value rather than to re-supply a
+// secret formae once held, so it must not fall back to the generic
+// preparation reason or borrow the stored-hash wording.
+func TestRequestFailureReason_UndrawnGeneratorValueIsItsOwnCategory(t *testing.T) {
+	wrapped := fmt.Errorf("converting properties: %w", resolver.ErrUnresolvedGeneratorReferenceNotWritable)
+
+	assert.Equal(t, failureReasonUndrawnGeneratorValueOnCreate, createRequestFailureReason(wrapped),
+		"an undrawn generator value must be reported as such however deeply it is wrapped")
+	assert.Equal(t, failureReasonUndrawnGeneratorValueOnUpdate, updateRequestFailureReason(wrapped))
+
+	assert.NotEqual(t, failureReasonUndrawnGeneratorValueOnCreate, failureReasonUnrecoverableOpaqueValueOnCreate,
+		"an undrawn value is not an unrecoverable stored hash")
+	assert.NotEqual(t, failureReasonUndrawnGeneratorValueOnCreate, failureReasonUndrawnGeneratorValueOnUpdate,
+		"create must not report the update wording")
+}

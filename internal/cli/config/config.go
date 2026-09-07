@@ -66,6 +66,11 @@ func (cliconfig) EnsureId(id string) error {
 
 	idFile := filepath.Join(configPath, id)
 	if _, err := os.Stat(idFile); os.IsNotExist(err) {
+		// A fresh machine has no data directory yet; the id file must not be
+		// the thing that discovers that.
+		if err := os.MkdirAll(configPath, 0o755); err != nil {
+			return fmt.Errorf("failed to create data directory: %w", err)
+		}
 		err := os.WriteFile(idFile, []byte(ksuid.New().String()), 0600)
 		if err != nil {
 			return fmt.Errorf("failed to create ID file: %w", err)

@@ -1,0 +1,29 @@
+/*
+ * © 2025 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+// Shape-misuse test: a PasswordGenerator with every character-class flag set
+// to false has no alphabet to draw from at all. PKL eval fails because the
+// scheduler that later reads this spec runs unattended and would otherwise
+// spin forever in rejection sampling.
+
+amends "@formae/forma.pkl"
+import "@formae/formae.pkl"
+
+forma {
+  local testStack = new formae.Stack {
+    label = "generator-test-stack"
+  }
+  testStack
+
+  new formae.PasswordGenerator {
+    label = "unsatisfiable"
+    stack = testStack.res
+    uppercase = false
+    lowercase = false
+    digits = false
+    symbols = false
+  }
+}

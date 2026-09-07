@@ -71,6 +71,14 @@ func (w *pluginWrapper) Configure(config json.RawMessage) error {
 	return nil
 }
 
+// SetOidcTokenSource hands the token source to the inner plugin if it implements
+// OidcAware, and does nothing otherwise.
+func (w *pluginWrapper) SetOidcTokenSource(src OidcTokenSource) {
+	if aware, ok := w.plugin.(OidcAware); ok {
+		aware.SetOidcTokenSource(src)
+	}
+}
+
 // Identity methods - from manifest
 
 func (w *pluginWrapper) Name() string {

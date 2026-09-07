@@ -9,6 +9,7 @@ package postgres_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -448,6 +449,23 @@ func TestDatastore(t *testing.T) {
 					`UPDATE forma_commands SET subject = NULL, subject_name = NULL WHERE command_id = $1`, commandID,
 				)
 				return err
+			},
+			GeneratorIDForTest: func(label, stackLabel string) (string, error) {
+				var id string
+				// generators.stack_id stores the stack's KSUID, not its label, so
+				// the stack is resolved by label first (its own current row), the
+				// same way the datastore's own Get/DeleteGenerator do.
+				err := d.Pool().QueryRow(context.Background(),
+					`SELECT g.id FROM generators g
+					 JOIN (SELECT id FROM stacks WHERE label = $1 ORDER BY version COLLATE "C" DESC LIMIT 1) s ON g.stack_id = s.id
+					 WHERE g.label = $2
+					 ORDER BY g.version COLLATE "C" DESC LIMIT 1`,
+					stackLabel, label,
+				).Scan(&id)
+				if errors.Is(err, pgx.ErrNoRows) {
+					return "", nil
+				}
+				return id, err
 			},
 		}
 	})

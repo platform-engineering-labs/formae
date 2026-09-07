@@ -2,7 +2,9 @@
 //
 // SPDX-License-Identifier: FSL-1.1-ALv2
 
-package metastructure
+//go:build unit
+
+package drift
 
 import (
 	"testing"
@@ -30,7 +32,7 @@ func TestFilterUnabsorbedModifications_RenameAbsorbsOldLabelModification(t *test
 	}
 	fa := &forma_command.FormaCommand{}
 
-	got := filterUnabsorbedModifications(mods, forma, fa)
+	got := FilterUnabsorbedModifications(mods, forma, fa)
 	assert.Empty(t, got, "modification under old label must be absorbed by alias")
 }
 
@@ -47,7 +49,7 @@ func TestFilterUnabsorbedModifications_ForeignModificationStillUnabsorbed(t *tes
 	}
 	fa := &forma_command.FormaCommand{}
 
-	got := filterUnabsorbedModifications(mods, forma, fa)
+	got := FilterUnabsorbedModifications(mods, forma, fa)
 	assert.Len(t, got, 1, "unrelated modification must remain unabsorbed")
 }
 
@@ -73,8 +75,36 @@ func TestFilterUnabsorbedModifications_ModificationWithPendingUpdateIsUnabsorbed
 		},
 	}
 
-	got := filterUnabsorbedModifications(mods, forma, fa)
+	got := FilterUnabsorbedModifications(mods, forma, fa)
 	assert.Len(t, got, 1, "a modification with a pending update is not absorbed")
+}
+
+func TestFilterUnabsorbedModifications_RecordOnlyUpdateAbsorbs(t *testing.T) {
+	// A record-only update commits an ownership claim without asserting any
+	// state differing from the current one (empty patch, current
+	// properties): the ordinary path an absorb apply takes. It must not
+	// count as a pending change, or absorbing an out-of-band member would
+	// be rejected by the very gate the absorb exists to satisfy.
+	mods := []datastore.ResourceModification{
+		{Stack: "prod", Type: "AWS::EC2::Instance", Label: "app-server", Operation: "update"},
+	}
+	forma := &pkgmodel.Forma{
+		Resources: []pkgmodel.Resource{
+			{Stack: "prod", Type: "AWS::EC2::Instance", Label: "app-server"},
+		},
+	}
+	fa := &forma_command.FormaCommand{
+		ResourceUpdates: []resource_update.ResourceUpdate{
+			{
+				StackLabel:   "prod",
+				RecordOnly:   true,
+				DesiredState: pkgmodel.Resource{Type: "AWS::EC2::Instance", Label: "app-server"},
+			},
+		},
+	}
+
+	got := FilterUnabsorbedModifications(mods, forma, fa)
+	assert.Empty(t, got, "a record-only update asserts no state change; the modification is absorbed")
 }
 
 // Cross-type guard: same label on a different type is NOT absorbed by an
@@ -90,6 +120,6 @@ func TestFilterUnabsorbedModifications_AliasMatchRequiresTypeMatch(t *testing.T)
 	}
 	fa := &forma_command.FormaCommand{}
 
-	got := filterUnabsorbedModifications(mods, forma, fa)
+	got := FilterUnabsorbedModifications(mods, forma, fa)
 	assert.Len(t, got, 1, "alias match must require matching Type")
 }

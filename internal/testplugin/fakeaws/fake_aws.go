@@ -117,6 +117,13 @@ func (s *FakeAWS) SupportedResources() []plugin.ResourceDescriptor {
 			Type:         secretsManagerSecretType,
 			Discoverable: false,
 		},
+		// Custom::Resource models an opaque-bodied resource whose Spec is a
+		// user-owned document: hinted Atomic (whole-value diff) and
+		// preserveEmptyValues (empty collections inside it are values).
+		{
+			Type:         "FakeAWS::Custom::Resource",
+			Discoverable: false,
+		},
 	}
 }
 
@@ -170,6 +177,14 @@ func (s *FakeAWS) SchemaForResourceType(resourceType string) (model.Schema, erro
 			Fields:     []string{"Name", "Description", "SecretString", "Tags"},
 			Hints: map[string]model.FieldHint{
 				"SecretString": {Opaque: true},
+			},
+		}, nil
+	case "FakeAWS::Custom::Resource":
+		return model.Schema{
+			Identifier: "FormaeId",
+			Fields:     []string{"ApiVersion", "Kind", "FormaeId", "Spec"},
+			Hints: map[string]model.FieldHint{
+				"Spec": {UpdateMethod: model.FieldUpdateMethodAtomic, PreserveEmptyValues: true},
 			},
 		}, nil
 	default:
@@ -246,6 +261,23 @@ func (s *FakeAWS) Update(context context.Context, request *resource.UpdateReques
 		if ret != nil {
 			return ret, nil
 		}
+	}
+
+	if request.ResourceType == secretsManagerSecretType {
+		// Store the updated secret so a later Read enriches with the NEW bare
+		// value, the way AWS's GetSecretValue reflects a PutSecretValue.
+		s.mu.Lock()
+		s.secrets[request.NativeID] = request.DesiredProperties
+		s.mu.Unlock()
+		return &resource.UpdateResult{
+			ProgressResult: &resource.ProgressResult{
+				Operation:          resource.OperationUpdate,
+				OperationStatus:    resource.OperationStatusSuccess,
+				RequestID:          "secret-update-1",
+				NativeID:           request.NativeID,
+				ResourceProperties: request.DesiredProperties,
+			},
+		}, nil
 	}
 
 	return nil, nil

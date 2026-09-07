@@ -41,6 +41,7 @@ type Table struct {
 	cols    []Column
 	rows    [][]string // master data (full column set), in current sort order
 	width   int
+	height  int
 	sortCol int
 	sortDir SortDirection
 }
@@ -95,17 +96,54 @@ func (t Table) SetTheme(th *theme.Theme) Table {
 
 // SetRows replaces the table data. Each row must carry the full column set,
 // including values for currently hidden columns.
+//
+// Identical data is a no-op: reproject() resets the wrapped viewport's scroll
+// offset (see its comment), so re-pushing the same rows every frame — which the
+// inventory engine does on every navigation key — would pin the view to the top
+// of the row window and scroll the cursor row off screen.
 func (t Table) SetRows(rows [][]string) Table {
+	if sameRows(t.rows, rows) {
+		return t
+	}
 	t.rows = rows
 	return t.applySort().reproject()
 }
 
-// SetSize resizes the table and recomputes which columns fit.
+// sameRows reports whether two row sets hold identical cell values.
+func sameRows(a, b [][]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if len(a[i]) != len(b[i]) {
+			return false
+		}
+		for j := range a[i] {
+			if a[i][j] != b[i][j] {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// SetSize resizes the table and recomputes which columns fit. An unchanged size
+// is a no-op — see SetRows on why reprojecting for free is not free.
 func (t Table) SetSize(width, height int) Table {
+	if width == t.width && height == t.height && t.height != 0 {
+		return t
+	}
 	t.width = width
+	t.height = height
 	t.inner.SetWidth(width)
+	// Project the columns BEFORE setting the height: bubbles derives the row
+	// viewport's height by subtracting the rendered header height, so doing it
+	// the other way round measures a stale (or empty) header and leaves the
+	// table one row taller than its budget — the caller then trims that row,
+	// which is exactly the row the cursor sits on when scrolled to the bottom.
+	t = t.reproject()
 	t.inner.SetHeight(height)
-	return t.reproject()
+	return t
 }
 
 // SortBy sorts rows by the given column and marks the header with a ▲/▼
@@ -124,8 +162,10 @@ func (t Table) SortBy(col int, dir SortDirection) Table {
 // Use this when the caller owns row ordering; SortBy both sorts and marks.
 func (t Table) SetSortState(col int, dir SortDirection) Table {
 	if col < 0 || col >= len(t.cols) || dir == SortNone {
-		t.sortCol, t.sortDir = -1, SortNone
-		return t.reproject()
+		col, dir = -1, SortNone
+	}
+	if col == t.sortCol && dir == t.sortDir {
+		return t // unchanged — reprojecting would reset the scroll offset
 	}
 	t.sortCol, t.sortDir = col, dir
 	return t.reproject()
@@ -176,6 +216,11 @@ func (t Table) applySort() Table {
 
 // reproject pushes the visible projection of columns and rows into the
 // wrapped bubbles table.
+//
+// NOTE: this resets the wrapped viewport's scroll offset — clearing the rows
+// makes bubbles' viewport clamp YOffset to 0 — so callers must only reproject
+// when the projection inputs (rows, columns, width/height, sort) actually
+// changed.
 func (t Table) reproject() Table {
 	visible := visibleColumns(t.cols, t.width)
 

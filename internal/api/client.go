@@ -356,6 +356,27 @@ func (c *Client) parseSubmitCommandErrorResponse(body io.ReadCloser) (*apimodel.
 		}
 		return nil, &errResp
 
+	case apimodel.ReferencedGeneratorsNotFound:
+		var errResp apimodel.ErrorResponse[apimodel.FormaReferencedGeneratorsNotFoundError]
+		if err := json.Unmarshal(bodyBytes, &errResp); err != nil {
+			return nil, fmt.Errorf("failed to parse ReferencedGeneratorsNotFound error: %w", err)
+		}
+		return nil, &errResp
+
+	case apimodel.GeneratorDestinationsUnreachable:
+		var errResp apimodel.ErrorResponse[apimodel.FormaGeneratorDestinationsUnreachableError]
+		if err := json.Unmarshal(bodyBytes, &errResp); err != nil {
+			return nil, fmt.Errorf("failed to parse GeneratorDestinationsUnreachable error: %w", err)
+		}
+		return nil, &errResp
+
+	case apimodel.GeneratorBoundToSetOnceField:
+		var errResp apimodel.ErrorResponse[apimodel.FormaGeneratorBoundToSetOnceFieldError]
+		if err := json.Unmarshal(bodyBytes, &errResp); err != nil {
+			return nil, fmt.Errorf("failed to parse GeneratorBoundToSetOnceField error: %w", err)
+		}
+		return nil, &errResp
+
 	case apimodel.TargetAlreadyExists:
 		var errResp apimodel.ErrorResponse[apimodel.TargetAlreadyExistsError]
 		if err := json.Unmarshal(bodyBytes, &errResp); err != nil {
@@ -388,6 +409,13 @@ func (c *Client) parseSubmitCommandErrorResponse(body io.ReadCloser) (*apimodel.
 		var errResp apimodel.ErrorResponse[apimodel.FormaResourceHasDependentsError]
 		if err := json.Unmarshal(bodyBytes, &errResp); err != nil {
 			return nil, fmt.Errorf("failed to parse ResourceHasDependents error: %w", err)
+		}
+		return nil, &errResp
+
+	case apimodel.GeneratorHasDependents:
+		var errResp apimodel.ErrorResponse[apimodel.FormaGeneratorHasDependentsError]
+		if err := json.Unmarshal(bodyBytes, &errResp); err != nil {
+			return nil, fmt.Errorf("failed to parse GeneratorHasDependents error: %w", err)
 		}
 		return nil, &errResp
 
@@ -700,6 +728,30 @@ func (c *Client) ListStacks() ([]*pkgmodel.Stack, error) {
 			return nil, fmt.Errorf("failed to decode response: %w", err)
 		}
 		return stacks, nil
+	case http.StatusNotFound:
+		return nil, nil
+	default:
+		return nil, fmt.Errorf("unexpected response code from the formae agent: %d - %s", resp.StatusCode(), resp.String())
+	}
+}
+
+// ListGenerators fetches the generator inventory. A 404 is an empty inventory,
+// not a failure, matching ListPolicies.
+func (c *Client) ListGenerators() ([]apimodel.GeneratorInventoryItem, error) {
+	resp, err := c.resty.R().
+		Get(c.endpoint + "/api/v1/generators")
+	if err != nil {
+		return nil, fmt.Errorf("failed to list generators: %w", err)
+	}
+	//nolint:errcheck
+	defer resp.Body.Close()
+	switch resp.StatusCode() {
+	case http.StatusOK:
+		var generators []apimodel.GeneratorInventoryItem
+		if err := json.NewDecoder(resp.Body).Decode(&generators); err != nil {
+			return nil, fmt.Errorf("failed to decode response: %w", err)
+		}
+		return generators, nil
 	case http.StatusNotFound:
 		return nil, nil
 	default:

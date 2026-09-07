@@ -627,3 +627,139 @@ func TestEmbed_SyncPreservesEnvelope(t *testing.T) {
 			"stored functionCode must NOT be the assembled plain string after sync")
 	})
 }
+
+// A generator reference framed into a string field is refused for the same
+// reason a resolvable is: once a value is assembled into a larger string, the
+// structured span a redactor needs is gone, so the composite would persist the
+// credential in the clear.
+//
+// The check keys on the span's $visibility and on nothing else, so it covers a
+// $gen without naming one. That is deliberate rather than incidental: an output
+// whose visibility is not Opaque carries nothing to redact and belongs in a
+// composed string. It also means a generator kind that declares a non-Opaque
+// output makes this shape legal for that output, which is why the test asserts
+// the visibility that produces the refusal rather than the envelope kind.
+//
+// This path reaches a field no generator binding otherwise can. Interpolation
+// renders the envelope through the output's own string form, so the result is a
+// String and any String-typed field accepts it, whatever its declared union.
+func TestMetastructure_RejectsOpaqueGeneratorEmbed(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		m, def, err := test_helpers.NewTestMetastructure(t, &plugin.ResourcePluginOverrides{})
+		defer def()
+		require.NoError(t, err)
+
+		// The authored shape a generator output renders when interpolated into
+		// a string: named by label and stack, with the visibility every
+		// currently shipping generator kind gives its output.
+		genEnvelope := `{"$gen":true,"$label":"db-password","$stack":"test-stack","$output":"value","$visibility":"Opaque"}`
+		framedSpan := pkgmodel.FrameEnvelope(genEnvelope)
+
+		embedFieldJSON, err := json.Marshal(map[string]any{
+			"$embed":    true,
+			"$template": "postgres://app:" + framedSpan + "@db.internal/appdb",
+		})
+		require.NoError(t, err)
+
+		propsJSON, err := json.Marshal(map[string]any{
+			"Name":         "consumer-resource",
+			"functionCode": json.RawMessage(embedFieldJSON),
+		})
+		require.NoError(t, err)
+
+		forma := &pkgmodel.Forma{
+			Stacks: []pkgmodel.Stack{{Label: "test-stack"}},
+			Generators: []json.RawMessage{
+				passwordGeneratorFor(t, "db-password", "test-stack"),
+			},
+			Resources: []pkgmodel.Resource{{
+				Label:      "consumer",
+				Type:       "FakeAWS::S3::Bucket",
+				Stack:      "test-stack",
+				Target:     "test-target",
+				Properties: json.RawMessage(propsJSON),
+			}},
+			Targets: []pkgmodel.Target{{
+				Label:     "test-target",
+				Namespace: "test-namespace",
+			}},
+		}
+
+		_, err = m.ApplyForma(forma, &config.FormaCommandConfig{
+			Mode: pkgmodel.FormaApplyModeReconcile,
+		}, "test-client-id", "", "")
+
+		require.Error(t, err, "a generator reference embedded in a string field must be refused")
+		assert.Contains(t, err.Error(), "opaque")
+		assert.Contains(t, err.Error(), "embed")
+
+		fas, dsErr := m.Datastore.LoadFormaCommands()
+		require.NoError(t, dsErr)
+		assert.Empty(t, fas, "no command should be persisted when the embed is refused")
+
+		resources, dsErr := m.Datastore.LoadAllResources()
+		require.NoError(t, dsErr)
+		assert.Empty(t, resources, "no resource row should be persisted when the embed is refused")
+
+		// The generator must not have drawn: the refusal precedes translation,
+		// so nothing reached a draw.
+		identity, dsErr := m.Datastore.GetGeneratorIdentity("db-password", "test-stack")
+		require.NoError(t, dsErr)
+		assert.Empty(t, identity.GenerationID, "no value may be drawn for a refused command")
+	})
+}
+
+// A generator reference framed inside an array element is refused, mirroring
+// the resolvable case: the walk descends into arrays, so nesting is not an
+// escape.
+func TestMetastructure_RejectsOpaqueGeneratorEmbed_InArray(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		m, def, err := test_helpers.NewTestMetastructure(t, &plugin.ResourcePluginOverrides{})
+		defer def()
+		require.NoError(t, err)
+
+		genEnvelope := `{"$gen":true,"$label":"db-password","$stack":"test-stack","$output":"value","$visibility":"Opaque"}`
+		framedSpan := pkgmodel.FrameEnvelope(genEnvelope)
+
+		propsJSON, err := json.Marshal(map[string]any{
+			"Name": "consumer-resource",
+			"environment": []any{
+				map[string]any{"Name": "PLAIN", "Value": "no-secret-here"},
+				map[string]any{
+					"Name": "DATABASE_URL",
+					"Value": map[string]any{
+						"$embed":    true,
+						"$template": "postgres://app:" + framedSpan + "@db.internal/appdb",
+					},
+				},
+			},
+		})
+		require.NoError(t, err)
+
+		forma := &pkgmodel.Forma{
+			Stacks: []pkgmodel.Stack{{Label: "test-stack"}},
+			Generators: []json.RawMessage{
+				passwordGeneratorFor(t, "db-password", "test-stack"),
+			},
+			Resources: []pkgmodel.Resource{{
+				Label:      "consumer",
+				Type:       "FakeAWS::S3::Bucket",
+				Stack:      "test-stack",
+				Target:     "test-target",
+				Properties: json.RawMessage(propsJSON),
+			}},
+			Targets: []pkgmodel.Target{{
+				Label:     "test-target",
+				Namespace: "test-namespace",
+			}},
+		}
+
+		_, err = m.ApplyForma(forma, &config.FormaCommandConfig{
+			Mode: pkgmodel.FormaApplyModeReconcile,
+		}, "test-client-id", "", "")
+
+		require.Error(t, err, "a generator reference embedded inside an array element must be refused")
+		assert.Contains(t, err.Error(), "opaque")
+		assert.Contains(t, err.Error(), "embed")
+	})
+}

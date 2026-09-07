@@ -7,6 +7,7 @@
 package cmd_test
 
 import (
+	"os"
 	"testing"
 
 	"github.com/charmbracelet/lipgloss"
@@ -56,5 +57,37 @@ func TestResolveConfiguredTheme_FallsBackToDefault(t *testing.T) {
 	c := &cobra.Command{Use: "demo"} // no --profile/--config flags registered
 	if got := cmd.ResolveConfiguredTheme(c); got == nil {
 		t.Fatal("ResolveConfiguredTheme must never return nil")
+	}
+}
+
+// Rendering help must not write to the config store.
+//
+// Theme resolution reads the active profile to color the banner, and it used to
+// do that through the store's initializing resolve. So `formae --help`, and any
+// mistyped command whose usage is rendered, created a localhost default profile
+// and pointed the store at it. On a machine that has not signed in yet that is
+// not a harmless convenience: it turns "unconfigured" into "configured, self
+// hosted, localhost", which is the state hosted onboarding branches on, and
+// nothing in the flow asks the user about it or tells them it happened.
+func TestResolveConfiguredTheme_DoesNotCreateAConfigStore(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("FORMAE_CONFIG_DIR", dir)
+
+	c := &cobra.Command{Use: "demo"}
+	cmd.AddConfigFlags(c)
+
+	// The theme is whatever the default is; what matters is the filesystem.
+	_ = cmd.ResolveConfiguredTheme(c)
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read config dir: %v", err)
+	}
+	if len(entries) != 0 {
+		var names []string
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Errorf("resolving the theme wrote to an empty config store: %v", names)
 	}
 }

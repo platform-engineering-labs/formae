@@ -23,7 +23,7 @@ func TestMergeRefs_WriteOrigin_StampsApplied(t *testing.T) {
 	user := json.RawMessage(`{"TargetKeyId": {"$ref": "formae://abc#/Arn", "$value": "arn:aws:kms:us-east-1:111122223333:key/4711"}}`)
 	plugin := json.RawMessage(`{"TargetKeyId": "4711"}`)
 
-	merged, err := mergeRefsPreservingUserRefs(user, plugin, pkgmodel.Schema{Fields: []string{"TargetKeyId"}}, true)
+	merged, err := mergeRefsPreservingUserRefs(user, plugin, pkgmodel.Schema{Fields: []string{"TargetKeyId"}}, true, nil)
 	require.NoError(t, err)
 
 	env := gjson.GetBytes(merged, "TargetKeyId")
@@ -36,7 +36,7 @@ func TestMergeRefs_ReadOrigin_DoesNotStampApplied(t *testing.T) {
 	user := json.RawMessage(`{"TargetKeyId": {"$ref": "formae://abc#/Arn", "$value": "arn:aws:kms:us-east-1:111122223333:key/4711"}}`)
 	plugin := json.RawMessage(`{"TargetKeyId": "4711"}`)
 
-	merged, err := mergeRefsPreservingUserRefs(user, plugin, pkgmodel.Schema{Fields: []string{"TargetKeyId"}}, false)
+	merged, err := mergeRefsPreservingUserRefs(user, plugin, pkgmodel.Schema{Fields: []string{"TargetKeyId"}}, false, nil)
 	require.NoError(t, err)
 	assert.False(t, gjson.GetBytes(merged, "TargetKeyId.$applied").Exists())
 }
@@ -46,7 +46,7 @@ func TestMergeRefs_WriteOrigin_OpaqueEnvelopeExempt(t *testing.T) {
 	user := json.RawMessage(`{"Secret": {"$ref": "formae://abc#/Value", "$value": "cleartext", "$visibility": "Opaque"}}`)
 	plugin := json.RawMessage(`{"Secret": "cleartext"}`)
 
-	merged, err := mergeRefsPreservingUserRefs(user, plugin, pkgmodel.Schema{Fields: []string{"Secret"}}, true)
+	merged, err := mergeRefsPreservingUserRefs(user, plugin, pkgmodel.Schema{Fields: []string{"Secret"}}, true, nil)
 	require.NoError(t, err)
 	assert.False(t, gjson.GetBytes(merged, "Secret.$applied").Exists())
 }
@@ -59,7 +59,7 @@ func TestMergeRes_WriteOrigin_StampsApplied(t *testing.T) {
 	user := json.RawMessage(`{"Image": {"$res": true, "$label": "the-image", "$type": "FakeAWS::Resource", "$stack": "s", "$property": "id", "$value": "ami-sent"}}`)
 	plugin := json.RawMessage(`{"Image": "ami-echoed"}`)
 
-	merged, err := mergeRefsPreservingUserRefs(user, plugin, pkgmodel.Schema{Fields: []string{"Image"}}, true)
+	merged, err := mergeRefsPreservingUserRefs(user, plugin, pkgmodel.Schema{Fields: []string{"Image"}}, true, nil)
 	require.NoError(t, err)
 	env := gjson.GetBytes(merged, "Image")
 	assert.Equal(t, "ami-echoed", env.Get("$value").String())
@@ -72,7 +72,7 @@ func TestMergeRefs_WriteOrigin_NoSentValue_NoApplied(t *testing.T) {
 	user := json.RawMessage(`{"TargetKeyId": {"$ref": "formae://abc#/Arn"}}`)
 	plugin := json.RawMessage(`{"TargetKeyId": "4711"}`)
 
-	merged, err := mergeRefsPreservingUserRefs(user, plugin, pkgmodel.Schema{Fields: []string{"TargetKeyId"}}, true)
+	merged, err := mergeRefsPreservingUserRefs(user, plugin, pkgmodel.Schema{Fields: []string{"TargetKeyId"}}, true, nil)
 	require.NoError(t, err)
 	assert.False(t, gjson.GetBytes(merged, "TargetKeyId.$applied").Exists())
 }
@@ -82,7 +82,7 @@ func TestMergeRefs_ReadOrigin_SameEcho_PreservesApplied(t *testing.T) {
 	user := json.RawMessage(`{"TargetKeyId": {"$ref": "formae://abc#/Arn", "$value": "4711", "$applied": "arn:aws:kms:us-east-1:111122223333:key/4711"}}`)
 	plugin := json.RawMessage(`{"TargetKeyId": "4711"}`)
 
-	merged, err := mergeRefsPreservingUserRefs(user, plugin, pkgmodel.Schema{Fields: []string{"TargetKeyId"}}, false)
+	merged, err := mergeRefsPreservingUserRefs(user, plugin, pkgmodel.Schema{Fields: []string{"TargetKeyId"}}, false, nil)
 	require.NoError(t, err)
 	assert.True(t, gjson.GetBytes(merged, "TargetKeyId.$applied").Exists())
 }
@@ -94,7 +94,7 @@ func TestMergeRefs_ReadOrigin_ChangedEcho_InvalidatesApplied(t *testing.T) {
 	user := json.RawMessage(`{"TargetKeyId": {"$ref": "formae://abc#/Arn", "$value": "4711", "$applied": "arn:aws:kms:us-east-1:111122223333:key/4711"}}`)
 	plugin := json.RawMessage(`{"TargetKeyId": "9988"}`)
 
-	merged, err := mergeRefsPreservingUserRefs(user, plugin, pkgmodel.Schema{Fields: []string{"TargetKeyId"}}, false)
+	merged, err := mergeRefsPreservingUserRefs(user, plugin, pkgmodel.Schema{Fields: []string{"TargetKeyId"}}, false, nil)
 	require.NoError(t, err)
 	env := gjson.GetBytes(merged, "TargetKeyId")
 	assert.Equal(t, "9988", env.Get("$value").String())
@@ -111,7 +111,7 @@ func TestMergeRefs_ReadOrigin_OmittedEcho_PreservesApplied(t *testing.T) {
 		json.RawMessage(`{"TargetKeyId": null}`),
 		json.RawMessage(`{"TargetKeyId": ""}`),
 	} {
-		merged, err := mergeRefsPreservingUserRefs(user, plugin, pkgmodel.Schema{Fields: []string{"TargetKeyId"}}, false)
+		merged, err := mergeRefsPreservingUserRefs(user, plugin, pkgmodel.Schema{Fields: []string{"TargetKeyId"}}, false, nil)
 		require.NoError(t, err)
 		env := gjson.GetBytes(merged, "TargetKeyId")
 		assert.Equal(t, "4711", env.Get("$value").String())
@@ -125,7 +125,7 @@ func TestMergeRefs_WriteOrigin_RestampsOverInvalidation(t *testing.T) {
 	user := json.RawMessage(`{"TargetKeyId": {"$ref": "formae://abc#/Arn", "$value": "arn:aws:kms:us-east-1:111122223333:key/9988", "$applied": "arn:aws:kms:us-east-1:111122223333:key/4711"}}`)
 	plugin := json.RawMessage(`{"TargetKeyId": "9988"}`)
 
-	merged, err := mergeRefsPreservingUserRefs(user, plugin, pkgmodel.Schema{Fields: []string{"TargetKeyId"}}, true)
+	merged, err := mergeRefsPreservingUserRefs(user, plugin, pkgmodel.Schema{Fields: []string{"TargetKeyId"}}, true, nil)
 	require.NoError(t, err)
 	env := gjson.GetBytes(merged, "TargetKeyId")
 	assert.Equal(t, "9988", env.Get("$value").String())

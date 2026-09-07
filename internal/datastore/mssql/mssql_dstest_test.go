@@ -9,6 +9,7 @@ package mssql_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -154,6 +155,23 @@ func TestDatastore(t *testing.T) {
 					`UPDATE forma_commands SET subject = NULL, subject_name = NULL WHERE command_id = @p1`, commandID,
 				)
 				return err
+			},
+			GeneratorIDForTest: func(label, stackLabel string) (string, error) {
+				var id string
+				// generators.stack_id stores the stack's KSUID, not its label, so
+				// the stack is resolved by label first (its own current row), the
+				// same way the datastore's own Get/DeleteGenerator do.
+				err := conn.QueryRow(
+					`SELECT TOP (1) g.id FROM generators g
+					 JOIN (SELECT TOP (1) id FROM stacks WHERE label = @p1 ORDER BY version COLLATE Latin1_General_BIN2 DESC) s ON g.stack_id = s.id
+					 WHERE g.label = @p2
+					 ORDER BY g.version COLLATE Latin1_General_BIN2 DESC`,
+					stackLabel, label,
+				).Scan(&id)
+				if errors.Is(err, sql.ErrNoRows) {
+					return "", nil
+				}
+				return id, err
 			},
 			CleanUpFn: func() error {
 				ds.Close()

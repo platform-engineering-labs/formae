@@ -239,18 +239,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		// Single-command convenience: when the first successful poll returns
-		// exactly one command and the user did not target a specific one, drill
-		// straight into its detail instead of dropping them in a one-row list
-		// they must "enter" into. esc still returns to the (one-row) list.
-		if !m.focusHandled && m.opts.FocusCommandID == "" && !m.opts.SingleCommand &&
-			m.view == viewMulti && len(m.multi.rows) == 1 {
-			m.focusHandled = true
-			r := m.multi.rows[0]
-			m.detail = m.detail.SetCommand(r.cmd, r, m.spinner.View(), m.opts.Now(), m.abandonedSet)
-			m.view = viewDetail
-		}
-
 		// If we are in detail view, refresh the detail model with the fresh data.
 		if m.view == viewDetail {
 			found := false

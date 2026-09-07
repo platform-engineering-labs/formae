@@ -52,19 +52,20 @@ const (
 )
 
 type Command struct {
-	CommandID       string           `json:"CommandId"`
-	Command         string           `json:"Command"`
-	Mode            string           `json:"Mode,omitempty"` // "reconcile" | "patch"
-	Source          string           `json:"Source,omitempty"`
-	Subject         string           `json:",omitempty"`
-	SubjectName     string           `json:",omitempty"`
-	State           string           `json:"State"`
-	StartTs         time.Time        `json:"StartTs,omitempty"`
-	EndTs           time.Time        `json:"EndTs,omitempty"`
-	ResourceUpdates []ResourceUpdate `json:"ResourceUpdates,omitempty"`
-	TargetUpdates   []TargetUpdate   `json:"TargetUpdates,omitempty"`
-	StackUpdates    []StackUpdate    `json:"StackUpdates,omitempty"`
-	PolicyUpdates   []PolicyUpdate   `json:"PolicyUpdates,omitempty"`
+	CommandID        string            `json:"CommandId"`
+	Command          string            `json:"Command"`
+	Mode             string            `json:"Mode,omitempty"` // "reconcile" | "patch"
+	Source           string            `json:"Source,omitempty"`
+	Subject          string            `json:",omitempty"`
+	SubjectName      string            `json:",omitempty"`
+	State            string            `json:"State"`
+	StartTs          time.Time         `json:"StartTs,omitempty"`
+	EndTs            time.Time         `json:"EndTs,omitempty"`
+	ResourceUpdates  []ResourceUpdate  `json:"ResourceUpdates,omitempty"`
+	TargetUpdates    []TargetUpdate    `json:"TargetUpdates,omitempty"`
+	StackUpdates     []StackUpdate     `json:"StackUpdates,omitempty"`
+	PolicyUpdates    []PolicyUpdate    `json:"PolicyUpdates,omitempty"`
+	GeneratorUpdates []GeneratorUpdate `json:"GeneratorUpdates,omitempty"`
 }
 
 // wrapper for machine-readable output
@@ -135,6 +136,10 @@ const (
 	OperationDelete  = "delete"
 	OperationRead    = "read"
 	OperationReplace = "replace" // delete + create
+	// OperationDraw appears on a GeneratorUpdate only: it is a generator
+	// drawing a value, which rotates the secret every resource bound to that
+	// generator holds. No ResourceUpdate ever carries it.
+	OperationDraw = "draw"
 )
 
 const (
@@ -187,6 +192,80 @@ type PolicyUpdate struct {
 	ReferencingStacks []string        `json:"ReferencingStacks,omitempty"` // For skip operations - stacks still referencing this policy
 	StartTs           time.Time       `json:"StartTs,omitempty"`
 	ModifiedTs        time.Time       `json:"ModifiedTs,omitempty"`
+}
+
+// GeneratorUpdate is the API projection of one piece of generator work: a
+// create, an update (spec change and/or rename), a delete, or a draw.
+//
+// The first three change the generator's own row. A draw changes no row: it
+// produces a new value and every destination bound to the generator takes it,
+// which is a credential rotation and is why it is a plan entry of its own. A
+// generator whose spec is changing and that also draws is two entries, one per
+// operation, because the two are separate work with separate outcomes.
+//
+// GeneratorConfig and OldGeneratorConfig carry the generator's declared spec
+// only — the fields a forma author writes — and only on the operations that
+// change it; a draw carries neither. A generator's own identity (its KSUID)
+// and drawn generation are controller state that never reaches this
+// projection: no concrete Generator marshals its ID, and the value a
+// generation drew does not exist at plan/simulate time to project in the
+// first place.
+//
+// State, Duration and ErrorMessage report the operation's outcome on the three
+// that change the generator's row. On a draw they carry the plan's values and
+// do not follow the draw as it runs: a draw writes no generator row, so no
+// store holds its outcome for a status read to project. A draw that fails
+// explains itself on the ResourceUpdates it fails, which carry its reason as
+// their ErrorMessage.
+type GeneratorUpdate struct {
+	GeneratorLabel     string          `json:"GeneratorLabel"`
+	GeneratorType      string          `json:"GeneratorType"` // "password", etc.
+	StackLabel         string          `json:"StackLabel,omitempty"`
+	Operation          string          `json:"Operation"`
+	State              string          `json:"State"`
+	Duration           int64           `json:"Duration,omitempty"` // milliseconds
+	ErrorMessage       string          `json:"ErrorMessage,omitempty"`
+	GeneratorConfig    json.RawMessage `json:"GeneratorConfig,omitempty"`    // Current generator configuration
+	OldGeneratorConfig json.RawMessage `json:"OldGeneratorConfig,omitempty"` // Previous generator configuration (for updates)
+	StartTs            time.Time       `json:"StartTs,omitempty"`
+	ModifiedTs         time.Time       `json:"ModifiedTs,omitempty"`
+}
+
+// GeneratorInventoryItem represents one live generator in the inventory.
+//
+// Config carries the generator's declared spec only, exactly as
+// PolicyInventoryItem.Config does. A drawn value is never part of it: no
+// concrete Generator marshals one, and a drawn value is not stored in a
+// readable form anywhere. GenerationID is the generation's own identity — a
+// KSUID minted per draw — which says which generation the generator currently
+// holds and nothing about its value. It is empty until a value has been drawn.
+//
+// EverySeconds is 0 when the generator declares no rotation cadence.
+// LastRotatedAt is DERIVED from command history and stored nowhere; it is the
+// start of the most recent command that both advanced this generator's
+// generation and succeeded (see datastore.GeneratorRotationInfo). It is zero
+// when no such command exists, which reads as "never rotated". Only a
+// generator that declares a cadence carries either field: the derivation is
+// the one the rotation scheduler runs, and a generator nothing rotates on its
+// own has no cadence history to report.
+type GeneratorInventoryItem struct {
+	Label         string                 `json:"Label"`
+	Type          string                 `json:"Type"`
+	Stack         string                 `json:"Stack"`
+	Config        json.RawMessage        `json:"Config"`
+	EverySeconds  int                    `json:"EverySeconds,omitempty"`
+	LastRotatedAt time.Time              `json:"LastRotatedAt,omitempty"`
+	GenerationID  string                 `json:"GenerationID,omitempty"`
+	Destinations  []GeneratorDestination `json:"Destinations,omitempty"`
+}
+
+// GeneratorDestination names one resource that binds a property to a
+// generator. Its label and stack, and nothing else: a destination's properties
+// hold the generator's value under an opaque envelope, so no part of them
+// belongs in a projection built to be rendered.
+type GeneratorDestination struct {
+	ResourceLabel string `json:"ResourceLabel"`
+	StackLabel    string `json:"StackLabel"`
 }
 
 // PolicyInventoryItem represents a standalone policy in the inventory

@@ -52,6 +52,10 @@ type stubProcess struct {
 
 	spawnRequests []messages.SpawnPluginOperator
 
+	// sent records every message dispatched to a spawned PluginOperator, so a
+	// test can assert that a plugin was — or was not — actually reached.
+	sent []any
+
 	// pluginInfo, when set, answers GetPluginInfo calls so discover() can be
 	// driven end-to-end without a PluginCoordinator.
 	pluginInfo *messages.PluginInfoResponse
@@ -61,7 +65,10 @@ func (p *stubProcess) Log() gen.Log   { return stubLog{} }
 func (p *stubProcess) Node() gen.Node { return stubNode{} }
 func (p *stubProcess) PID() gen.PID   { return gen.PID{Node: "test-node", ID: 1} }
 
-func (p *stubProcess) Send(_ any, _ any) error { return nil }
+func (p *stubProcess) Send(_ any, message any) error {
+	p.sent = append(p.sent, message)
+	return nil
+}
 
 func (p *stubProcess) Call(_ any, message any) (any, error) {
 	switch m := message.(type) {

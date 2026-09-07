@@ -29,6 +29,12 @@ open class Server extends formae.Resource {
     @testprovider.FieldHint
     userData: (String|formae.Embedded)?
 
+    // Accepts a secret reference, so a regenerated forma can be checked for a
+    // reference that addresses one member of a secret document rather than the
+    // whole of it.
+    @testprovider.FieldHint
+    adminPassword: (String|formae.Resolvable|formae.SecretValue)?
+
     @testprovider.FieldHint
     networkConfig: networkconfig.NetworkConfig?
 

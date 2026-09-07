@@ -8,8 +8,10 @@ package store_test
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -689,4 +691,117 @@ func TestResolveDoesNotUndoAConcurrentUse(t *testing.T) {
 			}
 		})
 	}
+}
+
+// ResolveExisting must resolve every state Resolve can resolve, minus the
+// writing. Each of these is a store a configured user really has, and reading a
+// preference out of one must not depend on some other command having migrated
+// it first: the caller that reads without writing is precisely the caller that
+// cannot cause the migration.
+func TestResolveExisting_ResolvesWhatResolveWouldWithoutWriting(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(t *testing.T, dir string) string // returns the path it must resolve to
+	}{
+		{
+			name: "a valid active pointer",
+			setup: func(t *testing.T, dir string) string {
+				writeProfile(t, dir, "work")
+				writeFile(t, dir, "active", "work")
+				return filepath.Join(dir, "profiles", "work.pkl")
+			},
+		},
+		{
+			name: "a legacy bare config file",
+			setup: func(t *testing.T, dir string) string {
+				legacy := filepath.Join(dir, "formae.conf.pkl")
+				writeFile(t, dir, "formae.conf.pkl", "// legacy")
+				return legacy
+			},
+		},
+		{
+			name: "a legacy symlink into profiles",
+			setup: func(t *testing.T, dir string) string {
+				writeProfile(t, dir, "linked")
+				if err := os.Symlink(filepath.Join("profiles", "linked.pkl"),
+					filepath.Join(dir, "formae.conf.pkl")); err != nil {
+					t.Fatalf("symlink: %v", err)
+				}
+				return filepath.Join(dir, "profiles", "linked.pkl")
+			},
+		},
+		{
+			// initialize's step 5b: it leaves the bare file alone and adopts the
+			// existing default, so a reader must resolve the default too or it
+			// would render from a config no command uses.
+			name: "a legacy bare file colliding with an existing default",
+			setup: func(t *testing.T, dir string) string {
+				writeFile(t, dir, "formae.conf.pkl", "// legacy")
+				writeProfile(t, dir, "default")
+				return filepath.Join(dir, "profiles", "default.pkl")
+			},
+		},
+		{
+			name: "an orphaned default with no pointer",
+			setup: func(t *testing.T, dir string) string {
+				writeProfile(t, dir, "default")
+				return filepath.Join(dir, "profiles", "default.pkl")
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			want := tc.setup(t, dir)
+			before := listTree(t, dir)
+
+			got, err := store.New(dir).ResolveExisting()
+			if err != nil {
+				t.Fatalf("ResolveExisting: %v", err)
+			}
+			if got != want {
+				t.Errorf("got %q, want %q", got, want)
+			}
+			if after := listTree(t, dir); after != before {
+				t.Errorf("ResolveExisting wrote to the store:\nbefore: %s\nafter:  %s", before, after)
+			}
+		})
+	}
+}
+
+// Nothing at all is the one state it must refuse, because that is the state
+// whose only resolution is to invent a profile.
+func TestResolveExisting_RefusesAnEmptyStore(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := store.New(dir).ResolveExisting(); !errors.Is(err, store.ErrNotInitialized) {
+		t.Errorf("got %v, want ErrNotInitialized", err)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Errorf("ResolveExisting created %d entries in an empty store", len(entries))
+	}
+}
+
+func writeProfile(t *testing.T, dir, name string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Join(dir, "profiles"), 0o755); err != nil {
+		t.Fatalf("mkdir profiles: %v", err)
+	}
+	writeFile(t, dir, filepath.Join("profiles", name+".pkl"), "// "+name)
+}
+
+// listTree renders the store's contents so a test can assert nothing changed.
+func listTree(t *testing.T, dir string) string {
+	t.Helper()
+	var out []string
+	if err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(dir, p)
+		out = append(out, rel)
+		return nil
+	}); err != nil {
+		t.Fatalf("walk: %v", err)
+	}
+	sort.Strings(out)
+	return strings.Join(out, " ")
 }

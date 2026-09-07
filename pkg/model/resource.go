@@ -33,6 +33,10 @@ type Resource struct {
 	Managed            bool            `json:"Managed,omitempty"` // Whether the resource is managed by Formae or not
 	Ksuid              string          `json:"Ksuid,omitempty"`
 	Alias              string          `json:"Alias,omitempty"` // previous label, used to rename in place
+	// OwnedMembers records, per co-owned collection field, the set of member
+	// identities this forma last declared. Absent (nil) means no field on
+	// this resource carries a declared ownership record.
+	OwnedMembers OwnedMembers `json:"OwnedMembers,omitempty"`
 	// Version is the datastore row version this resource was loaded from, set
 	// by the loaders that read it out of the resources table alongside Ksuid.
 	// It is monotonic per URI (a KSUID minted on every write), so comparing it

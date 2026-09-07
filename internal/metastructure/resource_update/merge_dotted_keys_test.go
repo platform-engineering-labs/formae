@@ -24,7 +24,7 @@ func TestMerge_DottedMapKeysStayLiteral(t *testing.T) {
 	user := json.RawMessage(`{"spec":{"template":{"metadata":{"labels":{"app.kubernetes.io/name":"nginx"}}}}}`)
 	plugin := json.RawMessage(`{"spec":{"template":{"metadata":{"labels":{"app.kubernetes.io/name":"nginx"}}}}}`)
 
-	merged, err := mergeRefsPreservingUserRefs(user, plugin, pkgmodel.Schema{}, false)
+	merged, err := mergeRefsPreservingUserRefs(user, plugin, pkgmodel.Schema{}, false, nil)
 	require.NoError(t, err)
 
 	var out map[string]any
@@ -42,7 +42,7 @@ func TestMerge_DottedMapKeyKeptFromUserAtLiteralKey(t *testing.T) {
 	user := json.RawMessage(`{"labels":{"app.kubernetes.io/instance":"web"}}`)
 	plugin := json.RawMessage(`{"labels":{}}`)
 
-	merged, err := mergeRefsPreservingUserRefs(user, plugin, pkgmodel.Schema{}, false)
+	merged, err := mergeRefsPreservingUserRefs(user, plugin, pkgmodel.Schema{}, false, nil)
 	require.NoError(t, err)
 
 	var out map[string]any
@@ -61,7 +61,7 @@ func TestMerge_ArrayElementMatchingWithDottedKeys(t *testing.T) {
 	user := json.RawMessage(`{"rules":[{"app.kubernetes.io/name":"nginx","target":{"$ref":"formae://x#/id","$value":"same"}}]}`)
 	plugin := json.RawMessage(`{"rules":[{"app.kubernetes.io/name":"nginx","target":"same"}]}`)
 
-	merged, err := mergeRefsPreservingUserRefs(user, plugin, pkgmodel.Schema{}, false)
+	merged, err := mergeRefsPreservingUserRefs(user, plugin, pkgmodel.Schema{}, false, nil)
 	require.NoError(t, err)
 
 	target := gjson.GetBytes(merged, "rules.0.target")
@@ -76,7 +76,7 @@ func TestMerge_WildcardCharactersInMapKeysStayLiteral(t *testing.T) {
 	user := json.RawMessage(`{"data":{"glob*key":"a","which?key":"b"}}`)
 	plugin := json.RawMessage(`{"data":{}}`)
 
-	merged, err := mergeRefsPreservingUserRefs(user, plugin, pkgmodel.Schema{}, false)
+	merged, err := mergeRefsPreservingUserRefs(user, plugin, pkgmodel.Schema{}, false, nil)
 	require.NoError(t, err)
 
 	var out map[string]any

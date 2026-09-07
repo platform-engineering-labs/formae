@@ -225,13 +225,13 @@ func targetResolveCacheTimeout(from gen.PID, state gen.Atom, data TargetUpdaterD
 
 // persistTarget sends the target update to the ResourcePersister for storage.
 func persistTarget(data TargetUpdaterData, proc gen.Process) (gen.Atom, TargetUpdaterData, []statemachine.Action, error) {
-	_, err := proc.Call(
+	_, err := messages.UnwrapCall(proc.Call(
 		resourcePersisterProcess(proc),
 		PersistTargetUpdates{
 			TargetUpdates: []TargetUpdate{data.targetUpdate},
 			CommandID:     data.commandID,
 		},
-	)
+	))
 	if err != nil {
 		proc.Log().Error("TargetUpdater: failed to persist target update target=%s: %v", data.targetUpdate.Target.Label, err)
 		return StateFinishedWithError, data, nil, nil

@@ -154,3 +154,20 @@ func TestRedactOpaqueForLog_UnparseableByteSlicePassedThrough(t *testing.T) {
 	require.Truef(t, ok, "expected []byte, got %T", out["raw"])
 	assert.Equal(t, bad, got, "unparseable []byte must not be modified")
 }
+
+func TestRedactOpaqueJSONForLog_RedactsOpaqueValueAndKeepsStructure(t *testing.T) {
+	out := RedactOpaqueJSONForLog(json.RawMessage(`{"Password":{"$visibility":"Opaque","$value":"hunter2"}}`))
+	assert.NotContains(t, out, "hunter2")
+	assert.Contains(t, out, "Password", "the property name must survive so the line still says which field")
+	assert.Contains(t, out, RedactedForLog)
+}
+
+func TestRedactOpaqueJSONForLog_EmptyDocumentRendersEmpty(t *testing.T) {
+	assert.Equal(t, "", RedactOpaqueJSONForLog(nil))
+	assert.Equal(t, "", RedactOpaqueJSONForLog(json.RawMessage{}))
+}
+
+func TestRedactOpaqueJSONForLog_UndecodableDocumentIsWithheldWhole(t *testing.T) {
+	out := RedactOpaqueJSONForLog(json.RawMessage(`{"Password": "hunter2"`))
+	assert.Equal(t, RedactedForLog, out, "a document that cannot be decoded must never be rendered in the clear")
+}

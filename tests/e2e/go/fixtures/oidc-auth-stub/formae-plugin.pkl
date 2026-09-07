@@ -1,0 +1,16 @@
+/*
+ * © 2026 Platform Engineering Labs Inc.
+ *
+ * SPDX-License-Identifier: FSL-1.1-ALv2
+ */
+
+/// Installed as `oidc`, not as this directory's name: the CLI matches an auth
+/// plugin by the `type` its profile's auth block names, and the connect gate
+/// admits only "oidc". The staging step in the Makefile lays it out under
+/// that name.
+name = "oidc"
+type = "auth"
+version = "0.0.1"
+summary = "Stub hosted auth plugin for the e2e suite"
+license = "FSL-1.1-ALv2"
+category = "auth"

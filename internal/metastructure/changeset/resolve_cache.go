@@ -19,6 +19,7 @@ import (
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/provenance"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
@@ -102,6 +103,19 @@ func resolveMissReason(resourceURI pkgmodel.FormaeURI, source *pkgmodel.Resource
 		string(resourceURI), property)
 }
 
+// rootDigestOf computes the canonical-domain root digest of a resolved value
+// while its gjson type is still known: the wrapped/enveloped forms are
+// unwrapped first, a string digests as the string it is, and everything else
+// digests as its JSON form. The flattened Value string in the message is
+// type-lossy and must never be re-digested downstream.
+func rootDigestOf(value gjson.Result) string {
+	unwrapped := provenance.UnwrapEffectiveValue(value)
+	if unwrapped.Type == gjson.String {
+		return provenance.DigestOfString(unwrapped.String())
+	}
+	return provenance.DigestOfJSON(unwrapped.Raw)
+}
+
 // startResolve handles a new ResolveValue request: checks the cache, loads from
 // the persister if needed, and kicks off the first read attempt.
 func (r *ResolveCache) startResolve(from gen.PID, resourceURI pkgmodel.FormaeURI) {
@@ -114,26 +128,29 @@ func (r *ResolveCache) startResolve(from gen.PID, resourceURI pkgmodel.FormaeURI
 			_ = r.Send(from, messages.FailedToResolveValue{ResourceURI: resourceURI, Reason: resolveMissReason(resourceURI, nil)})
 			return
 		}
-		_ = r.Send(from, messages.ValueResolved{ResourceURI: resourceURI, Value: value.String()})
+		_ = r.Send(from, messages.ValueResolved{ResourceURI: resourceURI, Value: value.String(),
+			SourceRootDigest: rootDigestOf(value)})
 		return
 	}
 
 	// Load the resource from the stack to get the native id
 	r.Log().Debug("Cache miss for resource URI uri=%v", resourceURI)
-	stackerResult, err := r.Call(
+	stackerResult, err := messages.UnwrapCall(r.Call(
 		gen.ProcessID{Name: actornames.ResourcePersister, Node: r.Node().Name()},
 		messages.LoadResource{
 			ResourceURI: resourceURI.Stripped(),
-		})
+		}))
 	if err != nil {
 		r.Log().Error("Failed to load resource from resource persister resourceURI=%v: %v", resourceURI, err)
-		_ = r.Send(from, messages.FailedToResolveValue{ResourceURI: resourceURI})
+		_ = r.Send(from, messages.FailedToResolveValue{ResourceURI: resourceURI,
+			Reason: fmt.Sprintf("could not resolve reference %q: %v", string(resourceURI), err)})
 		return
 	}
 	loadResourceResult, ok := stackerResult.(messages.LoadResourceResult)
 	if !ok {
 		r.Log().Error("Unexpected result type from resource persister resultType=%v", reflect.TypeOf(stackerResult))
-		_ = r.Send(from, messages.FailedToResolveValue{ResourceURI: resourceURI})
+		_ = r.Send(from, messages.FailedToResolveValue{ResourceURI: resourceURI,
+			Reason: fmt.Sprintf("could not resolve reference %q: unexpected reply from the resource store", string(resourceURI))})
 		return
 	}
 
@@ -245,7 +262,8 @@ func (r *ResolveCache) continueResolve(retry resolveRetry) {
 		return
 	}
 
-	_ = r.Send(from, messages.ValueResolved{ResourceURI: resourceURI, Value: value.String()})
+	_ = r.Send(from, messages.ValueResolved{ResourceURI: resourceURI, Value: value.String(),
+		SourceRootDigest: rootDigestOf(value)})
 }
 
 // readViaPlugin spawns a PluginOperator and executes a single Read call.
