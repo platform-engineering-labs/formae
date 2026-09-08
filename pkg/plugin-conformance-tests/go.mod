@@ -7,8 +7,8 @@ toolchain go1.26.2
 require (
 	ergo.services/ergo v1.999.320
 	github.com/platform-engineering-labs/formae/pkg/api/model v0.1.1
-	github.com/platform-engineering-labs/formae/pkg/model v0.1.6
-	github.com/platform-engineering-labs/formae/pkg/plugin v0.1.11
+	github.com/platform-engineering-labs/formae/pkg/model v0.1.28
+	github.com/platform-engineering-labs/formae/pkg/plugin v0.4.2
 	github.com/platform-engineering-labs/orbital v0.1.36
 	github.com/tidwall/gjson v1.18.0
 	github.com/tidwall/sjson v1.2.5
@@ -57,7 +57,7 @@ require (
 	github.com/masterminds/semver v1.5.0 // indirect
 	github.com/miekg/dns v1.1.72 // indirect
 	github.com/naegelejd/go-acl v0.0.0-20260323030528-42e4d61407df // indirect
-	github.com/platform-engineering-labs/formae/pkg/credential v0.0.0-20260821213704-ba68bacf6dd6 // indirect
+	github.com/platform-engineering-labs/formae/pkg/credential v0.1.0 // indirect
 	github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 // indirect
 	github.com/segmentio/ksuid v1.0.4 // indirect
 	github.com/shirou/gopsutil/v4 v4.26.1 // indirect
