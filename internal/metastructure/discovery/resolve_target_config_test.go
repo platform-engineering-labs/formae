@@ -8,7 +8,6 @@ package discovery
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -22,7 +21,6 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/changeset"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
-	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
@@ -257,9 +255,10 @@ func TestResolveTargetConfigForList_NonRecoverableReadFailure(t *testing.T) {
 		"error must not include raw $ref envelope fields")
 }
 
-// TestResolveTargetConfigForList_RecoverableFailureThenSuccess asserts that a
-// recoverable failure followed by success within the attempt budget resolves
-// successfully, and that exceeding the budget returns an error.
+// TestResolveTargetConfigForList_RecoverableFailureIsSingleShot asserts that
+// resolution reads each source exactly once: a recoverable first attempt the
+// PluginOperator would go on to retry is reported as an error here, because
+// this synchronous path cannot wait for the operator's later attempts.
 func TestResolveTargetConfigForList_RecoverableFailureIsSingleShot(t *testing.T) {
 	const ksuid = "35R2vyf6mT5wEs0mTWT5bp1Lf0E"
 	const prop = "SecretString"
@@ -278,7 +277,7 @@ func TestResolveTargetConfigForList_RecoverableFailureIsSingleShot(t *testing.T)
 		Config: targetCfg,
 	}
 
-	t.Run("recoverable failure is single-shot and typed", func(t *testing.T) {
+	t.Run("recoverable failure is single-shot", func(t *testing.T) {
 		proc := &resolveStubProcess{
 			loadResult: messages.LoadResourceResult{
 				Resource: srcResource,
@@ -300,10 +299,8 @@ func TestResolveTargetConfigForList_RecoverableFailureIsSingleShot(t *testing.T)
 
 		require.Error(t, err, "a recoverable read failure must surface as an error")
 		assert.Nil(t, result)
-		var rec *resource_update.RecoverableResolveError
-		require.True(t, errors.As(err, &rec),
-			"a recoverable failure must surface as *RecoverableResolveError so the caller can reschedule")
-		assert.Equal(t, resource.OperationErrorCodeServiceTimeout, rec.Code)
+		assert.Contains(t, err.Error(), string(resource.OperationErrorCodeServiceTimeout),
+			"the error must name the code the read failed with")
 		assert.Equal(t, 1, proc.readAttempts,
 			"resolution is single-shot: exactly one read, no in-place retry")
 	})

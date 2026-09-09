@@ -11,11 +11,11 @@ import "time"
 const DefaultMaxBackoff = 30 * time.Second
 
 // RetryStrategy is a pure, actor-agnostic description of how a recoverable
-// plugin operation should be retried. It performs no I/O, no sleeping, and holds
-// no actor state: callers ask it for a decision and then schedule their own
-// (non-blocking) reschedule. It is the single source of truth for both the
-// per-attempt backoff and the total retry budget, so a waiting actor's watchdog
-// (derived from MaxTotalDelay) can never drift from the actual backoff.
+// plugin operation is retried. It performs no I/O, no sleeping, and holds no
+// actor state. It is the single source of truth for both the per-attempt
+// backoff the PluginOperator sleeps and the total retry budget, so a waiting
+// actor's watchdog (derived from MaxTotalDelay) can never drift from the
+// actual backoff.
 type RetryStrategy struct {
 	// MaxRetries is the number of retries allowed after the first attempt.
 	MaxRetries int
@@ -25,12 +25,6 @@ type RetryStrategy struct {
 	// MaxBackoff caps a single exponential backoff delay. Zero means
 	// DefaultMaxBackoff.
 	MaxBackoff time.Duration
-}
-
-// RetryDecision is the result of RetryStrategy.Decide.
-type RetryDecision struct {
-	Retry bool
-	After time.Duration
 }
 
 func (s RetryStrategy) maxBackoff() time.Duration {
@@ -58,21 +52,6 @@ func (s RetryStrategy) Backoff(attempt int) time.Duration {
 		return s.maxBackoff()
 	}
 	return backoff
-}
-
-// Decide reports whether an operation that has just failed on its `attempt`-th
-// try (1-based) with error code `code` should retry, and after how long.
-// Throttling uses exponential Backoff; other recoverable codes use the flat
-// BaseDelay. It gives up on a non-recoverable code or once attempt reaches
-// MaxRetries.
-func (s RetryStrategy) Decide(attempt int, code OperationErrorCode) RetryDecision {
-	if !IsRecoverable(code) || attempt > s.MaxRetries {
-		return RetryDecision{Retry: false}
-	}
-	if code == OperationErrorCodeThrottling {
-		return RetryDecision{Retry: true, After: s.Backoff(attempt)}
-	}
-	return RetryDecision{Retry: true, After: s.BaseDelay}
 }
 
 // MaxTotalDelay is the worst-case total time spent backing off across all

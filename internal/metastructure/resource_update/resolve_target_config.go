@@ -18,33 +18,23 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
-	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
-
-// RecoverableResolveError marks a target-config resolution failure whose
-// underlying plugin Read returned a recoverable error code. Resolution is
-// single-shot and never blocks; a caller running on an actor loop should detect
-// this (errors.As) and reschedule the resolve non-blockingly rather than fail.
-type RecoverableResolveError struct {
-	Code resource.OperationErrorCode
-}
-
-func (e *RecoverableResolveError) Error() string {
-	return fmt.Sprintf("recoverable resolve read error: %s", e.Code)
-}
 
 // ResolveOpaqueTargetConfig returns an ephemeral copy of target.Config with
 // every opaque $ref replaced by its live plaintext value, ready to hand to a
 // plugin call. When the config carries no opaque references it is returned
 // unchanged (after stripping any cached metadata).
 //
-// This is the single resolution routine for every plugin-call path that loads a
-// PERSISTED target config and must authenticate a plugin operation: at rest an
-// opaque secret-sourced credential is a bare $ref with no $value (reference-
-// don't-store), and resolver.ConvertToPluginFormat only strips metadata — it
-// does NOT read the source. So any such path (discovery List, the resolve-read
-// path in ResolveCache, ...) must call this first; the primary apply/changeset
-// path instead resolves via a synthetic Resolve target op and propagation.
+// At rest an opaque secret-sourced credential is a bare $ref with no $value
+// (reference-don't-store), and resolver.ConvertToPluginFormat only strips
+// metadata — it does NOT read the source. So a synchronous plugin-call path
+// that loads a PERSISTED target config (discovery List) must call this first.
+// It is single-shot: each source is read once, and a first attempt the
+// PluginOperator will retry is reported as a failure here, because a caller
+// blocked in this routine cannot consume the operator's later pushes. The
+// ResolveCache resolves the same references itself, on its own message loop,
+// so it can wait for those pushes; the primary apply/changeset path resolves
+// via a synthetic Resolve target op and propagation.
 //
 // Any resolve failure returns a redacted error that names the reference and
 // target but never the plaintext secret.
@@ -110,8 +100,6 @@ func ResolveOpaqueTargetConfig(proc gen.Process, target pkgmodel.Target) (json.R
 				"failed to read resource for opaque ref resolution uri=%s target=%s: %v",
 				uri, target.Label, err,
 			)
-			// Wrap with %w so a caller on an actor loop can detect a
-			// RecoverableResolveError and reschedule non-blockingly.
 			return nil, fmt.Errorf(
 				"failed to resolve opaque reference %q for target %q: %w",
 				uri, target.Label, err,
@@ -163,20 +151,17 @@ func ResolveOpaqueTargetConfig(proc gen.Process, target pkgmodel.Target) (json.R
 	return plain, nil
 }
 
-// readSource performs a SINGLE plugin Read of a credential source resource. It
-// never retries and never blocks: a recoverable failure is surfaced as a
-// *RecoverableResolveError so the actor-loop caller can reschedule the whole
-// resolve via SendAfter. A non-recoverable failure is a plain terminal error.
+// readSource performs one plugin Read of a credential source resource and
+// returns its first attempt. Anything but a finished, successful first attempt
+// is an error: this routine blocks its caller, so it cannot wait for the
+// PluginOperator's retries.
 func readSource(proc gen.Process, res pkgmodel.Resource, cfg json.RawMessage) (*plugin.TrackedProgress, error) {
-	progress, err := ReadResourceViaPlugin(proc, res, cfg)
+	progress, _, err := ReadResourceViaPlugin(proc, res, cfg)
 	if err != nil {
 		return nil, err
 	}
-	if progress.OperationStatus == resource.OperationStatusFailure {
-		if resource.IsRecoverable(progress.ErrorCode) {
-			return nil, &RecoverableResolveError{Code: progress.ErrorCode}
-		}
-		return nil, fmt.Errorf("read failed: non-recoverable error %s", progress.ErrorCode)
+	if !progress.FinishedSuccessfully() {
+		return nil, fmt.Errorf("read failed: %s", progress.ErrorCode)
 	}
 	return progress, nil
 }

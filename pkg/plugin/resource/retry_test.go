@@ -30,32 +30,6 @@ func TestRetryStrategy_Backoff_ZeroMaxBackoffUsesDefault(t *testing.T) {
 	assert.Equal(t, DefaultMaxBackoff, s.Backoff(10))
 }
 
-func TestRetryStrategy_Decide_NonRecoverable(t *testing.T) {
-	s := RetryStrategy{MaxRetries: 5, BaseDelay: time.Second}
-	d := s.Decide(1, OperationErrorCodeInvalidRequest)
-	assert.False(t, d.Retry)
-}
-
-func TestRetryStrategy_Decide_ExhaustedAttempts(t *testing.T) {
-	s := RetryStrategy{MaxRetries: 3, BaseDelay: time.Second}
-	assert.True(t, s.Decide(3, OperationErrorCodeThrottling).Retry)
-	assert.False(t, s.Decide(4, OperationErrorCodeThrottling).Retry, "attempt beyond MaxRetries gives up")
-}
-
-func TestRetryStrategy_Decide_ThrottlingIsExponential(t *testing.T) {
-	s := RetryStrategy{MaxRetries: 5, BaseDelay: time.Second}
-	assert.Equal(t, time.Second, s.Decide(1, OperationErrorCodeThrottling).After)
-	assert.Equal(t, 2*time.Second, s.Decide(2, OperationErrorCodeThrottling).After)
-	assert.Equal(t, 4*time.Second, s.Decide(3, OperationErrorCodeThrottling).After)
-}
-
-func TestRetryStrategy_Decide_OtherRecoverableIsFlat(t *testing.T) {
-	s := RetryStrategy{MaxRetries: 5, BaseDelay: time.Second}
-	assert.Equal(t, time.Second, s.Decide(1, OperationErrorCodeThrottling).After)
-	// NetworkFailure is recoverable but not throttling -> flat BaseDelay each time.
-	assert.Equal(t, time.Second, s.Decide(3, OperationErrorCodeNetworkFailure).After)
-}
-
 func TestRetryStrategy_MaxTotalDelay(t *testing.T) {
 	// MaxRetries=4, base 1s: 1 + 2 + 4 + 8 = 15s.
 	s := RetryStrategy{MaxRetries: 4, BaseDelay: time.Second, MaxBackoff: 30 * time.Second}
