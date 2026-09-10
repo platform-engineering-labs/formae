@@ -161,7 +161,7 @@ func TestGenerateInlinePolicyUpdates_AutoReconcile_NewPolicyGeneratesLabel(t *te
 		"generated label %q should be prefixed {stack}-auto-reconcile-", label)
 }
 
-func TestGenerateInlinePolicyUpdates_AutoReconcile_ReusesExistingLabel(t *testing.T) {
+func TestGenerateInlinePolicyUpdates_AutoReconcile_UnchangedSkipsUpdate(t *testing.T) {
 	ds := &stubDatastore{
 		stackByLabel: &pkgmodel.Stack{ID: "stack-1", Label: "my-stack"},
 		inlinePoliciesForStack: []pkgmodel.Policy{
@@ -179,11 +179,7 @@ func TestGenerateInlinePolicyUpdates_AutoReconcile_ReusesExistingLabel(t *testin
 
 	updates, err := pg.generateInlinePolicyUpdates(stack, pkgmodel.FormaApplyModePatch)
 	require.NoError(t, err)
-	require.Len(t, updates, 1)
-
-	assert.Equal(t, PolicyOperationUpdate, updates[0].Operation)
-	assert.Equal(t, "existing-label", updates[0].Policy.GetLabel(),
-		"inline auto-reconcile policy should reuse the existing policy's label")
+	require.Empty(t, updates, "unchanged inline policy requires no metadata write")
 }
 
 func TestGenerateInlinePolicyUpdates_Reconcile_UndeclaredInlinePolicyDeleted(t *testing.T) {

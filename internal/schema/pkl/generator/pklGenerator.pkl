@@ -67,6 +67,10 @@ function appendProperties(parsed: json.Value): json.Value =
     new Dynamic {
         ...parsed.Properties
         label = parsed.Label
+        when ((read?("prop:StrictDesired") ?? "false") == "true") {
+            when (parsed.getPropertyOrNull("Group") != null) { group = parsed.Group }
+            when (parsed.getPropertyOrNull("Alias") != null) { alias = parsed.Alias }
+        }
     }
 
 /// Derive a unique Pkl identifier alias from a module path.
@@ -145,8 +149,10 @@ function parseStacks(stacksData: List<Map<String, Any>>, policyLabelMap: Map<Str
                     let (policyVarName = policyLabelMap.getOrNull(policyLabel) ?? toCamelCase(policyLabel))
                     "\(policyVarName).res"
                 else
-                    // Inline policy - render directly (without label, as it's typically auto-generated)
+                    // Inline policy - preserve its stored declaration label.
                     let (policyType = policy.getPropertyOrNull("Type") as String?)
+                    let (inlineLabel = policy.getPropertyOrNull("Label") as String?)
+                    let (inlineLabelLine = if (inlineLabel != null) "label = \"\(escapeGeneratorString(inlineLabel))\"; " else "")
                     if (policyType == "ttl")
                         let (expiresAt = policy.getPropertyOrNull("ExpiresAt") as String?)
                         let (onDependents = policy.getPropertyOrNull("OnDependents") as String? ?? "abort")
@@ -156,7 +162,7 @@ function parseStacks(stacksData: List<Map<String, Any>>, policyLabelMap: Map<Str
                         if (expiresAt != null)
                             """
                             new formae.TTLPolicy {
-                                        expiresAt = "\(expiresAt)"
+                                        \(inlineLabelLine)expiresAt = "\(expiresAt)"
                                         onDependents = "\(onDependents)"
                                     }
                             """
@@ -164,7 +170,7 @@ function parseStacks(stacksData: List<Map<String, Any>>, policyLabelMap: Map<Str
                             let (ttlSeconds = policy.getPropertyOrNull("TTLSeconds") as Number? ?? 0)
                             """
                             new formae.TTLPolicy {
-                                        ttl = \(ttlSeconds).s
+                                        \(inlineLabelLine)ttl = \(ttlSeconds).s
                                         onDependents = "\(onDependents)"
                                     }
                             """
@@ -172,7 +178,7 @@ function parseStacks(stacksData: List<Map<String, Any>>, policyLabelMap: Map<Str
                         let (intervalSeconds = policy.getPropertyOrNull("IntervalSeconds") as Number? ?? 0)
                         """
                         new formae.AutoReconcilePolicy {
-                                    interval = \(intervalSeconds).s
+                                    \(inlineLabelLine)interval = \(intervalSeconds).s
                                 }
                         """
                     else
@@ -275,10 +281,17 @@ function parseGenerators(generatorsData: List<Map<String, Any>>, stackLabelMap: 
     let (generatorsString = generatorsData.map((generatorData) ->
         let (generatorType = generatorData["Type"] as String)
         let (label = generatorData["Label"] as String)
-        let (camelCaseLabel = toCamelCase(label))
+        let (camelCaseLabel = generatorData.getOrNull("LocalName") as String? ?? toCamelCase(label))
+        let (localOnly = generatorData.getOrNull("LocalOnly") as Boolean? ?? false)
+        let (entry = if (localOnly) "" else camelCaseLabel)
         let (stackLabel = generatorData.getOrNull("Stack") as String?)
-        let (stackLine = if (stackLabel != null)
-            "\n        stack = \(stackLabelMap.getOrNull(stackLabel) ?? toCamelCase(stackLabel)).res"
+        let (stackLine = if (localOnly)
+            "\n        stack = new formae.StackResolvable { label = \"\(escapeGeneratorString(stackLabel ?? ""))\" }"
+        else if (stackLabel != null)
+            if (strictDesired)
+                "\n        stack = new formae.StackResolvable { label = \"\(escapeGeneratorString(stackLabel))\" }"
+            else
+                "\n        stack = \(stackLabelMap.getOrNull(stackLabel) ?? toCamelCase(stackLabel)).res"
         else
             ""
         )
@@ -308,7 +321,7 @@ function parseGenerators(generatorsData: List<Map<String, Any>>, stackLabelMap: 
         excludeCharacters = "\(escapeGeneratorString(excludeCharacters))"
         requireEachIncludedType = \(requireEachIncludedType)
       }
-      \(camelCaseLabel)
+      \(entry)
       """
         else if (generatorType == "keypair")
             let (bits = generatorData["Bits"] as Number)
@@ -318,7 +331,7 @@ function parseGenerators(generatorsData: List<Map<String, Any>>, stackLabelMap: 
         label = "\(label)"\(stackLine)\(rotationLine)
         bits = \(bits.toInt())
       }
-      \(camelCaseLabel)
+      \(entry)
       """
         else
             // Unknown generator type - skip with comment
@@ -329,16 +342,43 @@ function parseGenerators(generatorsData: List<Map<String, Any>>, stackLabelMap: 
     ))
     generatorsString.join("\n")
 
+local strictDesired: Boolean = (read?("prop:StrictDesired") ?? "false") == "true"
+
+function parseDesiredConfigClasses(targetsData: List<Map<String, Any>>): String =
+ targetsData.map((targetData) ->
+        if (strictDesired && targetData["config"] != null)
+            let (configMap = targetData["config"].toMap())
+            let (hints = targetData.getOrNull("configSchema")?.getPropertyOrNull("Hints")?.toMap() ?? Map())
+            let (fields = configMap.fold(List(), (acc, key, value) ->
+                let (hint = hints.getOrNull(key.capitalize()))
+                acc.add((if (hint != null) "@formae.ConfigFieldHint { createOnly = \(hint.CreateOnly) }\n" else "") +
+                    "`" + key + "`: Any")
+            ))
+            let (missing = hints.keys.filter((key) -> !configMap.keys.any((name) -> name.capitalize() == key)))
+            let (hiddenFields = missing.map((key) -> "@formae.ConfigFieldHint { createOnly = \(hints[key].CreateOnly) }\n hidden `" + key + "`: Any = null"))
+            "local class \(targetData["configClass"]) {\n" + (fields + hiddenFields).join("\n") + "\n}"
+            else ""
+ ).join("\n")
+
 function parseTargets(targetsData: List<Map<String, Any>>): String =
     let (targetsString = targetsData.map((targetData) ->
         let (label = targetData["label"])
         let (discoverable = targetData.getOrNull("discoverable"))
         let (camelCaseLabel = toCamelCase(label))
         let (config = targetData["config"])
+        let (reaping = targetData.getOrNull("reaping"))
+        let (reapingLine = if (reaping == null) ""
+            else if (reaping.Kind == "never") "\n        reap = new formae.NeverReap {}"
+            else if (reaping.Kind == "after") "\n        reap = new formae.ReapAfter { maxUnreachable = \(reaping.MaxUnreachableSeconds).s }"
+            else throw("Unsupported target reaping behaviour")
+        )
         let (namespace = targetData.getOrNull("namespace") ?? "aws")
 
         // Generate config properties if config exists
-        let (configString = if (config != null)
+        let (configString = if (strictDesired && config != null)
+            let (fields = config.toMap().fold(List(), (acc, key, value) -> acc.add("`" + key + "` = " + gen.renderDesiredConfigValue(value))))
+            "\n        config = new \(targetData["configClass"]) {\n" + fields.join("\n") + "\n}"
+        else if (config != null)
             let (configMap = config.toMap())
             let (configLines = configMap.fold(List(), (acc: List<String>, key: String, value: Any) ->
                 let (valueString = if (value is String) "\"\(value)\"" else value.toString())
@@ -359,7 +399,7 @@ function parseTargets(targetsData: List<Map<String, Any>>): String =
 
       local \(camelCaseLabel) = new formae.Target {
         label = "\(label)"
-        namespace = "\(namespace)"\(if (discoverable != null) "\n        discoverable = \(discoverable)" else "")\(configString)
+        namespace = "\(namespace)"\(reapingLine)\(if (discoverable != null) "\n        discoverable = \(discoverable)" else "")\(configString)
       }
       \(camelCaseLabel)
       """
@@ -368,23 +408,31 @@ function parseTargets(targetsData: List<Map<String, Any>>): String =
 
 function parseResources(resources: List<String>, targetMap: Map<String, String>, stackMap: Map<String, String>): String =
     let (resourcesString = resources.map((r) ->
-        // Replace target references in the resource string with camelCase versions
+        // Strict desired membership uses typed label references. A lexical
+        // local named stack/target would otherwise resolve to the resource's
+        // own member and recurse. The declared stacks and targets stay intact.
         let (withTargets = targetMap.fold(r, (acc: String, originalLabel: String, camelCaseLabel: String) ->
-            acc.replaceAll("target = \"\(originalLabel)\"", "target = \(camelCaseLabel).res")
+            if (strictDesired)
+                acc.replaceAll("target = \"\(escapeGeneratorString(originalLabel))\"", "target = new formae.TargetResolvable { label = \"\(escapeGeneratorString(originalLabel))\" }")
+            else
+                acc.replaceAll("target = \"\(originalLabel)\"", "target = \(camelCaseLabel).res")
         ))
-        // Replace stack references in the resource string with camelCase versions
         stackMap.fold(withTargets, (acc: String, originalLabel: String, camelCaseLabel: String) ->
-            // First: replace resolvable stack references (Resolvable.stack is String?)
-            acc.replaceAll("stack = \"\(originalLabel)\" //resolvable", "stack = \(camelCaseLabel).res.label")
-            // Then: replace resource stack references (Resource.stack is StackResolvable?)
-            .replaceAll("stack = \"\(originalLabel)\"", "stack = \(camelCaseLabel).res")
-            .replaceAll("stack = \"\(originalLabel).Label\"", "stack = \(camelCaseLabel).res.Label")
+            if (strictDesired)
+                // Parentheses keep string-valued Resolvable.stack out of the
+                // following Resource.stack replacement.
+                acc.replaceAll("stack = \"\(escapeGeneratorString(originalLabel))\" //resolvable", "stack = (\"\(escapeGeneratorString(originalLabel))\")")
+                .replaceAll("stack = \"\(escapeGeneratorString(originalLabel))\"", "stack = new formae.StackResolvable { label = \"\(escapeGeneratorString(originalLabel))\" }")
+            else
+                acc.replaceAll("stack = \"\(originalLabel)\" //resolvable", "stack = \(camelCaseLabel).res.label")
+                .replaceAll("stack = \"\(originalLabel)\"", "stack = \(camelCaseLabel).res")
+                .replaceAll("stack = \"\(originalLabel).Label\"", "stack = \(camelCaseLabel).res.Label")
         )
     ))
     resourcesString.join("\n\n")
 
 function generateFormaFile(parsed: json.Value): String =
-    let (parsedList = parsed.Resources.toList())
+    let (parsedList = parsed.getPropertyOrNull("Resources")?.toList() ?? List())
 
     // Phase 1: Pre-compute pklMaps for all resources
     let (pklMaps = parsedList.map((resource) ->
@@ -419,7 +467,8 @@ function generateFormaFile(parsed: json.Value): String =
     // duplicate `formae` member. It reaches generateImportStatements as the
     // __import_statement__ of any value rendered through the formae fluent API
     // (e.g. an opaque `formae.value("...").opaque.hashed` secret).
-    let (dependencyImports = pklMaps.flatMap((pklMap) -> gen.generateImportStatements(pklMap)).distinct.filter((e) -> !imports.contains(e) && e != "@formae/formae.pkl"))
+    let (targetImports = if (strictDesired) (parsed.getPropertyOrNull("Targets")?.toList() ?? List()).flatMap((target) -> gen.desiredConfigImports(target.Config)) else List())
+    let (dependencyImports = (pklMaps.flatMap((pklMap) -> gen.generateImportStatements(pklMap)) + targetImports).distinct.filter((e) -> !imports.contains(e) && e != "@formae/formae.pkl"))
     let (allImports = (imports + dependencyImports).distinct)
 
     // Phase 3: Render resources with collision-aware aliases
@@ -433,17 +482,20 @@ function generateFormaFile(parsed: json.Value): String =
     ))
 
     // Extract target data from the parsed JSON
-    let (targetsFromJson = parsed.Targets.toList().map((target) -> Map(
+    let (targetsFromJson = (parsed.getPropertyOrNull("Targets")?.toList() ?? List()).mapIndexed((index, target) -> Map(
             "label", target.Label,
             "namespace", target.Namespace ?? "aws",
             "config", target.Config,
-            "discoverable", target.getPropertyOrNull("Discoverable")
+            "configSchema", target.getPropertyOrNull("ConfigSchema"),
+            "configClass", "_formaeDesiredConfig_" + index.toString(),
+            "discoverable", target.getPropertyOrNull("Discoverable"),
+            "reaping", target.getPropertyOrNull("Reaping")
             )
         )
     )
 
     // Extract stack data from the parsed JSON, falling back to resource stack labels if Stacks is not present
-    let (stacksFromJson = parsed.Stacks.toList().map((stack) -> Map(
+    let (stacksFromJson = (parsed.getPropertyOrNull("Stacks")?.toList() ?? List()).map((stack) -> Map(
             "label", stack.Label,
             // Description is optional and omitted from JSON when unset, so read it
             // safely — a missing property must not error.
@@ -460,7 +512,8 @@ function generateFormaFile(parsed: json.Value): String =
             "Label", policy.Label,
             "TTLSeconds", policy.getPropertyOrNull("TTLSeconds"),
             "ExpiresAt", policy.getPropertyOrNull("ExpiresAt"),
-            "OnDependents", policy.getPropertyOrNull("OnDependents")
+            "OnDependents", policy.getPropertyOrNull("OnDependents"),
+            "IntervalSeconds", policy.getPropertyOrNull("IntervalSeconds")
             )
         )
     else
@@ -473,6 +526,8 @@ function generateFormaFile(parsed: json.Value): String =
             "Type", generator.Type,
             "Label", generator.Label,
             "Stack", generator.getPropertyOrNull("Stack"),
+            "LocalName", generator.getPropertyOrNull("$localName"),
+            "LocalOnly", generator.getPropertyOrNull("$localOnly"),
             "RotationEverySeconds", generator.getPropertyOrNull("Rotation")
                 ?.getPropertyOrNull("EverySeconds"),
             "Length", generator.getPropertyOrNull("Length"),
@@ -541,6 +596,8 @@ function generateFormaFile(parsed: json.Value): String =
 
     // Resource imports
     \(importFormatting(imports, allImports))\(dependencyImportsSection)
+
+    \(parseDesiredConfigClasses(targetsFromJson))
 
     forma {\(policiesSection)
         \(parseStacks(stacksFromJson, policyLabelMap))

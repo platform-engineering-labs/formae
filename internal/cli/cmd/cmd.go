@@ -328,6 +328,19 @@ func PropertiesFromCmd(cmd *cobra.Command) map[string]string {
 	return result
 }
 
+// ExplicitPropertiesFromCmd leaves declaration defaults to the evaluator.
+// Passing every flag default would erase the distinction between supplied
+// inputs and values produced by the declaration.
+func ExplicitPropertiesFromCmd(command *cobra.Command) map[string]string {
+	values := PropertiesFromCmd(command)
+	for flag := range values {
+		if !command.Flags().Changed(flag) {
+			delete(values, flag)
+		}
+	}
+	return values
+}
+
 // AddOutputFlags registers the standard --output-consumer / --output-schema
 // flags used across the CLI for commands that can emit machine-readable output.
 func AddOutputFlags(c *cobra.Command) {

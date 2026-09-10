@@ -12,9 +12,10 @@ import (
 )
 
 type SubmitCommandResponse struct {
-	CommandID   string      `json:"CommandId"`
-	Description Description `json:"Description"`
-	Simulation  Simulation  `json:"Simulation"`
+	Review      *pkgmodel.DriftReview `json:"Review,omitempty"`
+	CommandID   string                `json:"CommandId"`
+	Description Description           `json:"Description"`
+	Simulation  Simulation            `json:"Simulation"`
 }
 
 type Description struct {
@@ -52,20 +53,23 @@ const (
 )
 
 type Command struct {
-	CommandID        string            `json:"CommandId"`
-	Command          string            `json:"Command"`
-	Mode             string            `json:"Mode,omitempty"` // "reconcile" | "patch"
-	Source           string            `json:"Source,omitempty"`
-	Subject          string            `json:",omitempty"`
-	SubjectName      string            `json:",omitempty"`
-	State            string            `json:"State"`
-	StartTs          time.Time         `json:"StartTs,omitempty"`
-	EndTs            time.Time         `json:"EndTs,omitempty"`
-	ResourceUpdates  []ResourceUpdate  `json:"ResourceUpdates,omitempty"`
-	TargetUpdates    []TargetUpdate    `json:"TargetUpdates,omitempty"`
-	StackUpdates     []StackUpdate     `json:"StackUpdates,omitempty"`
-	PolicyUpdates    []PolicyUpdate    `json:"PolicyUpdates,omitempty"`
-	GeneratorUpdates []GeneratorUpdate `json:"GeneratorUpdates,omitempty"`
+	Resolution       *pkgmodel.DriftReview `json:"Resolution,omitempty"`
+	Message          string                `json:"Message,omitempty"`
+	InputProperties  json.RawMessage       `json:"InputProperties,omitempty"`
+	CommandID        string                `json:"CommandId"`
+	Command          string                `json:"Command"`
+	Mode             string                `json:"Mode,omitempty"` // "reconcile" | "patch"
+	Source           string                `json:"Source,omitempty"`
+	Subject          string                `json:",omitempty"`
+	SubjectName      string                `json:",omitempty"`
+	State            string                `json:"State"`
+	StartTs          time.Time             `json:"StartTs,omitempty"`
+	EndTs            time.Time             `json:"EndTs,omitempty"`
+	ResourceUpdates  []ResourceUpdate      `json:"ResourceUpdates,omitempty"`
+	TargetUpdates    []TargetUpdate        `json:"TargetUpdates,omitempty"`
+	StackUpdates     []StackUpdate         `json:"StackUpdates,omitempty"`
+	PolicyUpdates    []PolicyUpdate        `json:"PolicyUpdates,omitempty"`
+	GeneratorUpdates []GeneratorUpdate     `json:"GeneratorUpdates,omitempty"`
 }
 
 // wrapper for machine-readable output
@@ -277,6 +281,7 @@ type PolicyInventoryItem struct {
 }
 
 type Stats struct {
+	Capabilities       []string       `json:"Capabilities,omitempty"`
 	Version            string         `json:"Version"`
 	AgentID            string         `json:"AgentId"`
 	Clients            int            `json:"Clients"`
@@ -403,4 +408,15 @@ type UpdatePluginsResponse struct {
 	Operations      []PluginOperation `json:"operations"`
 	RequiresRestart bool              `json:"requiresRestart"`
 	Warnings        []string          `json:"warnings,omitempty"`
+}
+
+// CommandDesiredDelta is source-update guidance, never a complete reconcile
+// declaration. Its properties come only from this command's desired records.
+type CommandDesiredDelta struct {
+	CommandID        string                      `json:"CommandId"`
+	State            string                      `json:"State"`
+	Partial          bool                        `json:"Partial"`
+	Resolution       *pkgmodel.DriftReview       `json:"Resolution"`
+	Forma            *pkgmodel.Forma             `json:"Forma"`
+	DeletedResources []pkgmodel.DriftObservation `json:"DeletedResources,omitempty"`
 }

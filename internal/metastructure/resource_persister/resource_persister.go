@@ -87,7 +87,17 @@ func (rp *ResourcePersister) HandleCall(from gen.PID, ref gen.Ref, request any) 
 		return resource_update.PersistResourceUpdateResult{Version: hash}, nil
 	case target_update.PersistTargetUpdates:
 		versions, err := rp.persistTargetUpdates(req.TargetUpdates, req.CommandID)
-		return persistVersionsResult(rp, "target updates", versions, err), nil
+		result := target_update.PersistTargetUpdatesResult{Versions: versions, Incarnations: map[string]string{}}
+		if err != nil {
+			result.Error = err.Error()
+		} else {
+			for _, update := range req.TargetUpdates {
+				if update.Target.ExecutionIncarnation != "" {
+					result.Incarnations[update.Target.Label] = update.Target.ExecutionIncarnation
+				}
+			}
+		}
+		return result, nil
 	case stack_update.PersistStackUpdates:
 		versions, err := rp.persistStackUpdates(req.StackUpdates, req.CommandID)
 		return persistVersionsResult(rp, "stack updates", versions, err), nil
@@ -498,7 +508,7 @@ func (rp *ResourcePersister) processResourceUpdate(commandID string, rc resource
 	// can pass the incarnation it believes is current. An empty incarnation
 	// (target health not populated) means "no incarnation check" at the
 	// datastore; the reaped-tombstone check still applies.
-	expectedIncarnation := ""
+	expectedIncarnation := rc.ResourceTarget.ExecutionIncarnation
 	if rc.ResourceTarget.Health != nil {
 		expectedIncarnation = rc.ResourceTarget.Health.IncarnationID
 	}
@@ -1307,7 +1317,22 @@ func (rp *ResourcePersister) cleanupEmptyStacks(stackLabels []string, commandID 
 		}
 
 		if count == 0 {
-			_, err := rp.datastore.DeleteStack(stackLabel, commandID)
+			// A resource-empty stack may still own declared generators. Use
+			// the strict reader: corrupt metadata cannot prove emptiness.
+			reader, ok := rp.datastore.(datastore.DesiredMetadataReader)
+			if !ok {
+				rp.Log().Error("Cannot determine generator ownership for empty stack stackLabel=%s", stackLabel)
+				continue
+			}
+			generators, err := reader.LoadDesiredGeneratorsByStack(stackLabel)
+			if err != nil {
+				rp.Log().Error("Failed to read generators for empty stack stackLabel=%s: %v", stackLabel, err)
+				continue
+			}
+			if len(generators) > 0 {
+				continue
+			}
+			_, err = rp.datastore.DeleteStack(stackLabel, commandID)
 			if err != nil {
 				rp.Log().Error("Failed to delete empty stack stackLabel=%s: %v", stackLabel, err)
 			} else {

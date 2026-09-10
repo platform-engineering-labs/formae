@@ -204,14 +204,17 @@ func RunStoreAndLoadFormaCommandOptionalFields(t *testing.T, newDS func(t *testi
 		defer td.CleanUpFn() //nolint:errcheck
 
 		cmd := &forma_command.FormaCommand{
-			ID:          util.NewID(),
-			ClientID:    "synchronizer",
-			Subject:     "11111111-1111-4111-8111-111111111111",
-			SubjectName: "dpanders",
-			Command:     pkgmodel.CommandApply,
-			State:       forma_command.CommandStatePending,
-			Description: pkgmodel.Description{Text: "deploy production stack"},
-			Config:      config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModePatch},
+			ID:              util.NewID(),
+			ClientID:        "synchronizer",
+			Subject:         "11111111-1111-4111-8111-111111111111",
+			SubjectName:     "dpanders",
+			Message:         "accept observed production capacity",
+			InputProperties: json.RawMessage(`{"enabled":false,"count":0,"name":""}`),
+			Stacks:          []forma_command.CommandStack{{ID: "stack-id-1", Label: "production"}},
+			Command:         pkgmodel.CommandApply,
+			State:           forma_command.CommandStatePending,
+			Description:     pkgmodel.Description{Text: "deploy production stack"},
+			Config:          config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModePatch},
 			ResourceUpdates: []resource_update.ResourceUpdate{
 				{
 					DesiredState:   pkgmodel.Resource{Properties: json.RawMessage("{}")},
@@ -229,8 +232,88 @@ func RunStoreAndLoadFormaCommandOptionalFields(t *testing.T, newDS func(t *testi
 		assert.Equal(t, "synchronizer", loaded.ClientID)
 		assert.Equal(t, "11111111-1111-4111-8111-111111111111", loaded.Subject)
 		assert.Equal(t, "dpanders", loaded.SubjectName)
+		assert.Equal(t, "accept observed production capacity", loaded.Message)
+		assert.JSONEq(t, `{"enabled":false,"count":0,"name":""}`, string(loaded.InputProperties))
+		assert.Equal(t, []forma_command.CommandStack{{ID: "stack-id-1", Label: "production"}}, loaded.Stacks)
 		assert.Equal(t, "deploy production stack", loaded.Description.Text)
 		assert.Equal(t, pkgmodel.FormaApplyModePatch, loaded.Config.Mode)
+	})
+}
+
+func RunFormaCommandInputPropertiesNilAndEmptyRoundTrip(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("FormaCommandInputProperties_NilAndEmptyRoundTrip", func(t *testing.T) {
+		td := newDS(t)
+		defer td.CleanUpFn() //nolint:errcheck
+		for _, tc := range []struct {
+			name  string
+			value json.RawMessage
+		}{{"unavailable", nil}, {"recorded-no-inputs", json.RawMessage(`{}`)}} {
+			t.Run(tc.name, func(t *testing.T) {
+				cmd := &forma_command.FormaCommand{ID: util.NewID(), Command: pkgmodel.CommandApply, State: forma_command.CommandStateSuccess, InputProperties: tc.value}
+				assert.NoError(t, td.StoreFormaCommand(cmd, cmd.ID))
+				loaded, err := td.GetFormaCommandByCommandID(cmd.ID)
+				assert.NoError(t, err)
+				assert.Equal(t, []byte(tc.value), []byte(loaded.InputProperties))
+			})
+		}
+	})
+}
+
+func RunFormaCommandMembershipFailureRollsBackCommand(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("FormaCommandMembershipOnly_StackLogFilter", func(t *testing.T) {
+		td := newDS(t)
+		defer func(cleanup func() error) { _ = cleanup() }(td.CleanUpFn)
+		cmd := reconcileBuilder(forma_command.CommandStateSuccess, pkgmodel.FormaApplyModeReconcile, 0, nil)
+		cmd.Stacks = []forma_command.CommandStack{{ID: "empty-stack-id", Label: "empty-stack"}}
+		assert.NoError(t, td.StoreFormaCommand(cmd, cmd.ID))
+		commands, err := td.QueryFormaCommands(&datastore.StatusQuery{Stack: &datastore.QueryItem[string]{Item: "empty-stack"}})
+		assert.NoError(t, err)
+		assert.Len(t, commands, 1)
+		cmd.Stacks = nil
+		assert.NoError(t, td.StoreFormaCommand(cmd, cmd.ID))
+		commands, err = td.QueryFormaCommands(&datastore.StatusQuery{Stack: &datastore.QueryItem[string]{Item: "empty-stack"}})
+		assert.NoError(t, err)
+		assert.Empty(t, commands)
+	})
+
+	t.Run("FormaCommandMixedContributions_RollbackAndConflict", func(t *testing.T) {
+		td := newDS(t)
+		defer func(cleanup func() error) { _ = cleanup() }(td.CleanUpFn)
+		accepted := resourceUpdate("stack-a", "accept-id", "accept", `{}`, types.OperationAccept, resource_update.FormaCommandSourceUser)
+		ordinary := resourceUpdate("stack-a", "ordinary-id", "ordinary", `{invalid`, types.OperationCreate, resource_update.FormaCommandSourceUser)
+		cmd := reconcileBuilder(forma_command.CommandStateSuccess, pkgmodel.FormaApplyModeReconcile, 0, []resource_update.ResourceUpdate{accepted, ordinary})
+		cmd.Stacks = []forma_command.CommandStack{{ID: "stack-id", Label: "stack-a"}}
+		assert.Error(t, td.StoreFormaCommand(cmd, cmd.ID))
+		_, err := td.GetFormaCommandByCommandID(cmd.ID)
+		assert.Error(t, err)
+		rows, err := td.LoadResourceUpdates(cmd.ID)
+		assert.NoError(t, err)
+		assert.Empty(t, rows)
+		ordinary.DesiredState.Properties = json.RawMessage(`{}`)
+		cmd.ResourceUpdates[1] = ordinary
+		assert.NoError(t, td.StoreFormaCommand(cmd, cmd.ID))
+		rows, err = td.LoadResourceUpdates(cmd.ID)
+		assert.NoError(t, err)
+		assert.Len(t, rows, 2)
+		ordinary.DesiredState.Ksuid = accepted.DesiredState.Ksuid
+		conflict := reconcileBuilder(forma_command.CommandStateSuccess, pkgmodel.FormaApplyModeReconcile, 0, []resource_update.ResourceUpdate{ordinary, accepted})
+		assert.Error(t, td.StoreFormaCommand(conflict, conflict.ID))
+		assert.Error(t, td.BulkStoreResourceUpdates(conflict.ID, conflict.ResourceUpdates))
+		_, err = td.GetFormaCommandByCommandID(conflict.ID)
+		assert.Error(t, err)
+	})
+
+	t.Run("FormaCommandMembershipFailure_RollsBackCommandAndAcceptance", func(t *testing.T) {
+		td := newDS(t)
+		defer td.CleanUpFn() //nolint:errcheck
+		cmd := &forma_command.FormaCommand{
+			ID: util.NewID(), Command: pkgmodel.CommandApply, State: forma_command.CommandStateSuccess,
+			Stacks:          []forma_command.CommandStack{{ID: "duplicate", Label: "a"}, {ID: "duplicate", Label: "b"}},
+			ResourceUpdates: []resource_update.ResourceUpdate{{Operation: types.OperationAccept, State: types.ResourceUpdateStateSuccess, StackLabel: "a", DesiredState: pkgmodel.Resource{Ksuid: "accepted-id", Stack: "a", Properties: json.RawMessage(`{}`)}, Source: types.FormaCommandSourceUser}},
+		}
+		assert.Error(t, td.StoreFormaCommand(cmd, cmd.ID))
+		_, err := td.GetFormaCommandByCommandID(cmd.ID)
+		assert.Error(t, err, "command row must roll back with membership failure")
 	})
 }
 

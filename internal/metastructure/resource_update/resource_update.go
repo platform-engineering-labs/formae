@@ -43,12 +43,14 @@ const (
 	FormaCommandSourcePolicyAutoReconcile = types.FormaCommandSourcePolicyAutoReconcile
 	FormaCommandSourceGeneratorRotation   = types.FormaCommandSourceGeneratorRotation
 
-	OperationCreate  = types.OperationCreate
-	OperationUpdate  = types.OperationUpdate
-	OperationDelete  = types.OperationDelete
-	OperationRead    = types.OperationRead
-	OperationReaped  = types.OperationReaped
-	OperationReplace = types.OperationReplace
+	OperationCreate       = types.OperationCreate
+	OperationUpdate       = types.OperationUpdate
+	OperationDelete       = types.OperationDelete
+	OperationRead         = types.OperationRead
+	OperationReaped       = types.OperationReaped
+	OperationReplace      = types.OperationReplace
+	OperationAccept       = types.OperationAccept
+	OperationAcceptDelete = types.OperationAcceptDelete
 
 	ResourceUpdateStateUnknown    = types.ResourceUpdateStateUnknown
 	ResourceUpdateStateNotStarted = types.ResourceUpdateStateNotStarted
@@ -829,6 +831,10 @@ func (ru *ResourceUpdate) FilterProgressMessage(filter func(plugin.TrackedProgre
 // This is used during restart recovery to restore the correct state based on
 // the progress that was persisted before the restart.
 func (ru *ResourceUpdate) UpdateState() {
+	if ru.IsAcceptance() {
+		ru.State = ResourceUpdateStateSuccess
+		return
+	}
 	if len(ru.ProgressResult) == 0 {
 		ru.State = ResourceUpdateStateNotStarted
 		return
@@ -861,6 +867,8 @@ func (ru *ResourceUpdate) UpdateState() {
 
 func (ru *ResourceUpdate) requiredOperations() []resource.Operation {
 	switch ru.Operation {
+	case OperationAccept, OperationAcceptDelete:
+		return nil
 	case OperationRead:
 		return []resource.Operation{resource.OperationRead}
 	case OperationCreate:
@@ -1768,4 +1776,9 @@ func (m *propertyMerger) cleanPath(path string) string {
 		return path[1:]
 	}
 	return path
+}
+
+// IsAcceptance identifies durable intent contributions that never execute provider work.
+func (ru ResourceUpdate) IsAcceptance() bool {
+	return ru.Operation == OperationAccept || ru.Operation == OperationAcceptDelete
 }

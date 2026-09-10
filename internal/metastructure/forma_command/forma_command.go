@@ -5,6 +5,9 @@
 package forma_command
 
 import (
+	"encoding/json"
+	"fmt"
+	"sort"
 	"time"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
@@ -16,6 +19,12 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
+
+// CommandStack records explicit stack coverage, including empty stacks.
+type CommandStack struct {
+	ID    string `json:"ID,omitempty"`
+	Label string `json:"Label"`
+}
 
 type CommandState string
 
@@ -44,6 +53,8 @@ const (
 )
 
 type FormaCommand struct {
+	Resolution       *pkgmodel.DriftReview              `json:"Resolution,omitempty"`
+	Setup            *SetupBoundary                     `json:"Setup,omitempty"`
 	ID               string                             `json:"ID"`
 	Description      pkgmodel.Description               `json:"Description"`
 	State            CommandState                       `json:"State"`
@@ -60,17 +71,20 @@ type FormaCommand struct {
 	// generator row, and a generator whose spec never changed still gets one
 	// when a resource is newly bound to it.
 	//
-	// Deliberately not serialized. A draw produces a value in memory for the
-	// destinations in the same changeset and is meaningless outside it, so a
-	// command recovered from storage re-derives its draws from the surviving
-	// destinations rather than replaying a stale set.
+	// Draw values remain memory-only. Setup metadata persists the exact draw
+	// identities/specifications so restart never infers extra draws from
+	// resources added by generator co-planning.
 	DrawGeneratorUpdates []generator_update.GeneratorUpdate `json:"-"`
+	DrawIntentKnown      bool                               `json:"-"`
 	Config               config.FormaCommandConfig          `json:"Config"`
 	Command              pkgmodel.Command                   `json:"Command"`
 	ClientID             string                             `json:"ClientId,omitempty"`
 	Subject              string                             `json:"Subject,omitempty"`
 	SubjectName          string                             `json:"SubjectName,omitempty"`
 	Source               Source                             `json:"Source,omitempty"`
+	Message              string                             `json:"Message,omitempty"`
+	InputProperties      json.RawMessage                    `json:"InputProperties,omitempty"`
+	Stacks               []CommandStack                     `json:"Stacks,omitempty"`
 }
 
 type FormaCommandResult struct {
@@ -96,7 +110,21 @@ func NewFormaCommand(
 	subjectName string,
 	source Source,
 ) *FormaCommand {
+	stacks := make([]CommandStack, 0, len(forma.Stacks)+len(forma.Resources))
+	for _, stack := range forma.Stacks {
+		stacks = append(stacks, CommandStack{Label: stack.Label})
+	}
+	for _, res := range forma.Resources {
+		stacks = append(stacks, CommandStack{Label: res.Stack})
+	}
+	for i := range resourceUpdates {
+		if resourceUpdates[i].IsAcceptance() {
+			resourceUpdates[i].State = resource_update.ResourceUpdateStateSuccess
+		}
+	}
 	return &FormaCommand{
+		Setup:            &SetupBoundary{Version: 1},
+		DrawIntentKnown:  true,
 		ID:               util.NewID(),
 		StartTs:          util.TimeNow(),
 		ModifiedTs:       util.TimeNow(),
@@ -113,6 +141,9 @@ func NewFormaCommand(
 		Subject:          subject,
 		SubjectName:      subjectName,
 		Source:           source,
+		Message:          formaCommandConfig.Message,
+		InputProperties:  pkgmodel.SnapshotInputProperties(forma.Properties),
+		Stacks:           stacks,
 	}
 }
 
@@ -140,16 +171,77 @@ func (fc *FormaCommand) HasResourceVersions() bool {
 	return false
 }
 
-// GetStackLabels returns unique stack labels from all ResourceUpdates.
-// This derives stack information from ResourceUpdates rather than storing it separately.
+// GetStackLabels returns declared and affected stack scope, including empty stacks.
 func (fc *FormaCommand) GetStackLabels() []string {
 	seen := make(map[string]bool)
-	var labels []string
-	for _, ru := range fc.ResourceUpdates {
-		if !seen[ru.StackLabel] {
-			seen[ru.StackLabel] = true
-			labels = append(labels, ru.StackLabel)
+	add := func(label string) {
+		if label != "" {
+			seen[label] = true
 		}
 	}
+	for _, stack := range fc.Stacks {
+		add(stack.Label)
+	}
+	for _, ru := range fc.ResourceUpdates {
+		add(ru.StackLabel)
+		add(ru.DesiredState.Stack)
+	}
+	for _, su := range fc.StackUpdates {
+		add(su.Stack.Label)
+	}
+	for _, pu := range fc.PolicyUpdates {
+		add(pu.StackLabel)
+	}
+	for _, gu := range fc.GeneratorUpdates {
+		add(gu.StackLabel)
+	}
+	labels := make([]string, 0, len(seen))
+	for label := range seen {
+		labels = append(labels, label)
+	}
+	sort.Strings(labels)
 	return labels
+}
+
+// ResolveStackIdentities ignores declaration IDs. Stack update IDs were minted
+// by planning; every other identity comes from the current datastore row.
+// Call only at initial admission, never during lifecycle persistence: a later
+// stack incarnation must not rewrite the historical command's membership.
+func (fc *FormaCommand) ResolveStackIdentities(ds interface {
+	GetStackByLabel(string) (*pkgmodel.Stack, error)
+}) error {
+	stacks := make([]CommandStack, 0)
+	for _, label := range fc.GetStackLabels() {
+		stack, err := ds.GetStackByLabel(label)
+		if err != nil {
+			return fmt.Errorf("resolve command stack %q: %w", label, err)
+		}
+		id := ""
+		if stack != nil {
+			id = stack.ID
+		}
+		for _, update := range fc.StackUpdates {
+			if update.Stack.Label == label && update.Operation == stack_update.StackOperationCreate && stack == nil {
+				id = update.Stack.ID
+			}
+		}
+		// Missing rows can occur in legacy/unmanaged inventory. Preserve their
+		// display scope without inventing an incarnation; storage ignores empty IDs.
+		stacks = append(stacks, CommandStack{ID: id, Label: label})
+	}
+	fc.Stacks = stacks
+	return nil
+}
+
+// HasExecutableChanges excludes logical acceptance from provider scheduling.
+func (fc *FormaCommand) HasExecutableChanges() bool {
+	if len(fc.TargetUpdates) > 0 {
+		return true
+	}
+	for _, ru := range fc.ResourceUpdates {
+		if !ru.IsAcceptance() {
+			return true
+		}
+	}
+	return false
 }

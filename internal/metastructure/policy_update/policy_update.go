@@ -36,6 +36,10 @@ type PolicyUpdateState = types.PolicyUpdateState
 
 // PolicyUpdate represents a policy change operation
 type PolicyUpdate struct {
+	PolicyID        string `json:"PolicyID,omitempty"`
+	StackID         string `json:"StackID,omitempty"`
+	ExpectedVersion string `json:"ExpectedVersion,omitempty"`
+
 	Policy            pkgmodel.Policy   `json:"-"`
 	ExistingPolicy    pkgmodel.Policy   `json:"-"`
 	Operation         PolicyOperation   `json:"Operation"`
@@ -51,6 +55,10 @@ type PolicyUpdate struct {
 
 // policyUpdateJSON is a helper struct for JSON marshaling/unmarshaling
 type policyUpdateJSON struct {
+	PolicyID        string `json:"PolicyID,omitempty"`
+	StackID         string `json:"StackID,omitempty"`
+	ExpectedVersion string `json:"ExpectedVersion,omitempty"`
+
 	Policy            json.RawMessage   `json:"Policy,omitempty"`
 	ExistingPolicy    json.RawMessage   `json:"ExistingPolicy,omitempty"`
 	Operation         PolicyOperation   `json:"Operation"`
@@ -84,6 +92,7 @@ func (pu PolicyUpdate) MarshalJSON() ([]byte, error) {
 	}
 
 	return json.Marshal(policyUpdateJSON{
+		PolicyID: pu.PolicyID, StackID: pu.StackID, ExpectedVersion: pu.ExpectedVersion,
 		Policy:            policyJSON,
 		ExistingPolicy:    existingPolicyJSON,
 		Operation:         pu.Operation,
@@ -105,6 +114,7 @@ func (pu *PolicyUpdate) UnmarshalJSON(data []byte) error {
 		return err
 	}
 
+	pu.PolicyID, pu.StackID, pu.ExpectedVersion = helper.PolicyID, helper.StackID, helper.ExpectedVersion
 	pu.Operation = helper.Operation
 	pu.State = helper.State
 	pu.StackLabel = helper.StackLabel

@@ -23,6 +23,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	"github.com/platform-engineering-labs/formae/internal/logging"
 	"github.com/platform-engineering-labs/formae/internal/schema"
+	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/spf13/cobra"
 )
@@ -33,6 +34,10 @@ var (
 	runConfirm    = components.RunConfirm
 	promptPath    = defaultPromptPath
 
+	extractDesiredFn = func(a *app.App, query string) (*pkgmodel.Forma, error) { return a.ExtractDesiredStacks(query) }
+	extractDeltaFn   = func(a *app.App, id string) (*apimodel.CommandDesiredDelta, error) {
+		return a.ExtractCommandDesiredDelta(id)
+	}
 	extractFn = func(a *app.App, query string) (*pkgmodel.Forma, []string, error) {
 		return a.ExtractResources(query, false)
 	}
@@ -56,6 +61,10 @@ func defaultPromptPath(th *theme.Theme, defaultVal string) (string, error) {
 }
 
 type ExtractOptions struct {
+	Desired        bool
+	CommandID      string
+	FromJSON       string
+	bundle         *RenderBundle
 	TargetPath     string
 	Query          string
 	Yes            bool
@@ -71,6 +80,9 @@ func ExtractCmd() *cobra.Command {
 		Use:   "extract",
 		Short: "Extract resources to a file",
 		PreRun: func(cmd *cobra.Command, args []string) {
+			if offline, _ := cmd.Flags().GetString("from-json"); offline != "" {
+				return
+			}
 			logging.SetupClientLogging(fmt.Sprintf("%s/log/client.log", config.Config.DataDirectory()))
 		},
 		RunE: func(command *cobra.Command, args []string) error {
@@ -78,6 +90,9 @@ func ExtractCmd() *cobra.Command {
 			opts.TargetPath = command.Flags().Arg(0)
 			opts.pathExplicit = opts.TargetPath != ""
 			opts.Query, _ = command.Flags().GetString("query")
+			opts.Desired, _ = command.Flags().GetBool("desired")
+			opts.CommandID, _ = command.Flags().GetString("command")
+			opts.FromJSON, _ = command.Flags().GetString("from-json")
 			opts.Yes, _ = command.Flags().GetBool("yes")
 			opts.OutputSchema, _ = command.Flags().GetString("output-schema")
 			schemaLocation, _ := command.Flags().GetString("schema-location")
@@ -87,6 +102,23 @@ func ExtractCmd() *cobra.Command {
 			}
 			opts.SchemaLocation = loc
 
+			if opts.FromJSON != "" {
+				reader := command.InOrStdin()
+				if opts.FromJSON != "-" {
+					file, err := os.Open(opts.FromJSON)
+					if err != nil {
+						return err
+					}
+					defer func() { _ = file.Close() }()
+					reader = file
+				}
+				bundle, err := readRenderBundle(reader)
+				if err != nil {
+					return err
+				}
+				opts.bundle = bundle
+				return runExtract(&app.App{Config: &pkgmodel.Config{}}, opts)
+			}
 			configFile, _ := command.Flags().GetString("config")
 			a, err := cmd.AppFromContext(command.Context(), configFile, "", command)
 			if err != nil {
@@ -107,6 +139,9 @@ func ExtractCmd() *cobra.Command {
 
 	command.SetUsageTemplate(cmd.SimpleCmdUsageTemplate)
 
+	command.Flags().Bool("desired", false, "Extract complete desired stacks, including empty stacks, policies and generators; query must contain only literal stack selectors")
+	command.Flags().String("command", "", "Extract a recorded command’s desired delta for source editing; never apply this partial snippet as a full reconcile")
+	command.Flags().String("from-json", "", "Render an already retrieved {Forma, Plugins} JSON bundle from a file or stdin (-), without reading agent/profile/auth configuration")
 	command.Flags().String("query", " ", "Query that allows to find resources by their attributes. Use * as a wildcard anywhere (e.g. foo*, *foo, *foo*, foo*bar). ? and regex are not yet supported.")
 	command.Flags().Bool("yes", false, "Overwrite existing files without prompting")
 	command.Flags().String("output-schema", "pkl", "Output schema (only 'pkl' is currently supported)")
@@ -149,11 +184,16 @@ func runExtract(a *app.App, opts *ExtractOptions) error {
 		opts.pathExplicit = true
 	}
 
+	if opts.TargetPath != "" && opts.OutputSchema == "pkl" && !strings.HasSuffix(opts.TargetPath, ".pkl") {
+		opts.TargetPath += ".pkl"
+	}
 	if err := validateExtractOptions(opts); err != nil {
 		return err
 	}
 
-	a.PrintBanner()
+	if opts.bundle == nil {
+		a.PrintBanner()
+	}
 
 	return runExtractCore(a, opts)
 }
@@ -168,7 +208,27 @@ func runExtractCore(a *app.App, opts *ExtractOptions) error {
 		return fmt.Errorf("unsupported output schema '%s', supported schemas are: %v", opts.OutputSchema, a.SupportedOutputSchemas())
 	}
 
-	forma, nags, err := extractFn(a, opts.Query)
+	var forma *pkgmodel.Forma
+	var nags []string
+	var err error
+	var delta *apimodel.CommandDesiredDelta
+	switch {
+	case opts.bundle != nil:
+		forma = opts.bundle.Forma
+	case opts.CommandID != "":
+		delta, err = extractDeltaFn(a, opts.CommandID)
+		if err == nil {
+			forma = delta.Forma
+			for _, r := range delta.DeletedResources {
+				fmt.Printf("Remove declaration: stack=%q type=%q label=%q\n", r.Stack, r.Type, r.Label)
+			}
+			fmt.Println("Partial source-edit snippet from recorded command " + delta.CommandID + ". Merge values and removals into your complete declaration; do not apply this snippet as a full reconcile.")
+		}
+	case opts.Desired:
+		forma, err = extractDesiredFn(a, opts.Query)
+	default:
+		forma, nags, err = extractFn(a, opts.Query)
+	}
 	if err != nil {
 		msg, renderErr := errfmt.Render(err)
 		if renderErr != nil {
@@ -177,7 +237,7 @@ func runExtractCore(a *app.App, opts *ExtractOptions) error {
 		return fmt.Errorf("%s", msg)
 	}
 
-	if forma == nil || len(forma.Resources) == 0 {
+	if forma == nil || (len(forma.Resources) == 0 && forma.Extraction == nil && len(forma.Stacks) == 0) {
 		fmt.Println("No resources found")
 		return nil
 	}
@@ -203,8 +263,13 @@ func runExtractCore(a *app.App, opts *ExtractOptions) error {
 		return fmt.Errorf("error checking target path: %v", statErr)
 	}
 
-	res, err := generateFn(a, forma, opts.TargetPath, opts.OutputSchema, opts.SchemaLocation)
-	if errors.Is(err, schema.ErrFailedToGenerateSources) {
+	var res schema.GenerateSourcesResult
+	if opts.bundle != nil {
+		res, err = renderOffline(opts.bundle, opts)
+	} else {
+		res, err = generateFn(a, forma, opts.TargetPath, opts.OutputSchema, opts.SchemaLocation)
+	}
+	if opts.bundle == nil && errors.Is(err, schema.ErrFailedToGenerateSources) {
 		logFilePath := fmt.Sprintf("%s/log/client.log", config.Config.DataDirectory())
 		return fmt.Errorf("something went wrong during the extraction. This is our fault. Please contact us and send over the error logs from '%s'", logFilePath)
 	}
@@ -271,7 +336,10 @@ func validateExtractOptions(opts *ExtractOptions) error {
 		return cmd.FlagErrorf("target path '%s' is a directory, not a file", opts.TargetPath)
 	}
 
-	if strings.TrimSpace(opts.Query) == "" {
+	if (opts.FromJSON != "" && (opts.Desired || opts.CommandID != "" || strings.TrimSpace(opts.Query) != "")) || (opts.CommandID != "" && (opts.Desired || strings.TrimSpace(opts.Query) != "")) {
+		return cmd.FlagErrorf("--from-json, --command, and query-based extraction are mutually exclusive")
+	}
+	if strings.TrimSpace(opts.Query) == "" && opts.CommandID == "" && opts.FromJSON == "" {
 		return cmd.FlagErrorf("query is required")
 	}
 

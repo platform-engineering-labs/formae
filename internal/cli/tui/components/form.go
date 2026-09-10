@@ -77,3 +77,13 @@ func RunConfirm(th *theme.Theme, title, description string) (bool, error) {
 func NewThemedForm(th *theme.Theme, groups ...*huh.Group) *huh.Form {
 	return huh.NewForm(groups...).WithTheme(HuhTheme(th))
 }
+
+// RunConfirmWithMessage collects optional intent and an explicit final decision.
+func RunConfirmWithMessage(th *theme.Theme, title string, message *string) (bool, error) {
+	confirmed := false
+	form := NewThemedForm(th, huh.NewGroup(huh.NewInput().Title("Command message (optional)").Value(message), huh.NewConfirm().Title(title).Value(&confirmed)))
+	if err := form.Run(); err != nil {
+		return false, err
+	}
+	return confirmed, nil
+}

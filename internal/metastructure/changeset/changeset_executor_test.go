@@ -352,7 +352,7 @@ func TestCollectStacksWithDeletes_DeleteOps(t *testing.T) {
 	assert.Equal(t, "production", stacks[0])
 }
 
-func TestCollectStacksWithDeletes_ReplaceOps(t *testing.T) {
+func TestCollectStacksWithDeletes_ReplacementRetainsStack(t *testing.T) {
 	uri := pkgmodel.NewFormaeURI(util.NewID(), "")
 	opURI := createOperationURI(uri, resource_update.OperationReplace)
 
@@ -369,8 +369,7 @@ func TestCollectStacksWithDeletes_ReplaceOps(t *testing.T) {
 	}
 
 	stacks := collectStacksWithDeletes(dag)
-	require.Len(t, stacks, 1)
-	assert.Equal(t, "staging", stacks[0])
+	assert.Empty(t, stacks, "failed replacement must retain its stack for recovery")
 }
 
 func TestCollectStacksWithDeletes_ExcludesUnmanagedAndEmpty(t *testing.T) {
@@ -402,7 +401,7 @@ func TestCollectStacksWithDeletes_ExcludesUnmanagedAndEmpty(t *testing.T) {
 	assert.Empty(t, stacks)
 }
 
-func TestCollectStacksWithDeletes_CreateOpsIgnored(t *testing.T) {
+func TestCollectStacksWithDeletes_CreateIntentPreservesOnlyItsStack(t *testing.T) {
 	uri := pkgmodel.NewFormaeURI(util.NewID(), "")
 	opURI := createOperationURI(uri, resource_update.OperationCreate)
 
@@ -418,8 +417,12 @@ func TestCollectStacksWithDeletes_CreateOpsIgnored(t *testing.T) {
 		},
 	}
 
+	for _, label := range []string{"production", "unrelated"} {
+		deleteURI := createOperationURI(pkgmodel.NewFormaeURI(util.NewID(), ""), resource_update.OperationDelete)
+		dag.Nodes[deleteURI] = &DAGNode{URI: deleteURI, Update: &resource_update.ResourceUpdate{Operation: resource_update.OperationDelete, StackLabel: label}}
+	}
 	stacks := collectStacksWithDeletes(dag)
-	assert.Empty(t, stacks)
+	assert.Equal(t, []string{"unrelated"}, stacks, "a failed create preserves only its own stack")
 }
 
 func TestCollectStacksWithDeletes_DeduplicatesStacks(t *testing.T) {

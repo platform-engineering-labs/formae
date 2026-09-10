@@ -188,6 +188,12 @@ func (d *DatastoreMSSQL) GetPoliciesForStack(stackID string) ([]pkgmodel.Policy,
 }
 
 func (d *DatastoreMSSQL) GetInlinePoliciesForStack(stackID string) ([]pkgmodel.Policy, error) {
+	return d.getInlinePoliciesForStack(stackID, false)
+}
+func (d *DatastoreMSSQL) GetDesiredInlinePoliciesForStack(stackID string) ([]pkgmodel.Policy, error) {
+	return d.getInlinePoliciesForStack(stackID, true)
+}
+func (d *DatastoreMSSQL) getInlinePoliciesForStack(stackID string, strict bool) ([]pkgmodel.Policy, error) {
 	ctx, span := mssqlTracer.Start(context.Background(), "GetInlinePoliciesForStack")
 	defer span.End()
 
@@ -226,6 +232,9 @@ func (d *DatastoreMSSQL) GetInlinePoliciesForStack(stackID string) ([]pkgmodel.P
 
 		policy, err := deserializePolicy(label, policyType, policyDataStr, stackID)
 		if err != nil {
+			if strict {
+				return nil, fmt.Errorf("invalid desired metadata: %w", err)
+			}
 			slog.Warn("Failed to deserialize policy, skipping", "error", err, "label", label, "type", policyType)
 			continue
 		}
@@ -865,18 +874,23 @@ func (d *DatastoreMSSQL) GetStacksWithAutoReconcilePolicy() ([]datastore.StackRe
 			UNION
 			SELECT * FROM standalone_auto_reconcile
 		),
-		last_reconcile AS (
-			SELECT ru.stack_label, MAX(fc.timestamp) as last_reconcile_at
-			FROM resource_updates ru
-			JOIN forma_commands fc ON ru.command_id = fc.command_id
-			WHERE fc.config_mode = 'reconcile'
-			AND fc.state = 'Success'
-			GROUP BY ru.stack_label
-		)
+        last_reconcile AS (
+            SELECT s.id AS stack_id, MAX(fc.timestamp) AS last_reconcile_at
+            FROM latest_stacks s
+            JOIN forma_commands fc ON fc.config_mode='reconcile' AND fc.command='apply'
+              AND fc.state='Success'
+              AND (fc.source IS NULL OR fc.source IN ('','user','auto-reconciler','stack-expirer'))
+              AND (EXISTS (SELECT 1 FROM command_stacks cs WHERE cs.command_id=fc.command_id AND cs.stack_id=s.id AND cs.stack_label=s.label)
+                OR (NOT EXISTS (SELECT 1 FROM command_stacks cs WHERE cs.command_id=fc.command_id AND cs.stack_label=s.label)
+                  AND NOT EXISTS (SELECT 1 FROM stacks sa JOIN stacks sb ON sa.label=sb.label AND sa.id!=sb.id WHERE sa.label=s.label)
+                  AND EXISTS (SELECT 1 FROM resource_updates ru WHERE ru.command_id=fc.command_id AND ru.stack_label=s.label)))
+            WHERE s.rn=1 AND s.operation!='delete'
+            GROUP BY s.id
+        )
 		SELECT ar.stack_label, ar.stack_id, ar.interval_seconds,
 		       COALESCE(lr.last_reconcile_at, CAST('1970-01-01 00:00:00' AS datetime2)) as last_reconcile_at
 		FROM all_auto_reconcile ar
-		LEFT JOIN last_reconcile lr ON ar.stack_label = lr.stack_label`
+		LEFT JOIN last_reconcile lr ON ar.stack_id = lr.stack_id`
 
 	rows, err := d.conn.QueryContext(ctx, query)
 	if err != nil {
@@ -936,7 +950,9 @@ func (d *DatastoreMSSQL) GetResourcesAtLastReconcile(stackLabel string) ([]datas
 	// user requested is not part of the desired state going forward.
 	query := `
 		WITH user_reconcile_updates AS (
-			SELECT ru.ksuid, ru.resource, ru.operation, fc.timestamp
+			SELECT ru.ksuid, ru.resource, ru.operation, fc.timestamp, fc.command_id,
+              COALESCE((SELECT MAX(cs.stack_id) FROM command_stacks cs WHERE cs.command_id=fc.command_id AND cs.stack_label=ru.stack_label),
+                (SELECT MIN(h.id) FROM stacks h WHERE h.label=ru.stack_label AND h.valid_from<=fc.timestamp)) AS stack_id
 			FROM resource_updates ru
 			INNER JOIN forma_commands fc ON ru.command_id = fc.command_id
 			WHERE (
@@ -945,10 +961,16 @@ func (d *DatastoreMSSQL) GetResourcesAtLastReconcile(stackLabel string) ([]datas
 			)
 			AND fc.state IN ('Success', 'Failed')
 			AND ru.source = 'user'
+            AND (fc.source IS NULL OR fc.source IN ('','user','auto-reconciler','stack-expirer'))
+            AND (NOT EXISTS (SELECT 1 FROM command_stacks cs WHERE cs.command_id = fc.command_id AND cs.stack_label = ru.stack_label)
+                 AND NOT EXISTS (SELECT 1 FROM stacks sa JOIN stacks sb ON sa.label=sb.label AND sa.id!=sb.id WHERE sa.label=ru.stack_label)
+                 OR EXISTS (SELECT 1 FROM command_stacks cs JOIN stacks current_stack ON current_stack.id = cs.stack_id
+                   WHERE cs.command_id = fc.command_id AND current_stack.label = ru.stack_label AND current_stack.operation != 'delete'
+                   AND NOT EXISTS (SELECT 1 FROM stacks newer_stack WHERE newer_stack.label = current_stack.label AND newer_stack.version > current_stack.version)))
 			AND ru.stack_label = @p1
 		),
 		latest_per_ksuid AS (
-			SELECT ksuid, resource, operation,
+			SELECT ksuid, resource, operation, command_id, stack_id,
 			       ROW_NUMBER() OVER (
 			           PARTITION BY ksuid
 			           ORDER BY timestamp DESC,
@@ -956,15 +978,10 @@ func (d *DatastoreMSSQL) GetResourcesAtLastReconcile(stackLabel string) ([]datas
 			       ) as rn
 			FROM user_reconcile_updates
 		)
-		SELECT ksuid,
-		       JSON_VALUE(resource, '$.Type')         as type,
-		       JSON_VALUE(resource, '$.Label')        as label,
-		       JSON_VALUE(resource, '$.Target')       as target,
-		       JSON_QUERY(resource, '$.Properties')   as properties,
-		       JSON_QUERY(resource, '$.Schema')       as [schema],
-		       JSON_VALUE(resource, '$.NativeID')     as native_id
+		SELECT ksuid, resource, command_id, stack_id
 		FROM latest_per_ksuid
-		WHERE rn = 1 AND operation != 'delete'`
+		WHERE rn = 1 AND operation NOT IN ('delete', 'accept_delete')
+		ORDER BY ksuid ASC`
 
 	rows, err := d.conn.QueryContext(ctx, query, stackLabel)
 	if err != nil {
@@ -974,22 +991,16 @@ func (d *DatastoreMSSQL) GetResourcesAtLastReconcile(stackLabel string) ([]datas
 
 	var result []datastore.ResourceSnapshot
 	for rows.Next() {
-		var snapshot datastore.ResourceSnapshot
-		var propsData, schemaData, nativeID sql.NullString
-		if err := rows.Scan(&snapshot.KSUID, &snapshot.Type, &snapshot.Label, &snapshot.Target, &propsData, &schemaData, &nativeID); err != nil {
+		var ksuid, declaration, commandID string
+		var stackID sql.NullString
+		if err := rows.Scan(&ksuid, &declaration, &commandID, &stackID); err != nil {
 			return nil, err
 		}
-		if propsData.Valid {
-			snapshot.Properties = json.RawMessage(propsData.String)
+		snapshot, err := datastore.DecodeDesiredSnapshot(ksuid, commandID, stackID.String, []byte(declaration))
+		if err != nil {
+			return nil, err
 		}
-		if schemaData.Valid {
-			if err := json.Unmarshal([]byte(schemaData.String), &snapshot.Schema); err != nil {
-				return nil, fmt.Errorf("failed to unmarshal schema for resource %s: %w", snapshot.Label, err)
-			}
-		}
-		if nativeID.Valid {
-			snapshot.NativeID = nativeID.String
-		}
+
 		result = append(result, snapshot)
 	}
 
@@ -1018,4 +1029,8 @@ func (d *DatastoreMSSQL) StackHasActiveCommands(stackLabel string) (bool, error)
 	}
 
 	return exists, nil
+}
+
+func (d *DatastoreMSSQL) GetDesiredOwnership(stack string) (map[string]pkgmodel.OwnedMembers, error) {
+	return datastore.ReadDesiredOwnership(d, stack)
 }

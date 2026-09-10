@@ -186,12 +186,23 @@ func auroraOpAndOperand(s string, isExcluded bool) (op string, operand string, i
 }
 
 type DatastoreAuroraDataAPI struct {
-	client     *rdsdata.Client
+	migrationTable string
+
+	client     auroraDataAPIClient
 	clusterARN string
 	secretARN  string
 	database   string
 	agentID    string
 	ctx        context.Context
+}
+
+// auroraDataAPIClient is the subset of the Data API used by this datastore.
+// It permits response-limit-enforcing tests without relying on emulator limits.
+type auroraDataAPIClient interface {
+	ExecuteStatement(context.Context, *rdsdata.ExecuteStatementInput, ...func(*rdsdata.Options)) (*rdsdata.ExecuteStatementOutput, error)
+	BeginTransaction(context.Context, *rdsdata.BeginTransactionInput, ...func(*rdsdata.Options)) (*rdsdata.BeginTransactionOutput, error)
+	CommitTransaction(context.Context, *rdsdata.CommitTransactionInput, ...func(*rdsdata.Options)) (*rdsdata.CommitTransactionOutput, error)
+	RollbackTransaction(context.Context, *rdsdata.RollbackTransactionInput, ...func(*rdsdata.Options)) (*rdsdata.RollbackTransactionOutput, error)
 }
 
 // loadAuroraAWSConfig loads the AWS configuration for the Data API client,
@@ -252,6 +263,10 @@ func NewDatastoreAuroraDataAPI(ctx context.Context, cfg *pkgmodel.DatastoreConfi
 func (d *DatastoreAuroraDataAPI) runMigrations() error {
 	ctx := context.Background()
 
+	if err := d.detectStorageFormat(ctx); err != nil {
+		return err
+	}
+
 	// Ensure db_version table exists (goose's migration tracking table)
 	if err := d.ensureVersionTable(ctx); err != nil {
 		return fmt.Errorf("failed to create version table: %w", err)
@@ -274,9 +289,12 @@ func (d *DatastoreAuroraDataAPI) runMigrations() error {
 	}
 
 	targetVersion := migrations[len(migrations)-1].version
-	if currentVersion >= targetVersion {
+	if currentVersion > targetVersion {
+		return fmt.Errorf("datastore schema %d exceeds supported version %d", currentVersion, targetVersion)
+	}
+	if currentVersion == targetVersion {
 		slog.Debug("Database is up to date", "version", currentVersion)
-		return nil
+		return d.fenceStorageFormat(ctx)
 	}
 
 	slog.Warn("Database migrations are starting via Data API",
@@ -345,7 +363,7 @@ func (d *DatastoreAuroraDataAPI) runMigrations() error {
 	}
 
 	slog.Info("Database migrations completed", "version", targetVersion)
-	return nil
+	return d.fenceStorageFormat(ctx)
 }
 
 type migration struct {
@@ -357,7 +375,7 @@ type migration struct {
 
 // ensureVersionTable creates the db_version table if it doesn't exist.
 func (d *DatastoreAuroraDataAPI) ensureVersionTable(ctx context.Context) error {
-	sql := `CREATE TABLE IF NOT EXISTS db_version (
+	sql := `CREATE TABLE IF NOT EXISTS ` + d.migrationTable + ` (
 		id SERIAL PRIMARY KEY,
 		version_id BIGINT NOT NULL,
 		is_applied BOOLEAN NOT NULL DEFAULT TRUE,
@@ -369,7 +387,7 @@ func (d *DatastoreAuroraDataAPI) ensureVersionTable(ctx context.Context) error {
 
 // getCurrentVersion returns the highest applied migration version.
 func (d *DatastoreAuroraDataAPI) getCurrentVersion(ctx context.Context) (int64, error) {
-	sql := `SELECT COALESCE(MAX(version_id), 0) FROM db_version WHERE is_applied = true`
+	sql := `SELECT COALESCE(MAX(version_id), 0) FROM ` + d.migrationTable + ` WHERE is_applied = true`
 	output, err := d.executeStatement(ctx, sql, nil)
 	if err != nil {
 		return 0, err
@@ -395,7 +413,7 @@ func (d *DatastoreAuroraDataAPI) getCurrentVersion(ctx context.Context) (int64, 
 
 // recordVersion records a migration version as applied.
 func (d *DatastoreAuroraDataAPI) recordVersion(ctx context.Context, version int64) error {
-	sql := `INSERT INTO db_version (version_id, is_applied) VALUES (:version, true)`
+	sql := `INSERT INTO ` + d.migrationTable + ` (version_id, is_applied) VALUES (:version, true)`
 	params := []types.SqlParameter{
 		{Name: aws.String("version"), Value: &types.FieldMemberLongValue{Value: version}},
 	}
@@ -478,6 +496,7 @@ func parseGooseUp(content string) []string {
 	var upStatements []string
 	var currentStatement strings.Builder
 	inUp := false
+	inStatementBlock := false
 
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
@@ -490,11 +509,25 @@ func parseGooseUp(content string) []string {
 			// Flush any pending statement
 			if currentStatement.Len() > 0 {
 				upStatements = append(upStatements, currentStatement.String())
+				currentStatement.Reset()
 			}
 			break
 		}
 
 		if !inUp {
+			continue
+		}
+
+		if trimmed == "-- +goose StatementBegin" {
+			inStatementBlock = true
+			continue
+		}
+		if trimmed == "-- +goose StatementEnd" {
+			inStatementBlock = false
+			if strings.TrimSpace(currentStatement.String()) != "" {
+				upStatements = append(upStatements, currentStatement.String())
+			}
+			currentStatement.Reset()
 			continue
 		}
 
@@ -507,7 +540,7 @@ func parseGooseUp(content string) []string {
 		currentStatement.WriteString("\n")
 
 		// Statement ends with semicolon
-		if strings.HasSuffix(trimmed, ";") {
+		if !inStatementBlock && strings.HasSuffix(trimmed, ";") {
 			upStatements = append(upStatements, currentStatement.String())
 			currentStatement.Reset()
 		}
@@ -730,6 +763,32 @@ func (d *DatastoreAuroraDataAPI) executeStatementInTransaction(ctx context.Conte
 
 func (d *DatastoreAuroraDataAPI) StoreFormaCommand(fa *forma_command.FormaCommand, commandID string) error {
 	ctx := context.Background()
+	transactionID, err := d.beginTransaction(ctx)
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = d.rollbackTransaction(ctx, transactionID)
+		}
+	}()
+	if err = d.storeFormaCommandTx(ctx, transactionID, fa, commandID, false); err != nil {
+		return err
+	}
+	if err = d.commitTransaction(ctx, transactionID); err != nil {
+		return err
+	}
+	committed = true
+	return nil
+}
+
+// storeFormaCommandTx writes metadata, membership and all initial contributions.
+// The caller owns commit/rollback; every SQL operation stays on this transaction.
+func (d *DatastoreAuroraDataAPI) storeFormaCommandTx(ctx context.Context, transactionID string, fa *forma_command.FormaCommand, commandID string, createOnly bool) error {
+	if err := datastore.ValidateAcceptanceContributions(fa.ResourceUpdates); err != nil {
+		return err
+	}
 
 	targetUpdatesJSON, err := json.Marshal(fa.TargetUpdates)
 	if err != nil {
@@ -745,6 +804,10 @@ func (d *DatastoreAuroraDataAPI) StoreFormaCommand(fa *forma_command.FormaComman
 		return fmt.Errorf("failed to marshal stack updates: %w", err)
 	}
 
+	setupMetadata, err := fa.MarshalSetupMetadata(createOnly)
+	if err != nil {
+		return err
+	}
 	policyUpdatesJSON, err := json.Marshal(fa.PolicyUpdates)
 	if err != nil {
 		return fmt.Errorf("failed to marshal policy updates: %w", err)
@@ -753,14 +816,14 @@ func (d *DatastoreAuroraDataAPI) StoreFormaCommand(fa *forma_command.FormaComman
 	query := fmt.Sprintf(`
 	INSERT INTO %s (command_id, timestamp, command, state, agent_version, client_id, agent_id,
 		description_text, description_confirm, config_mode, config_force, config_simulate,
-		target_updates, stack_updates, policy_updates, modified_ts, source, subject, subject_name)
+		target_updates, stack_updates, policy_updates, modified_ts, source, subject, subject_name, message, input_properties, setup_metadata)
 	VALUES (:command_id, :timestamp::timestamp, :command, :state, :agent_version, :client_id, :agent_id,
 		:description_text, :description_confirm, :config_mode, :config_force, :config_simulate,
-		:target_updates, :stack_updates, :policy_updates, :modified_ts::timestamp, :source, :subject, :subject_name)
+		:target_updates, :stack_updates, :policy_updates, :modified_ts::timestamp, :source, :subject, :subject_name, :message, :input_properties::jsonb, :setup_metadata)
 	ON CONFLICT (command_id) DO UPDATE
 	SET timestamp = EXCLUDED.timestamp,
 	command = EXCLUDED.command,
-	state = EXCLUDED.state,
+	state = CASE WHEN forma_commands.setup_metadata::jsonb->>'OnlyMetadata' = 'true' THEN 'Success' ELSE EXCLUDED.state END,
 	agent_version = EXCLUDED.agent_version,
 	client_id = EXCLUDED.client_id,
 	agent_id = EXCLUDED.agent_id,
@@ -775,7 +838,10 @@ func (d *DatastoreAuroraDataAPI) StoreFormaCommand(fa *forma_command.FormaComman
 	modified_ts = EXCLUDED.modified_ts,
 	source = EXCLUDED.source,
 	subject = EXCLUDED.subject,
-	subject_name = EXCLUDED.subject_name
+	subject_name = EXCLUDED.subject_name,
+	message = EXCLUDED.message,
+	input_properties = EXCLUDED.input_properties,
+ setup_metadata = CASE WHEN forma_commands.setup_metadata::jsonb->>'Committed' = 'true' THEN forma_commands.setup_metadata ELSE COALESCE(EXCLUDED.setup_metadata, forma_commands.setup_metadata) END
 	`, datastore.CommandsTable)
 
 	params := []types.SqlParameter{
@@ -798,18 +864,52 @@ func (d *DatastoreAuroraDataAPI) StoreFormaCommand(fa *forma_command.FormaComman
 		{Name: aws.String("source"), Value: &types.FieldMemberStringValue{Value: string(fa.Source)}},
 		{Name: aws.String("subject"), Value: &types.FieldMemberStringValue{Value: fa.Subject}},
 		{Name: aws.String("subject_name"), Value: &types.FieldMemberStringValue{Value: fa.SubjectName}},
+		{Name: aws.String("message"), Value: &types.FieldMemberStringValue{Value: fa.Message}},
+	}
+	if setupMetadata == nil {
+		params = append(params, types.SqlParameter{Name: aws.String("setup_metadata"), Value: &types.FieldMemberIsNull{Value: true}})
+	} else {
+		params = append(params, types.SqlParameter{Name: aws.String("setup_metadata"), Value: &types.FieldMemberStringValue{Value: string(setupMetadata)}})
+	}
+	if fa.InputProperties == nil {
+		params = append(params, types.SqlParameter{Name: aws.String("input_properties"), Value: &types.FieldMemberIsNull{Value: true}})
+	} else {
+		params = append(params, types.SqlParameter{Name: aws.String("input_properties"), Value: &types.FieldMemberStringValue{Value: string(fa.InputProperties)}})
 	}
 
-	_, err = d.executeStatement(ctx, query, params)
+	if createOnly {
+		query = query[:strings.Index(query, "ON CONFLICT (command_id)")]
+	}
+
+	_, err = d.executeStatementInTransaction(ctx, transactionID, query, params)
 	if err != nil {
 		slog.Error("failed to store FormaCommand", "error", err)
 		return err
 	}
-
-	// Store ResourceUpdates in the normalized table
-	if len(fa.ResourceUpdates) > 0 && fa.Command != pkgmodel.CommandSync {
-		if err := d.BulkStoreResourceUpdates(commandID, fa.ResourceUpdates); err != nil {
-			return fmt.Errorf("failed to store resource updates: %w", err)
+	stackParams := []types.SqlParameter{{Name: aws.String("command_id"), Value: &types.FieldMemberStringValue{Value: commandID}}}
+	// The command row was written above and remains locked through commit.
+	// Lifecycle saves must not replace membership allocated by atomic admission.
+	membershipCondition := ""
+	if !createOnly {
+		membershipCondition = " AND NOT EXISTS (SELECT 1 FROM forma_commands WHERE command_id = :command_id AND setup_metadata::jsonb->>'Committed' = 'true')"
+	}
+	if _, err = d.executeStatementInTransaction(ctx, transactionID, "DELETE FROM command_stacks WHERE command_id = :command_id"+membershipCondition, stackParams); err != nil {
+		return err
+	}
+	for _, stack := range fa.Stacks {
+		if stack.ID == "" {
+			continue
+		}
+		insertParams := append(stackParams,
+			types.SqlParameter{Name: aws.String("stack_id"), Value: &types.FieldMemberStringValue{Value: stack.ID}},
+			types.SqlParameter{Name: aws.String("stack_label"), Value: &types.FieldMemberStringValue{Value: stack.Label}})
+		if _, err = d.executeStatementInTransaction(ctx, transactionID, "INSERT INTO command_stacks(command_id, stack_id, stack_label) SELECT :command_id, :stack_id, :stack_label WHERE 1=1"+membershipCondition, insertParams); err != nil {
+			return err
+		}
+	}
+	if fa.Command != pkgmodel.CommandSync {
+		if err := d.bulkStoreResourceUpdatesTx(ctx, transactionID, commandID, fa.ResourceUpdates); err != nil {
+			return err
 		}
 	}
 
@@ -823,7 +923,7 @@ func (d *DatastoreAuroraDataAPI) LoadFormaCommands() ([]*forma_command.FormaComm
 	query := `
 	SELECT command_id, timestamp, command, state, client_id,
 		description_text, description_confirm, config_mode, config_force, config_simulate,
-		target_updates, stack_updates, policy_updates, modified_ts, source, subject, subject_name
+		target_updates, stack_updates, policy_updates, modified_ts, source, subject, subject_name, ` + formaCommandMetadataDigestSQL + `
 	FROM forma_commands
 	ORDER BY timestamp DESC
 	`
@@ -835,8 +935,11 @@ func (d *DatastoreAuroraDataAPI) LoadFormaCommands() ([]*forma_command.FormaComm
 
 	var commands []*forma_command.FormaCommand
 	for _, record := range output.Records {
-		cmd, err := d.parseFormaCommandRecord(record)
+		cmd, metadataDigest, err := d.parseFormaCommandRecord(record)
 		if err != nil {
+			return nil, err
+		}
+		if err := d.hydrateFormaCommandMetadata(ctx, cmd, metadataDigest); err != nil {
 			return nil, err
 		}
 
@@ -859,7 +962,7 @@ func (d *DatastoreAuroraDataAPI) LoadIncompleteFormaCommands() ([]*forma_command
 	query := `
 	SELECT command_id, timestamp, command, state, client_id,
 		description_text, description_confirm, config_mode, config_force, config_simulate,
-		target_updates, stack_updates, policy_updates, modified_ts, source, subject, subject_name
+		target_updates, stack_updates, policy_updates, modified_ts, source, subject, subject_name, ` + formaCommandMetadataDigestSQL + `
 	FROM forma_commands
 	WHERE command != :sync_command AND state IN (:state_not_started, :state_in_progress)
 	ORDER BY timestamp DESC
@@ -877,8 +980,11 @@ func (d *DatastoreAuroraDataAPI) LoadIncompleteFormaCommands() ([]*forma_command
 
 	var commands []*forma_command.FormaCommand
 	for _, record := range output.Records {
-		cmd, err := d.parseFormaCommandRecord(record)
+		cmd, metadataDigest, err := d.parseFormaCommandRecord(record)
 		if err != nil {
+			return nil, err
+		}
+		if err := d.hydrateFormaCommandMetadata(ctx, cmd, metadataDigest); err != nil {
 			return nil, err
 		}
 
@@ -896,9 +1002,9 @@ func (d *DatastoreAuroraDataAPI) LoadIncompleteFormaCommands() ([]*forma_command
 }
 
 // parseFormaCommandRecord parses a single forma_commands row into a FormaCommand.
-func (d *DatastoreAuroraDataAPI) parseFormaCommandRecord(record []types.Field) (*forma_command.FormaCommand, error) {
-	if len(record) < 17 {
-		return nil, fmt.Errorf("unexpected record length: %d", len(record))
+func (d *DatastoreAuroraDataAPI) parseFormaCommandRecord(record []types.Field) (*forma_command.FormaCommand, string, error) {
+	if len(record) != 18 {
+		return nil, "", fmt.Errorf("unexpected command base record length: %d", len(record))
 	}
 
 	commandID, _ := getStringField(record[0])
@@ -918,6 +1024,13 @@ func (d *DatastoreAuroraDataAPI) parseFormaCommandRecord(record []types.Field) (
 	source, _ := getStringField(record[14])
 	subject, _ := getStringField(record[15])
 	subjectName, _ := getStringField(record[16])
+	metadataDigest, err := getStringField(record[17])
+	if err != nil {
+		return nil, "", fmt.Errorf("decode command metadata digest: %w", err)
+	}
+	if metadataDigest == "" {
+		return nil, "", fmt.Errorf("empty command metadata digest")
+	}
 
 	var targetUpdates []target_update.TargetUpdate
 	if targetUpdatesJSON != "" {
@@ -934,7 +1047,7 @@ func (d *DatastoreAuroraDataAPI) parseFormaCommandRecord(record []types.Field) (
 		_ = json.Unmarshal([]byte(policyUpdatesJSON), &policyUpdates)
 	}
 
-	return &forma_command.FormaCommand{
+	cmd := &forma_command.FormaCommand{
 		ID:       commandID,
 		StartTs:  timestamp,
 		Command:  pkgmodel.Command(command),
@@ -956,7 +1069,109 @@ func (d *DatastoreAuroraDataAPI) parseFormaCommandRecord(record []types.Field) (
 		Source:        forma_command.Source(source),
 		Subject:       subject,
 		SubjectName:   subjectName,
-	}, nil
+	}
+
+	return cmd, metadataDigest, nil
+}
+
+const formaCommandMetadataChunkChars int64 = 4096
+
+// These fixed expressions are shared by every command base projection and by
+// hydration. They intentionally name only datastore-owned aliases, never
+// caller-supplied SQL, so the digest covers exactly the same envelope fields.
+const formaCommandMetadataDigestSQL = `encode(sha256(convert_to(json_build_object('Message', message, 'Inputs', input_properties, 'Setup', setup_metadata::json, 'Stacks', (SELECT json_agg(json_build_object('ID', cs.stack_id, 'Label', cs.stack_label) ORDER BY cs.stack_id)::json FROM command_stacks cs WHERE cs.command_id = forma_commands.command_id))::text, 'UTF8')), 'hex')`
+const formaCommandMetadataHydrationDigestSQL = `encode(sha256(convert_to(value, 'UTF8')), 'hex')`
+
+// hydrateFormaCommandMetadata returns the new variable-sized command metadata
+// through fixed-width rows. Every chunk must match the digest seen in the base
+// projection. Thus progress-only row rewrites retain a valid read, while a
+// changed message, inputs, or stack membership causes an explicit retryable
+// error instead of a mixed reconstruction.
+func (d *DatastoreAuroraDataAPI) hydrateFormaCommandMetadata(ctx context.Context, cmd *forma_command.FormaCommand, metadataDigest string) error {
+	const query = `
+		WITH metadata AS (
+			SELECT json_build_object(
+				'Message', fc.message,
+				'Inputs', fc.input_properties,
+				'Setup', fc.setup_metadata::json,
+				'Stacks', (SELECT json_agg(json_build_object('ID', cs.stack_id, 'Label', cs.stack_label) ORDER BY cs.stack_id)::json FROM command_stacks cs WHERE cs.command_id = fc.command_id)
+			)::text AS value
+			FROM forma_commands fc
+			WHERE fc.command_id = :command_id
+		)
+		SELECT char_length(value), substring(value FROM :offset::int FOR 4096), ` + formaCommandMetadataHydrationDigestSQL + `
+		FROM metadata WHERE ` + formaCommandMetadataHydrationDigestSQL + ` = :metadata_digest`
+	params := func(offset int64) []types.SqlParameter {
+		return []types.SqlParameter{
+			{Name: aws.String("command_id"), Value: &types.FieldMemberStringValue{Value: cmd.ID}},
+			{Name: aws.String("offset"), Value: &types.FieldMemberLongValue{Value: offset}},
+			{Name: aws.String("metadata_digest"), Value: &types.FieldMemberStringValue{Value: metadataDigest}},
+		}
+	}
+	var value strings.Builder
+	var length int64 = -1
+	for offset := int64(1); ; offset += formaCommandMetadataChunkChars {
+		output, err := d.executeStatement(ctx, query, params(offset))
+		if err != nil {
+			return fmt.Errorf("load command metadata for %s: %w", cmd.ID, err)
+		}
+		if len(output.Records) != 1 || len(output.Records[0]) != 3 {
+			return fmt.Errorf("command metadata changed or is missing for %s", cmd.ID)
+		}
+		chunkLength, err := getIntField(output.Records[0][0])
+		if err != nil {
+			return fmt.Errorf("decode command metadata length for %s: %w", cmd.ID, err)
+		}
+		if chunkLength < 0 {
+			return fmt.Errorf("negative command metadata length for %s", cmd.ID)
+		}
+		if length == -1 {
+			length = int64(chunkLength)
+			value.Grow(chunkLength)
+		} else if length != int64(chunkLength) {
+			return fmt.Errorf("command metadata changed while reading %s", cmd.ID)
+		}
+		chunk, err := getStringField(output.Records[0][1])
+		if err != nil {
+			return fmt.Errorf("invalid command metadata chunk for %s: %w", cmd.ID, err)
+		}
+		digest, err := getStringField(output.Records[0][2])
+		if err != nil || digest != metadataDigest {
+			return fmt.Errorf("command metadata changed while reading %s", cmd.ID)
+		}
+		if chunk == "" && offset <= length {
+			return fmt.Errorf("truncated command metadata for %s", cmd.ID)
+		}
+		value.WriteString(chunk)
+		if offset+formaCommandMetadataChunkChars > length {
+			break
+		}
+	}
+	if int64(len([]rune(value.String()))) != length {
+		return fmt.Errorf("truncated command metadata for %s", cmd.ID)
+	}
+	var metadata struct {
+		Setup   json.RawMessage `json:"Setup"`
+		Message string          `json:"Message"`
+		Inputs  json.RawMessage `json:"Inputs"`
+		Stacks  json.RawMessage `json:"Stacks"`
+	}
+	if err := json.Unmarshal([]byte(value.String()), &metadata); err != nil {
+		return fmt.Errorf("decode command metadata for %s: %w", cmd.ID, err)
+	}
+	if err := cmd.UnmarshalSetupMetadata(metadata.Setup); err != nil {
+		return err
+	}
+	cmd.Message = metadata.Message
+	if string(metadata.Inputs) != "null" {
+		cmd.InputProperties = metadata.Inputs
+	}
+	if string(metadata.Stacks) != "null" {
+		if err := json.Unmarshal(metadata.Stacks, &cmd.Stacks); err != nil {
+			return fmt.Errorf("decode command stacks for %s: %w", cmd.ID, err)
+		}
+	}
+	return nil
 }
 
 func (d *DatastoreAuroraDataAPI) DeleteFormaCommand(fa *forma_command.FormaCommand, commandID string) error {
@@ -971,6 +1186,9 @@ func (d *DatastoreAuroraDataAPI) DeleteFormaCommand(fa *forma_command.FormaComma
 	if err != nil {
 		return fmt.Errorf("failed to delete resource_updates: %w", err)
 	}
+	if _, err = d.executeStatement(ctx, "DELETE FROM command_stacks WHERE command_id = :command_id", deleteUpdatesParams); err != nil {
+		return err
+	}
 
 	// Delete the command
 	deleteCommandQuery := fmt.Sprintf("DELETE FROM %s WHERE command_id = :command_id", datastore.CommandsTable)
@@ -984,7 +1202,7 @@ func (d *DatastoreAuroraDataAPI) GetFormaCommandByCommandID(commandID string) (*
 	query := `
 	SELECT command_id, timestamp, command, state, client_id,
 		description_text, description_confirm, config_mode, config_force, config_simulate,
-		target_updates, stack_updates, policy_updates, modified_ts, source, subject, subject_name
+		target_updates, stack_updates, policy_updates, modified_ts, source, subject, subject_name, ` + formaCommandMetadataDigestSQL + `
 	FROM forma_commands
 	WHERE command_id = :command_id
 	`
@@ -1001,8 +1219,11 @@ func (d *DatastoreAuroraDataAPI) GetFormaCommandByCommandID(commandID string) (*
 		return nil, fmt.Errorf("forma command not found: %v", commandID)
 	}
 
-	cmd, err := d.parseFormaCommandRecord(output.Records[0])
+	cmd, metadataDigest, err := d.parseFormaCommandRecord(output.Records[0])
 	if err != nil {
+		return nil, err
+	}
+	if err := d.hydrateFormaCommandMetadata(ctx, cmd, metadataDigest); err != nil {
 		return nil, err
 	}
 
@@ -1022,7 +1243,7 @@ func (d *DatastoreAuroraDataAPI) GetMostRecentFormaCommandByClientID(clientID st
 	query := `
 	SELECT command_id, timestamp, command, state, client_id,
 		description_text, description_confirm, config_mode, config_force, config_simulate,
-		target_updates, stack_updates, policy_updates, modified_ts, source, subject, subject_name
+		target_updates, stack_updates, policy_updates, modified_ts, source, subject, subject_name, ` + formaCommandMetadataDigestSQL + `
 	FROM forma_commands
 	WHERE client_id = :client_id AND source = 'user'
 	ORDER BY timestamp DESC
@@ -1041,8 +1262,11 @@ func (d *DatastoreAuroraDataAPI) GetMostRecentFormaCommandByClientID(clientID st
 		return nil, nil
 	}
 
-	cmd, err := d.parseFormaCommandRecord(output.Records[0])
+	cmd, metadataDigest, err := d.parseFormaCommandRecord(output.Records[0])
 	if err != nil {
+		return nil, err
+	}
+	if err := d.hydrateFormaCommandMetadata(ctx, cmd, metadataDigest); err != nil {
 		return nil, err
 	}
 
@@ -1060,7 +1284,19 @@ func (d *DatastoreAuroraDataAPI) GetResourceModificationsSinceLastReconcile(stac
 	ctx := context.Background()
 
 	query := `
-	SELECT DISTINCT
+	WITH modification_boundary AS (
+		SELECT fc.timestamp
+		FROM forma_commands fc
+		WHERE fc.config_mode = 'reconcile' AND (fc.source IS NULL OR fc.source IN ('', 'user', 'auto-reconciler', 'stack-expirer')) AND (fc.state IN ('Success', 'Failed') OR fc.state = '' OR fc.state IS NULL)
+		AND (
+			(fc.state IN ('Success', 'Failed') AND EXISTS (SELECT 1 FROM command_stacks cs JOIN stacks current_stack ON current_stack.id = cs.stack_id WHERE cs.command_id = fc.command_id AND current_stack.label = :stack AND NOT EXISTS (SELECT 1 FROM stacks newer_stack WHERE newer_stack.label = current_stack.label AND newer_stack.version COLLATE "C" > current_stack.version COLLATE "C")))
+			OR (NOT EXISTS (SELECT 1 FROM command_stacks cs WHERE cs.command_id = fc.command_id AND cs.stack_label = :stack)
+				AND EXISTS (SELECT 1 FROM resources r WHERE r.command_id = fc.command_id AND r.stack = :stack AND NOT EXISTS (SELECT 1 FROM stacks sa JOIN stacks sb ON sa.label=sb.label AND sa.id != sb.id WHERE sa.label=r.stack)))
+		)
+		ORDER BY fc.timestamp DESC
+		LIMIT 1
+	)
+SELECT DISTINCT
 	T2.type,
 	T2.label,
 	T2.operation,
@@ -1069,32 +1305,18 @@ func (d *DatastoreAuroraDataAPI) GetResourceModificationsSinceLastReconcile(stac
 	JOIN resources AS T2
 	ON T1.command_id = T2.command_id
 	WHERE
-	EXISTS (
-		SELECT 1
-		FROM resources AS r1
-		WHERE r1.stack = :stack
-		AND NOT EXISTS (
-			SELECT 1
-			FROM resources AS r2
-			WHERE r1.ksuid = r2.ksuid
-			AND r2.version COLLATE "C" > r1.version COLLATE "C"
-		)
-		AND r1.operation != 'delete' AND r1.operation != 'reaped'
-	)
-	AND T1.timestamp > (
-		SELECT fc.timestamp
-		FROM forma_commands fc
-		WHERE fc.config_mode = 'reconcile'
-		AND EXISTS (
-			SELECT 1
-			FROM resources r
-			WHERE r.command_id = fc.command_id
-			AND r.stack = :stack
-		)
-		ORDER BY fc.timestamp DESC
-		LIMIT 1
-	)
+	T2.operation != 'reaped' AND (T1.timestamp > (SELECT timestamp FROM modification_boundary)
+ OR (NOT EXISTS (SELECT 1 FROM modification_boundary)
+     AND T1.state IN ('Success','Failed','Canceled')
+     AND EXISTS (SELECT 1 FROM command_stacks candidate_membership
+       JOIN stacks candidate_stack ON candidate_stack.id=candidate_membership.stack_id
+       WHERE candidate_membership.command_id=T1.command_id
+         AND candidate_membership.stack_label=T2.stack AND candidate_stack.label=T2.stack
+         AND NOT EXISTS (SELECT 1 FROM stacks newer_candidate_stack
+           WHERE newer_candidate_stack.label=candidate_stack.label
+             AND newer_candidate_stack.version COLLATE "C">candidate_stack.version COLLATE "C"))))
 	AND T2.stack = :stack
+	ORDER BY T2.ksuid ASC
 	`
 	params := []types.SqlParameter{
 		{Name: aws.String("stack"), Value: &types.FieldMemberStringValue{Value: stack}},
@@ -1256,27 +1478,29 @@ func (d *DatastoreAuroraDataAPI) fetchCurrentProperties(ctx context.Context, ksu
 // resolves to the version it had when that reconcile ran.
 func (d *DatastoreAuroraDataAPI) fetchReconcileProperties(ctx context.Context, ksuid, stack string) (json.RawMessage, error) {
 	query := `
-	SELECT r.data->>'Properties'
-	FROM resources r
-	JOIN forma_commands fc_r
-	ON fc_r.command_id = r.command_id
-	WHERE r.ksuid = :ksuid
-	AND fc_r.timestamp <= (
-		SELECT fc.timestamp
-		FROM forma_commands fc
-		WHERE fc.config_mode = 'reconcile'
-		AND EXISTS (
-			SELECT 1
-			FROM resources rr
-			WHERE rr.command_id = fc.command_id
-			AND rr.stack = :stack
-		)
-		ORDER BY fc.timestamp DESC
-		LIMIT 1
-	)
-	ORDER BY r.version COLLATE "C" DESC
-	LIMIT 1
-	`
+	WITH boundary AS (
+		SELECT fc.command_id, fc.timestamp FROM forma_commands fc
+		WHERE fc.config_mode = 'reconcile' AND (fc.source IS NULL OR fc.source IN ('', 'user', 'auto-reconciler', 'stack-expirer')) AND (fc.state IN ('Success', 'Failed') OR fc.state = '' OR fc.state IS NULL)
+		AND ((fc.state IN ('Success', 'Failed') AND EXISTS (SELECT 1 FROM command_stacks cs JOIN stacks current_stack ON current_stack.id = cs.stack_id WHERE cs.command_id = fc.command_id AND current_stack.label = :stack AND NOT EXISTS (SELECT 1 FROM stacks newer_stack WHERE newer_stack.label = current_stack.label AND newer_stack.version COLLATE "C" > current_stack.version COLLATE "C")))
+			OR (NOT EXISTS (SELECT 1 FROM command_stacks cs WHERE cs.command_id = fc.command_id AND cs.stack_label = :stack)
+				AND EXISTS (SELECT 1 FROM resources rr WHERE rr.command_id = fc.command_id AND rr.stack = :stack AND NOT EXISTS (SELECT 1 FROM stacks sa JOIN stacks sb ON sa.label=sb.label AND sa.id != sb.id WHERE sa.label=rr.stack))))
+		ORDER BY fc.timestamp DESC LIMIT 1
+	), accepted AS (
+ SELECT observed.data->>'Properties' properties, CASE WHEN observed.ksuid IS NULL THEN 0 ELSE 1 END AS observation_exists FROM resource_updates ru
+ JOIN boundary b ON b.command_id = ru.command_id
+ LEFT JOIN resources observed ON observed.ksuid = ru.ksuid AND observed.version = ru.version
+ WHERE ru.ksuid = :ksuid AND ru.operation = 'accept' LIMIT 1
+), previous AS (
+ SELECT r.data->>'Properties' properties FROM resources r
+ JOIN forma_commands fc_r ON fc_r.command_id = r.command_id
+ JOIN boundary b ON 1=1
+ WHERE r.ksuid = :ksuid AND fc_r.timestamp <= b.timestamp
+ ORDER BY r.version COLLATE "C" DESC LIMIT 1
+)
+SELECT properties, 1 AS accepted, observation_exists FROM accepted
+UNION ALL
+SELECT properties, 0 AS accepted, 1 AS observation_exists FROM previous WHERE NOT EXISTS (SELECT 1 FROM accepted)
+`
 	params := []types.SqlParameter{
 		{Name: aws.String("ksuid"), Value: &types.FieldMemberStringValue{Value: ksuid}},
 		{Name: aws.String("stack"), Value: &types.FieldMemberStringValue{Value: stack}},
@@ -1290,6 +1514,14 @@ func (d *DatastoreAuroraDataAPI) fetchReconcileProperties(ctx context.Context, k
 		return nil, nil
 	}
 	props, err := getStringField(output.Records[0][0])
+	accepted, _ := getIntField(output.Records[0][1])
+	observationExists, existenceErr := getIntField(output.Records[0][2])
+	if existenceErr != nil {
+		return nil, existenceErr
+	}
+	if accepted == 1 && observationExists == 0 {
+		return nil, fmt.Errorf("accepted observation version missing for resource %s", ksuid)
+	}
 	if err != nil || props == "" {
 		return nil, err
 	}
@@ -1303,7 +1535,7 @@ func (d *DatastoreAuroraDataAPI) QueryFormaCommands(statusQuery *datastore.Statu
 	queryStr := `
 	SELECT command_id, timestamp, command, state, client_id,
 		description_text, description_confirm, config_mode, config_force, config_simulate,
-		target_updates, stack_updates, policy_updates, modified_ts, source, subject, subject_name
+		target_updates, stack_updates, policy_updates, modified_ts, source, subject, subject_name, ` + formaCommandMetadataDigestSQL + `
 	FROM forma_commands
 	WHERE 1=1
 	`
@@ -1320,7 +1552,7 @@ func (d *DatastoreAuroraDataAPI) QueryFormaCommands(statusQuery *datastore.Statu
 	if statusQuery.Stack != nil {
 		queryStr, params, paramIdx = appendAuroraExistsClause(
 			queryStr, params, paramIdx,
-			"SELECT 1 FROM resource_updates ru WHERE ru.command_id = forma_commands.command_id AND ru.stack_label",
+			"SELECT 1 FROM (SELECT command_id, stack_label FROM resource_updates UNION SELECT command_id, stack_label FROM command_stacks) ru WHERE ru.command_id = forma_commands.command_id AND ru.stack_label",
 			"stack",
 			statusQuery.Stack,
 		)
@@ -1345,8 +1577,11 @@ func (d *DatastoreAuroraDataAPI) QueryFormaCommands(statusQuery *datastore.Statu
 
 	var commands []*forma_command.FormaCommand
 	for _, record := range output.Records {
-		cmd, err := d.parseFormaCommandRecord(record)
+		cmd, metadataDigest, err := d.parseFormaCommandRecord(record)
 		if err != nil {
+			return nil, err
+		}
+		if err := d.hydrateFormaCommandMetadata(ctx, cmd, metadataDigest); err != nil {
 			return nil, err
 		}
 
@@ -2897,6 +3132,7 @@ func (d *DatastoreAuroraDataAPI) CreateTarget(target *pkgmodel.Target) (string, 
 		return "", err
 	}
 
+	target.ExecutionIncarnation = incarnationID
 	return fmt.Sprintf("%s_1", target.Label), nil
 }
 
@@ -3073,6 +3309,7 @@ func (d *DatastoreAuroraDataAPI) UpdateTarget(target *pkgmodel.Target) (string, 
 	}
 	committed = true
 
+	target.ExecutionIncarnation = incarnationID
 	return fmt.Sprintf("%s_%d", target.Label, newVersion), nil
 }
 
@@ -4199,39 +4436,93 @@ func (d *DatastoreAuroraDataAPI) BatchGetTripletsByKSUIDs(ksuids []string) (map[
 }
 
 func (d *DatastoreAuroraDataAPI) BulkStoreResourceUpdates(commandID string, updates []resource_update.ResourceUpdate) error {
+	if err := datastore.ValidateAcceptanceContributions(updates); err != nil {
+		return err
+	}
 	if len(updates) == 0 {
 		return nil
 	}
-
 	ctx := context.Background()
-
-	// Start transaction
 	txID, err := d.beginTransaction(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
+		return err
 	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = d.rollbackTransaction(ctx, txID)
+		}
+	}()
+	if err := d.bulkStoreResourceUpdatesTx(ctx, txID, commandID, updates); err != nil {
+		return err
+	}
+	if err := d.commitTransaction(ctx, txID); err != nil {
+		return err
+	}
+	committed = true
+	return nil
+}
 
+func (d *DatastoreAuroraDataAPI) bulkStoreResourceUpdatesTx(ctx context.Context, txID string, commandID string, updates []resource_update.ResourceUpdate) error {
+	if len(updates) == 0 {
+		return nil
+	}
 	for _, ru := range updates {
-		resourceJSON, _ := json.Marshal(ru.DesiredState)
-		resourceTargetJSONRaw, _ := json.Marshal(ru.ResourceTarget)
+		resourceJSON, err := json.Marshal(ru.DesiredState)
+		if err != nil {
+			return fmt.Errorf("marshal resource: %w", err)
+		}
+		if string(ru.Operation) == "accept" || string(ru.Operation) == "accept_delete" {
+			resourceJSON, err = datastore.StripOpaqueRefValues(resourceJSON)
+			if err != nil {
+				return fmt.Errorf("strip acceptance opaque values: %w", err)
+			}
+		}
+		if ru.StackLabel == "" {
+			ru.StackLabel = ru.DesiredState.Stack
+		}
+
+		resourceTargetJSONRaw, err := json.Marshal(ru.ResourceTarget)
+		if err != nil {
+			return fmt.Errorf("serialize resource update: %w", err)
+		}
 		resourceTargetJSON, err := datastore.StripOpaqueRefValues(resourceTargetJSONRaw)
 		if err != nil {
-			_ = d.rollbackTransaction(ctx, txID)
 			return fmt.Errorf("failed to strip opaque ref values from resource target: %w", err)
 		}
-		existingResourceJSON, _ := json.Marshal(ru.PriorState)
+		existingResourceJSON, err := json.Marshal(ru.PriorState)
+		if err != nil {
+			return fmt.Errorf("serialize resource update: %w", err)
+		}
 		// existing_target is stripped too: a pre-change (legacy) target row may still carry a plaintext opaque $ref value, so we never re-persist it unstripped.
-		existingTargetJSONRaw, _ := json.Marshal(ru.ExistingTarget)
+		existingTargetJSONRaw, err := json.Marshal(ru.ExistingTarget)
+		if err != nil {
+			return fmt.Errorf("serialize resource update: %w", err)
+		}
 		existingTargetJSON, err := datastore.StripOpaqueRefValues(existingTargetJSONRaw)
 		if err != nil {
-			_ = d.rollbackTransaction(ctx, txID)
 			return fmt.Errorf("failed to strip opaque ref values from existing target: %w", err)
 		}
-		progressResultJSON, _ := json.Marshal(ru.ProgressResult)
-		mostRecentProgressJSON, _ := json.Marshal(ru.MostRecentProgressResult)
-		remainingResolvablesJSON, _ := json.Marshal(ru.RemainingResolvables)
-		referenceLabelsJSON, _ := json.Marshal(ru.ReferenceLabels)
-		previousPropertiesJSON, _ := json.Marshal(ru.PreviousProperties)
+		progressResultJSON, err := json.Marshal(ru.ProgressResult)
+		if err != nil {
+			return fmt.Errorf("serialize resource update: %w", err)
+		}
+		mostRecentProgressJSON, err := json.Marshal(ru.MostRecentProgressResult)
+		if err != nil {
+			return fmt.Errorf("serialize resource update: %w", err)
+		}
+		remainingResolvablesJSON, err := json.Marshal(ru.RemainingResolvables)
+		if err != nil {
+			return fmt.Errorf("serialize resource update: %w", err)
+		}
+		referenceLabelsJSON, err := json.Marshal(ru.ReferenceLabels)
+		if err != nil {
+			return fmt.Errorf("serialize resource update: %w", err)
+		}
+		previousPropertiesJSON, err := json.Marshal(ru.PreviousProperties)
+		if err != nil {
+			return fmt.Errorf("serialize resource update: %w", err)
+		}
 
 		query := `
 			INSERT INTO resource_updates (
@@ -4249,12 +4540,23 @@ func (d *DatastoreAuroraDataAPI) BulkStoreResourceUpdates(commandID string, upda
 				:failure_reason, :provenance_records, :resolved_root_digests)
 			ON CONFLICT (command_id, ksuid, operation) DO UPDATE SET
 				state = EXCLUDED.state,
+				start_ts = EXCLUDED.start_ts,
 				modified_ts = EXCLUDED.modified_ts,
+				retries = EXCLUDED.retries,
+				remaining = EXCLUDED.remaining,
+				version = EXCLUDED.version,
+				stack_label = EXCLUDED.stack_label,
+				group_id = EXCLUDED.group_id,
+				source = EXCLUDED.source,
 				resource = EXCLUDED.resource,
+				resource_target = EXCLUDED.resource_target,
 				existing_resource = EXCLUDED.existing_resource,
-				previous_properties = EXCLUDED.previous_properties,
+				existing_target = EXCLUDED.existing_target,
 				progress_result = EXCLUDED.progress_result,
 				most_recent_progress = EXCLUDED.most_recent_progress,
+				remaining_resolvables = EXCLUDED.remaining_resolvables,
+				reference_labels = EXCLUDED.reference_labels,
+				previous_properties = EXCLUDED.previous_properties,
 				failure_reason = EXCLUDED.failure_reason,
 				provenance_records = EXCLUDED.provenance_records,
 				resolved_root_digests = EXCLUDED.resolved_root_digests
@@ -4289,13 +4591,8 @@ func (d *DatastoreAuroraDataAPI) BulkStoreResourceUpdates(commandID string, upda
 
 		_, err = d.executeStatementInTransaction(ctx, txID, query, params)
 		if err != nil {
-			_ = d.rollbackTransaction(ctx, txID)
 			return fmt.Errorf("failed to store resource update: %w", err)
 		}
-	}
-
-	if err := d.commitTransaction(ctx, txID); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
 	return nil
@@ -5282,6 +5579,14 @@ func (d *DatastoreAuroraDataAPI) GetPoliciesForStack(stackID string) ([]pkgmodel
 }
 
 func (d *DatastoreAuroraDataAPI) GetInlinePoliciesForStack(stackID string) ([]pkgmodel.Policy, error) {
+	return d.getInlinePoliciesForStack(stackID, false)
+}
+
+func (d *DatastoreAuroraDataAPI) GetDesiredInlinePoliciesForStack(stackID string) ([]pkgmodel.Policy, error) {
+	return d.getInlinePoliciesForStack(stackID, true)
+}
+
+func (d *DatastoreAuroraDataAPI) getInlinePoliciesForStack(stackID string, strict bool) ([]pkgmodel.Policy, error) {
 	ctx := context.Background()
 
 	// Standalone policies are stored with an empty stack id, so an empty stack id
@@ -5316,15 +5621,31 @@ func (d *DatastoreAuroraDataAPI) GetInlinePoliciesForStack(stackID string) ([]pk
 	var policies []pkgmodel.Policy
 	for _, record := range result.Records {
 		if len(record) < 3 {
+			if strict {
+				return nil, fmt.Errorf("invalid desired policy row")
+			}
 			continue
 		}
 
-		label, _ := getStringField(record[0])
-		policyType, _ := getStringField(record[1])
-		policyDataStr, _ := getStringField(record[2])
+		if strict {
+			for _, field := range record[:3] {
+				if _, ok := field.(*types.FieldMemberStringValue); !ok {
+					return nil, fmt.Errorf("invalid desired policy field type")
+				}
+			}
+		}
+		label, labelErr := getStringField(record[0])
+		policyType, typeErr := getStringField(record[1])
+		policyDataStr, dataErr := getStringField(record[2])
+		if strict && (labelErr != nil || typeErr != nil || dataErr != nil) {
+			return nil, fmt.Errorf("invalid desired policy fields: %v; %v; %v", labelErr, typeErr, dataErr)
+		}
 
 		policy, err := deserializePolicyAurora(label, policyType, policyDataStr, stackID)
 		if err != nil {
+			if strict {
+				return nil, fmt.Errorf("invalid desired metadata: %w", err)
+			}
 			slog.Warn("Failed to deserialize policy, skipping", "error", err, "label", label, "type", policyType)
 			continue
 		}
@@ -6093,18 +6414,23 @@ func (d *DatastoreAuroraDataAPI) GetStacksWithAutoReconcilePolicy() ([]datastore
 			UNION
 			SELECT * FROM standalone_auto_reconcile
 		),
-		last_reconcile AS (
-			SELECT ru.stack_label, MAX(fc.timestamp) as last_reconcile_at
-			FROM resource_updates ru
-			JOIN forma_commands fc ON ru.command_id = fc.command_id
-			WHERE fc.config_mode = 'reconcile'
-			AND fc.state = 'Success'
-			GROUP BY ru.stack_label
-		)
+        last_reconcile AS (
+            SELECT s.id AS stack_id, MAX(fc.timestamp) AS last_reconcile_at
+            FROM latest_stacks s
+            JOIN forma_commands fc ON fc.config_mode='reconcile' AND fc.command='apply'
+              AND fc.state='Success'
+              AND (fc.source IS NULL OR fc.source IN ('','user','auto-reconciler','stack-expirer'))
+              AND (EXISTS (SELECT 1 FROM command_stacks cs WHERE cs.command_id=fc.command_id AND cs.stack_id=s.id AND cs.stack_label=s.label)
+                OR (NOT EXISTS (SELECT 1 FROM command_stacks cs WHERE cs.command_id=fc.command_id AND cs.stack_label=s.label)
+                  AND NOT EXISTS (SELECT 1 FROM stacks sa JOIN stacks sb ON sa.label=sb.label AND sa.id!=sb.id WHERE sa.label=s.label)
+                  AND EXISTS (SELECT 1 FROM resource_updates ru WHERE ru.command_id=fc.command_id AND ru.stack_label=s.label)))
+            WHERE s.rn=1 AND s.operation!='delete'
+            GROUP BY s.id
+        )
 		SELECT ar.stack_label, ar.stack_id, ar.interval_seconds,
 		       COALESCE(lr.last_reconcile_at, '1970-01-01 00:00:00'::timestamp) as last_reconcile_at
 		FROM all_auto_reconcile ar
-		LEFT JOIN last_reconcile lr ON ar.stack_label = lr.stack_label
+		LEFT JOIN last_reconcile lr ON ar.stack_id = lr.stack_id
 	`
 
 	output, err := d.executeStatement(ctx, query, nil)
@@ -6179,7 +6505,9 @@ func (d *DatastoreAuroraDataAPI) GetResourcesAtLastReconcile(stackLabel string) 
 	// user requested is not part of the desired state going forward.
 	query := `
 		WITH user_reconcile_updates AS (
-			SELECT ru.ksuid, ru.resource::json AS resource_json, ru.operation, fc.timestamp
+			SELECT ru.ksuid, ru.resource::json AS resource_json, ru.operation, fc.timestamp, fc.command_id,
+              COALESCE((SELECT MAX(cs.stack_id) FROM command_stacks cs WHERE cs.command_id=fc.command_id AND cs.stack_label=ru.stack_label),
+                (SELECT MIN(h.id) FROM stacks h WHERE h.label=ru.stack_label AND h.valid_from<=fc.timestamp)) AS stack_id
 			FROM resource_updates ru
 			INNER JOIN forma_commands fc ON ru.command_id = fc.command_id
 			WHERE (
@@ -6188,10 +6516,16 @@ func (d *DatastoreAuroraDataAPI) GetResourcesAtLastReconcile(stackLabel string) 
 			)
 			AND fc.state IN ('Success', 'Failed')
 			AND ru.source = 'user'
+            AND (fc.source IS NULL OR fc.source IN ('','user','auto-reconciler','stack-expirer'))
+            AND (NOT EXISTS (SELECT 1 FROM command_stacks cs WHERE cs.command_id = fc.command_id AND cs.stack_label = ru.stack_label)
+                 AND NOT EXISTS (SELECT 1 FROM stacks sa JOIN stacks sb ON sa.label=sb.label AND sa.id!=sb.id WHERE sa.label=ru.stack_label)
+                 OR EXISTS (SELECT 1 FROM command_stacks cs JOIN stacks current_stack ON current_stack.id = cs.stack_id
+                   WHERE cs.command_id = fc.command_id AND current_stack.label = ru.stack_label AND current_stack.operation != 'delete'
+                   AND NOT EXISTS (SELECT 1 FROM stacks newer_stack WHERE newer_stack.label = current_stack.label AND newer_stack.version COLLATE "C" > current_stack.version COLLATE "C")))
 			AND ru.stack_label = :stack_label
 		),
 		latest_per_ksuid AS (
-			SELECT ksuid, resource_json, operation,
+			SELECT ksuid, resource_json, operation, command_id, stack_id,
 			       ROW_NUMBER() OVER (
 			           PARTITION BY ksuid
 			           ORDER BY timestamp DESC,
@@ -6199,15 +6533,10 @@ func (d *DatastoreAuroraDataAPI) GetResourcesAtLastReconcile(stackLabel string) 
 			       ) as rn
 			FROM user_reconcile_updates
 		)
-		SELECT ksuid,
-		       resource_json->>'Type'      as type,
-		       resource_json->>'Label'     as label,
-		       resource_json->>'Target'    as target,
-		       resource_json->'Properties' as properties,
-		       resource_json->'Schema'     as schema,
-		       resource_json->>'NativeID'  as native_id
+		SELECT ksuid, resource_json, command_id, stack_id
 		FROM latest_per_ksuid
-		WHERE rn = 1 AND operation != 'delete'
+		WHERE rn = 1 AND operation NOT IN ('delete', 'accept_delete')
+		ORDER BY ksuid ASC
 	`
 
 	params := []types.SqlParameter{
@@ -6221,31 +6550,25 @@ func (d *DatastoreAuroraDataAPI) GetResourcesAtLastReconcile(stackLabel string) 
 
 	var result []datastore.ResourceSnapshot
 	for _, record := range output.Records {
-		if len(record) < 7 {
-			continue
+		if len(record) != 4 {
+			return nil, fmt.Errorf("invalid desired declaration row: %d columns", len(record))
 		}
-
-		ksuid, _ := getStringField(record[0])
-		resourceType, _ := getStringField(record[1])
-		label, _ := getStringField(record[2])
-		target, _ := getStringField(record[3])
-		propsData, _ := getRawJSONField(record[4])
-		schemaData, _ := getRawJSONField(record[5])
-		nativeID, _ := getStringField(record[6])
-
-		snapshot := datastore.ResourceSnapshot{
-			KSUID:      ksuid,
-			Type:       resourceType,
-			Label:      label,
-			Target:     target,
-			Properties: propsData,
-			NativeID:   nativeID,
+		ksuid, err := getStringField(record[0])
+		if err != nil {
+			return nil, err
 		}
-
-		if len(schemaData) > 0 {
-			if err := json.Unmarshal(schemaData, &snapshot.Schema); err != nil {
-				return nil, fmt.Errorf("failed to unmarshal schema for resource %s: %w", label, err)
-			}
+		declaration, err := getRawJSONField(record[1])
+		if err != nil {
+			return nil, err
+		}
+		commandID, err := getStringField(record[2])
+		if err != nil {
+			return nil, err
+		}
+		stackID, _ := getStringField(record[3]) // NULL means no evidenced historical identity.
+		snapshot, err := datastore.DecodeDesiredSnapshot(ksuid, commandID, stackID, declaration)
+		if err != nil {
+			return nil, err
 		}
 
 		result = append(result, snapshot)
@@ -6325,7 +6648,7 @@ func (d *DatastoreAuroraDataAPI) CleanUp() error {
 	ctx := context.Background()
 
 	tables := []string{
-		"stacks", "resource_updates", "resources", "targets", "forma_commands",
+		"stacks", "resource_updates", "command_stacks", "resources", "targets", "forma_commands",
 		"policies", "stack_policies", "generators", "target_reap_audit", "agent_boots",
 	}
 
@@ -6536,4 +6859,68 @@ func (d *DatastoreAuroraDataAPI) RecordAgentBoot(version string) error {
 		return fmt.Errorf("failed to record agent boot: %w", err)
 	}
 	return nil
+}
+
+// detectStorageFormat selects preserved migration history only after verifying
+// the protocol marker; unknown protocols fail before running any migrations.
+func (d *DatastoreAuroraDataAPI) detectStorageFormat(ctx context.Context) error {
+	d.migrationTable = "db_version"
+	output, err := d.executeStatement(ctx, datastore.StorageFormatTableQuery("postgres"), nil)
+	if err != nil {
+		return err
+	}
+	count, err := getIntField(output.Records[0][0])
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return nil
+	}
+	output, err = d.executeStatement(ctx, "SELECT storage_format FROM db_version", nil)
+	if err != nil {
+		return fmt.Errorf("read storage format fence: %w", err)
+	}
+	if len(output.Records) != 1 {
+		return fmt.Errorf("invalid storage format marker")
+	}
+	version, err := getIntField(output.Records[0][0])
+	if err != nil {
+		return err
+	}
+	if version != datastore.StorageFormatVersion {
+		return fmt.Errorf("unsupported datastore storage format %d", version)
+	}
+	d.migrationTable = datastore.MigrationHistoryV2
+	return nil
+}
+
+func (d *DatastoreAuroraDataAPI) fenceStorageFormat(ctx context.Context) error {
+	if d.migrationTable == datastore.MigrationHistoryV2 {
+		return nil
+	}
+	txID, err := d.beginTransaction(ctx)
+	if err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = d.rollbackTransaction(ctx, txID)
+		}
+	}()
+	for _, statement := range datastore.StorageFormatFenceStatements("postgres") {
+		if _, err := d.executeStatementInTransaction(ctx, txID, statement, nil); err != nil {
+			return fmt.Errorf("install storage format fence: %w", err)
+		}
+	}
+	if err := d.commitTransaction(ctx, txID); err != nil {
+		return err
+	}
+	committed = true
+	d.migrationTable = datastore.MigrationHistoryV2
+	return nil
+}
+
+func (d *DatastoreAuroraDataAPI) GetDesiredOwnership(stack string) (map[string]pkgmodel.OwnedMembers, error) {
+	return datastore.ReadDesiredOwnership(d, stack)
 }

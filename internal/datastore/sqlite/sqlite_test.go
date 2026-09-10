@@ -122,6 +122,14 @@ func TestDatastore(t *testing.T) {
 				)
 				return err
 			},
+			SetPolicyTypeForTest: func(label, policyType string) error {
+				conn := d.Conn()
+				_, err := conn.Exec(
+					`UPDATE policies SET policy_type = ? WHERE label = ? AND version = (SELECT MAX(version) FROM policies WHERE label = ?)`,
+					policyType, label, label,
+				)
+				return err
+			},
 			NullResourceUpdateModifiedTsForTest: func(ksuid string) error {
 				conn := d.Conn()
 				_, err := conn.Exec(
@@ -536,6 +544,26 @@ func TestStoreFormaCommand_StripsOpaqueRefValueFromTargetUpdates(t *testing.T) {
 	assert.Contains(t, raw, `$ref`, "stored target_updates must preserve $ref")
 	assert.NotContains(t, raw, `$value`, "stored target_updates must not contain $value")
 	assert.NotContains(t, raw, "super-secret", "stored target_updates must not contain the resolved secret")
+}
+
+func TestStoreFormaCommand_StripsOpaqueRefValueFromAcceptance(t *testing.T) {
+	cfg := &pkgmodel.DatastoreConfig{DatastoreType: pkgmodel.SqliteDatastore, Sqlite: pkgmodel.SqliteConfig{FilePath: ":memory:"}}
+	ds, err := dssqlite.NewDatastoreSQLite(context.Background(), cfg, "test")
+	require.NoError(t, err)
+	d := ds.(dssqlite.DatastoreSQLite)
+	defer d.CleanUp() //nolint:errcheck
+	commandID := util.NewID()
+	fc := &forma_command.FormaCommand{ID: commandID, Command: pkgmodel.CommandApply, State: forma_command.CommandStateSuccess,
+		Config: config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
+		ResourceUpdates: []resource_update.ResourceUpdate{{Operation: resource_update.OperationAccept, State: resource_update.ResourceUpdateStateSuccess,
+			Source: resource_update.FormaCommandSourceUser, StackLabel: "default", DesiredState: pkgmodel.Resource{Ksuid: util.NewID(), Stack: "default",
+				Properties: json.RawMessage(`{"password":{"$ref":"secret://prod","$visibility":"Opaque","$value":"super-secret"}}`)}}}}
+	require.NoError(t, ds.StoreFormaCommand(fc, commandID))
+	var raw string
+	require.NoError(t, d.Conn().QueryRow(`SELECT resource FROM resource_updates WHERE command_id = ? AND operation = 'accept'`, commandID).Scan(&raw))
+	assert.Contains(t, raw, `$ref`)
+	assert.NotContains(t, raw, `$value`)
+	assert.NotContains(t, raw, "super-secret")
 }
 
 // TestBulkStoreResourceUpdates_StripsOpaqueRefValueFromExistingTarget verifies

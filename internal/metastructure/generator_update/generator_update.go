@@ -59,15 +59,19 @@ type GeneratorUpdate struct {
 // through a discriminated json.RawMessage rather than being marshaled
 // directly.
 type generatorUpdateJSON struct {
-	Generator         json.RawMessage      `json:"Generator,omitempty"`
-	ExistingGenerator json.RawMessage      `json:"ExistingGenerator,omitempty"`
-	Operation         GeneratorOperation   `json:"Operation"`
-	State             GeneratorUpdateState `json:"State"`
-	StackLabel        string               `json:"StackLabel"`
-	StartTs           time.Time            `json:"StartTs"`
-	ModifiedTs        time.Time            `json:"ModifiedTs"`
-	Version           string               `json:"Version"`
-	ErrorMessage      string               `json:"ErrorMessage,omitempty"`
+	GeneratorID         string               `json:"GeneratorID,omitempty"`
+	StackID             string               `json:"StackID,omitempty"`
+	ExistingGeneratorID string               `json:"ExistingGeneratorID,omitempty"`
+	ExistingStackID     string               `json:"ExistingStackID,omitempty"`
+	Generator           json.RawMessage      `json:"Generator,omitempty"`
+	ExistingGenerator   json.RawMessage      `json:"ExistingGenerator,omitempty"`
+	Operation           GeneratorOperation   `json:"Operation"`
+	State               GeneratorUpdateState `json:"State"`
+	StackLabel          string               `json:"StackLabel"`
+	StartTs             time.Time            `json:"StartTs"`
+	ModifiedTs          time.Time            `json:"ModifiedTs"`
+	Version             string               `json:"Version"`
+	ErrorMessage        string               `json:"ErrorMessage,omitempty"`
 }
 
 // MarshalJSON implements custom JSON marshaling for GeneratorUpdate.
@@ -89,7 +93,15 @@ func (gu GeneratorUpdate) MarshalJSON() ([]byte, error) {
 		}
 	}
 
+	var id, stackID, existingID, existingStackID string
+	if gu.Generator != nil {
+		id, stackID = gu.Generator.GetID(), gu.Generator.GetStackID()
+	}
+	if gu.ExistingGenerator != nil {
+		existingID, existingStackID = gu.ExistingGenerator.GetID(), gu.ExistingGenerator.GetStackID()
+	}
 	return json.Marshal(generatorUpdateJSON{
+		GeneratorID: id, StackID: stackID, ExistingGeneratorID: existingID, ExistingStackID: existingStackID,
 		Generator:         generatorJSON,
 		ExistingGenerator: existingGeneratorJSON,
 		Operation:         gu.Operation,
@@ -122,6 +134,8 @@ func (gu *GeneratorUpdate) UnmarshalJSON(data []byte) error {
 		if err != nil {
 			return err
 		}
+		generator.SetID(helper.GeneratorID)
+		generator.SetStackID(helper.StackID)
 		gu.Generator = generator
 	}
 
@@ -130,6 +144,8 @@ func (gu *GeneratorUpdate) UnmarshalJSON(data []byte) error {
 		if err != nil {
 			return err
 		}
+		existingGenerator.SetID(helper.ExistingGeneratorID)
+		existingGenerator.SetStackID(helper.ExistingStackID)
 		gu.ExistingGenerator = existingGenerator
 	}
 

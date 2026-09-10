@@ -144,6 +144,13 @@ func TestDatastore(t *testing.T) {
 				)
 				return err
 			},
+			SetPolicyTypeForTest: func(label, policyType string) error {
+				_, err := conn.Exec(
+					`UPDATE policies SET policy_type = @p1 WHERE label = @p2 AND version = (SELECT MAX(version) FROM policies WHERE label = @p2)`,
+					policyType, label,
+				)
+				return err
+			},
 			NullResourceUpdateModifiedTsForTest: func(ksuid string) error {
 				_, err := conn.Exec(
 					`UPDATE resource_updates SET modified_ts = NULL WHERE ksuid = @p1`, ksuid,

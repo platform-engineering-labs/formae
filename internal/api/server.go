@@ -39,6 +39,7 @@ const (
 	BasePath                            = "/api/v1"
 	CommandsRoute                       = BasePath + "/commands"
 	CommandStatusRoute                  = BasePath + "/commands/:id/status"
+	CommandDesiredDeltaRoute            = BasePath + "/commands/:id/desired-delta"
 	ListCommandStatusRoute              = BasePath + "/commands/status"
 	CancelCommandsRoute                 = BasePath + "/commands/cancel"
 	ListResourcesRoute                  = BasePath + "/resources"
@@ -227,6 +228,7 @@ func (s *Server) configureEcho() *echo.Echo {
 	// Forma command endpoints
 	e.POST(CommandsRoute, s.SubmitFormaCommand)
 	e.GET(CommandStatusRoute, s.CommandStatus)
+	e.GET(CommandDesiredDeltaRoute, s.CommandDesiredDelta)
 	e.GET(ListCommandStatusRoute, s.ListCommandStatus)
 	e.POST(CancelCommandsRoute, s.CancelCommands)
 
@@ -281,15 +283,18 @@ func (s *Server) configureEcho() *echo.Echo {
 // @Produce json
 // @Param Client-ID header string true "Unique identifier for the client."
 // @Param command formData string true "The command to execute, either apply or destroy."
+// @Param message formData string false "Optional human-readable reason for the command."
 // @Param mode formData string false "Only applies to the apply command. The desired command mode, either reconcile or patch."
 // @Param simulate formData boolean false "If true, simulates command execution without actual changes to the infrastructure (defaults to false)."
 // @Param force formData boolean false "Only applies to the apply command in reconcile mode. If true, any changes made to the infrastructure since the last reconcile, either by patches or outside of Formae, will be overwritten."
+// @Param resolution formData string false "JSON drift-resolution controls for soft reconcile: ObservationID, Decisions [{ResourceID, Action (absorb or revert)}], ReviewID, IdempotencyKey. Simulate the final choices first; real submission requires its ReviewID and a stable IdempotencyKey. Mutually exclusive with force. Requires shared-drift-resolution capability."
 // @Param query formData string false "Only applies to destroy commands. A query string to select the resources to be destroyed."
 // @Param on-dependents formData string false "Only applies to destroy commands. Behavior when a delete would cascade onto dependent targets: abort (default) or cascade."
 // @Param file formData file false "A valid Forma file."
 // @Success 200 {object} apimodel.SubmitCommandResponse "OK: No changes required, or simulation result returned."
 // @Success 202 {object} apimodel.SubmitCommandResponse "Accepted: The command is validated, stored, and queued for execution."
 // @Header 202 {string} string Location "The URL to poll for the command's execution status (e.g., /api/v1/commands/{command_id}/status)."
+// @Failure 409 {object} apimodel.ErrorResponse[apimodel.DriftResolutionError] "Conflict: drift resolution rejected; inspect data.Code and data.Reason before retrying."
 // @Failure 500 {string} string "Internal Server Error."
 // @Router /commands [post]
 func (s *Server) SubmitFormaCommand(c echo.Context) error {
@@ -319,10 +324,27 @@ func (s *Server) SubmitFormaCommand(c echo.Context) error {
 			return echo.NewHTTPError(http.StatusInternalServerError, err.Error())
 		}
 
+		var resolution *pkgmodel.DriftResolution
+		if raw := c.FormValue("resolution"); raw != "" {
+			if len(raw) > 64*1024 {
+				return echo.NewHTTPError(http.StatusBadRequest, "resolution exceeds 64 KiB")
+			}
+			decoder := json.NewDecoder(strings.NewReader(raw))
+			decoder.DisallowUnknownFields()
+			if err := decoder.Decode(&resolution); err != nil || resolution == nil {
+				return echo.NewHTTPError(http.StatusBadRequest, "invalid resolution controls")
+			}
+			var extra any
+			if err := decoder.Decode(&extra); err != io.EOF {
+				return echo.NewHTTPError(http.StatusBadRequest, "invalid trailing resolution controls")
+			}
+		}
 		response, err = s.metastructure.ApplyForma(forma, &config.FormaCommandConfig{
-			Mode:     mode,
-			Simulate: simulate,
-			Force:    force,
+			Resolution: resolution,
+			Message:    c.FormValue("message"),
+			Mode:       mode,
+			Simulate:   simulate,
+			Force:      force,
 		}, clientID, subject, subjectName)
 		if err != nil {
 			return mapError(c, err)
@@ -439,6 +461,7 @@ func (s *Server) ListCommandStatus(c echo.Context) error {
 // @Produce json
 // @Param Client-ID header string true "Unique identifier for the client."
 // @Param query query string true "The query string to select the resources."
+// @Param state query string false "Extraction state. desired requires desired-stack-extraction capability and complete stack selectors; returns accepted declarations including complete empty stacks. Defaults to actual inventory." Enums(actual, desired)
 // @Success 200 {object} pkgmodel.Forma ": OK: The extracted resources."
 // @Failure 400 {string} string "Bad Request: Invalid query."
 // @Failure 404 {string} string "Not Found: No resources found matching the query."
@@ -447,6 +470,23 @@ func (s *Server) ListCommandStatus(c echo.Context) error {
 // @Router /resources [get]
 func (s *Server) ListResources(c echo.Context) error {
 	query := c.QueryParam("query")
+	state := c.QueryParam("state")
+	if state != "" && state != "actual" && state != "desired" {
+		return mapError(c, apimodel.InvalidQueryError{Reason: "unknown extraction state"})
+	}
+	if state == "desired" {
+		extractor, ok := s.metastructure.(interface {
+			ExtractDesiredStacks(string) (*pkgmodel.Forma, error)
+		})
+		if !ok {
+			return c.JSON(http.StatusNotAcceptable, map[string]string{"error": "desired stack extraction is unsupported"})
+		}
+		forma, err := extractor.ExtractDesiredStacks(query)
+		if err != nil {
+			return mapError(c, err)
+		}
+		return c.JSON(http.StatusOK, forma)
+	}
 	resources, err := s.metastructure.ExtractResources(query)
 	if err != nil {
 		return mapError(c, err)
@@ -807,6 +847,28 @@ func hasFormaFile(c echo.Context) bool {
 
 // mapError maps metastructure errors to appropriate HTTP responses
 func mapError(c echo.Context, err error) error {
+	var resolutionErr apimodel.DriftResolutionError
+	if errors.As(err, &resolutionErr) {
+		status := http.StatusConflict
+		if resolutionErr.Code == "invalid-resolution" || resolutionErr.Code == "invalid-decisions" {
+			status = http.StatusBadRequest
+		}
+		return apiError(c, status, apimodel.DriftResolutionRejected, resolutionErr)
+	}
+	if errors.Is(err, datastore.ErrStaleAdmission) {
+		return apiError(c, http.StatusConflict, apimodel.DriftResolutionRejected, apimodel.DriftResolutionError{Code: "stale-review", Reason: "relevant state changed; obtain a new final review"})
+	}
+	if errors.Is(err, datastore.ErrAdmissionConflict) {
+		return apiError(c, http.StatusConflict, apimodel.DriftResolutionRejected, apimodel.DriftResolutionError{Code: "idempotency-conflict", Reason: err.Error()})
+	}
+	if errors.Is(err, datastore.ErrInvalidAdmission) {
+		return apiError(c, http.StatusBadRequest, apimodel.DriftResolutionRejected, apimodel.DriftResolutionError{Code: "invalid-resolution", Reason: err.Error()})
+	}
+	var recoveryErr metastructure.AdmittedCommandRecoveryError
+	if errors.As(err, &recoveryErr) {
+		return apiError(c, http.StatusConflict, apimodel.DriftResolutionRejected, apimodel.DriftResolutionError{Code: "recovery-required", Reason: recoveryErr.Cause.Error(), CommandID: recoveryErr.CommandID})
+	}
+
 	var reconcileRejectedResult apimodel.FormaReconcileRejectedError
 	if errors.As(err, &reconcileRejectedResult) {
 		return apiError(c, http.StatusConflict, apimodel.ReconcileRejected, reconcileRejectedResult)
@@ -963,4 +1025,34 @@ func apiError[T any](c echo.Context, status int, errorType apimodel.APIError, da
 		ErrorType: errorType,
 		Data:      data,
 	})
+}
+
+// CommandDesiredDelta serves partial source guidance from recorded desired intent.
+// @Summary Get a command's desired source delta
+// @Description Returns partial recorded desired intent for source catch-up. This is not a complete reconcile declaration. Requires shared-drift-resolution capability.
+// @Tags commands
+// @Produce json
+// @Param Client-ID header string true "Unique identifier for the client."
+// @Param id path string true "Command ID returned by the accepted submission."
+// @Success 200 {object} apimodel.CommandDesiredDelta "Partial desired source guidance and command state."
+// @Failure 400 {string} string "Bad Request: missing Client-ID or invalid command."
+// @Failure 409 {object} apimodel.ErrorResponse[apimodel.DriftResolutionError] "Conflict: resolution receipt or terminal desired intent is unavailable; inspect data.Code and data.Reason."
+// @Failure 500 {string} string "Internal Server Error: command lookup or extraction failed."
+// @Failure 501 {string} string "Not Implemented: shared drift resolution unavailable."
+// @Router /commands/{id}/desired-delta [get]
+func (s *Server) CommandDesiredDelta(c echo.Context) error {
+	if c.Request().Header.Get("Client-ID") == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "Client-ID header is required")
+	}
+	reader, ok := s.metastructure.(interface {
+		ExtractCommandDesiredDelta(string) (*apimodel.CommandDesiredDelta, error)
+	})
+	if !ok {
+		return echo.NewHTTPError(http.StatusNotImplemented, "shared drift resolution unavailable")
+	}
+	delta, err := reader.ExtractCommandDesiredDelta(c.Param("id"))
+	if err != nil {
+		return mapError(c, err)
+	}
+	return c.JSON(http.StatusOK, delta)
 }

@@ -1116,13 +1116,9 @@ func TestGenerateResourceUpdatesForReconcile_ImplicitDelete(t *testing.T) {
 	assert.Equal(t, "my-s3-bucket-delete", updates[0].DesiredState.Label)
 }
 
-// TestGenerateResourceUpdatesForReconcile_GeneratorOnlyStackKeepsExistingResources
-// verifies that reconciling a forma which declares only a generator on a
-// stack that already holds a managed resource does not delete that
-// resource. A generator carries no resources of its own, so the split
-// Forma for its stack must never stand in for an empty desired resource
-// set.
-func TestGenerateResourceUpdatesForReconcile_GeneratorOnlyStackKeepsExistingResources(t *testing.T) {
+// Explicit stack declarations are complete reconcile boundaries even when only
+// generators remain. Generator ownership alone does not declare another stack.
+func TestGenerateResourceUpdatesForReconcile_GeneratorOnlyStackDeletesOmittedResources(t *testing.T) {
 	ds, _ := GetDeps(t)
 
 	resource := pkgmodel.Resource{
@@ -1164,7 +1160,7 @@ func TestGenerateResourceUpdatesForReconcile_GeneratorOnlyStackKeepsExistingReso
 	}`)
 
 	// Apply a forma that declares only the generator on the same stack -
-	// the resource is not repeated in the desired state.
+	// the omitted resource is deleted, while the generator remains declared.
 	mode := pkgmodel.FormaApplyModeReconcile
 	forma := &pkgmodel.Forma{
 		Stacks:     []pkgmodel.Stack{{Label: "infrastructure"}},
@@ -1179,9 +1175,22 @@ func TestGenerateResourceUpdatesForReconcile_GeneratorOnlyStackKeepsExistingReso
 		},
 	}
 
+	other := resource
+	other.Stack = "undeclared-owner"
+	other.Label = "untouched"
+	_, err = ds.StoreStack(&pkgmodel.Forma{Stacks: []pkgmodel.Stack{{Label: other.Stack}}, Resources: []pkgmodel.Resource{other}}, "other-command")
+	assert.NoError(t, err)
+	forma.Generators = append(forma.Generators, json.RawMessage(`{"Type":"password","Label":"external","Stack":"undeclared-owner","Length":24,"Lowercase":true}`))
+
 	updates, err := generateResourceUpdatesForApply(forma, mode, FormaCommandSourceUser, targetMap, targetMap, ds, nil, false)
 	assert.NoError(t, err)
-	assert.Empty(t, updates)
+	if assert.Len(t, updates, 1) {
+		assert.Equal(t, OperationDelete, updates[0].Operation)
+		assert.Equal(t, "infrastructure", updates[0].DesiredState.Stack)
+	}
+	patchUpdates, err := generateResourceUpdatesForApply(forma, pkgmodel.FormaApplyModePatch, FormaCommandSourceUser, targetMap, targetMap, ds, nil, false)
+	assert.NoError(t, err)
+	assert.Empty(t, patchUpdates, "patch generator maintenance does not delete omitted resources")
 }
 
 func TestGenerateResourceUpdatesForReconcile_Update(t *testing.T) {

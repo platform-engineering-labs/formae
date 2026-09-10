@@ -383,3 +383,32 @@ func TestApplyForma_GeneratorBoundSecret_ResumedCommandRedrawsForACrossStackGene
 		assertNoPlaintextInResourceUpdates(t, m, cmds[0].ID, drawn)
 	})
 }
+
+func (d *stalledGenerationDatastore) ReadAdmissionRevisions(keys []string) ([]datastore.RevisionGuard, error) {
+	return d.Datastore.(datastore.CommandAdmitter).ReadAdmissionRevisions(keys)
+}
+func (d *stalledGenerationDatastore) LookupCommandAdmission(principal, key string) (*datastore.StoredAdmission, error) {
+	return d.Datastore.(datastore.CommandAdmitter).LookupCommandAdmission(principal, key)
+}
+func (d *stalledGenerationDatastore) AdmitFormaCommand(command *forma_command.FormaCommand, admission datastore.CommandAdmission) (datastore.AdmissionResult, error) {
+	return d.Datastore.(datastore.CommandAdmitter).AdmitFormaCommand(command, admission)
+}
+func (d *stalledGenerationDatastore) ResolveAdmissionStackGuards(labels []string) ([]string, error) {
+	return d.Datastore.(datastore.AdmissionScopeResolver).ResolveAdmissionStackGuards(labels)
+}
+func (d *stalledGenerationDatastore) ResolveAdmissionTargetInventoryGuards(labels []string) ([]string, error) {
+	return d.Datastore.(datastore.AdmissionPredicateResolver).ResolveAdmissionTargetInventoryGuards(labels)
+}
+func (d *stalledGenerationDatastore) ResolveAdmissionResourceIdentityGuards(ids []string) ([]string, error) {
+	return d.Datastore.(datastore.AdmissionPredicateResolver).ResolveAdmissionResourceIdentityGuards(ids)
+}
+func (d *stalledGenerationDatastore) ReadPolicyIdentity(label, stackID string) (*datastore.PolicyIdentity, error) {
+	return d.Datastore.(datastore.PolicyIdentityReader).ReadPolicyIdentity(label, stackID)
+}
+func (d *stalledGenerationDatastore) GetResourceObservation(id string) (*datastore.ResourceObservation, error) {
+	return d.Datastore.(datastore.ResourceObservationReader).GetResourceObservation(id)
+}
+
+func (d *stalledGenerationDatastore) PinCommandTargetIncarnation(commandID, target, incarnation string, refs []datastore.ResourceUpdateRef) error {
+	return d.Datastore.(datastore.CommandTargetIdentityWriter).PinCommandTargetIncarnation(commandID, target, incarnation, refs)
+}

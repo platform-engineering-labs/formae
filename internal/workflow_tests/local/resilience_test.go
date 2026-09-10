@@ -169,7 +169,7 @@ func TestMetastructure_FinalizeAllTerminalAfterCrash(t *testing.T) {
 		ksuid1 := util.NewID()
 		ksuid2 := util.NewID()
 
-		cmd := &forma_command.FormaCommand{
+		cmd := &forma_command.FormaCommand{Setup: &forma_command.SetupBoundary{Version: 1},
 			ID:      commandID,
 			Command: pkgmodel.CommandApply,
 			State:   forma_command.CommandStateInProgress,
@@ -284,7 +284,7 @@ func TestMetastructure_CascadedFailuresNotReExecutedAfterCrash(t *testing.T) {
 		ksuidB := util.NewID()
 		ksuidC := util.NewID()
 
-		cmd := &forma_command.FormaCommand{
+		cmd := &forma_command.FormaCommand{Setup: &forma_command.SetupBoundary{Version: 1},
 			ID:      commandID,
 			Command: pkgmodel.CommandApply,
 			State:   forma_command.CommandStateInProgress,

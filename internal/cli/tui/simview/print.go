@@ -22,13 +22,16 @@ func RenderSimulationPlain(th *theme.Theme, sim *apimodel.Simulation, width int)
 	groups := buildSimGroups(&sim.Command)
 	p := th.Palette
 	var sb strings.Builder
+	for _, warning := range sim.Warnings {
+		fmt.Fprintf(&sb, "Warning: %s\n", warning)
+	}
 
 	// Summary counts line — same op ordering and colors as renderSummaryCounts.
 	counts := opCounts(groups)
 	// The glyph is colored per-op from the theme palette; the count and word
 	// stay in the base text color.
 	wordSt := lipgloss.NewStyle().Foreground(p.TextPrimary)
-	ordered := []opKind{opCreate, opUpdate, opDelete, opReplace, opDraw, opDetach, opKeep}
+	ordered := []opKind{opCreate, opUpdate, opDelete, opReplace, opDraw, opDetach, opKeep, opAccept, opAcceptDelete}
 	var parts []string
 	for _, op := range ordered {
 		n := counts[op]

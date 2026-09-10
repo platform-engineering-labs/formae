@@ -9,6 +9,7 @@ package blackbox
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 
@@ -1323,6 +1324,10 @@ func (h *TestHarness) executeApply(t *testing.T, op *Operation, model *StateMode
 			h.UnprogramResponses(t, programmedSeqs)
 		}
 		t.Logf("[op %d] Apply (%s) stack=%s resources %v → rejected: %v", op.SequenceNum, op.ApplyMode, stackLabel, op.ResourceIDs, err)
+		var resolution *apimodel.ErrorResponse[apimodel.DriftResolutionError]
+		if errors.As(err, &resolution) {
+			t.Logf("[op %d] Drift resolution rejection: %+v", op.SequenceNum, resolution.Data)
+		}
 		return
 	}
 

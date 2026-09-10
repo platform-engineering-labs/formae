@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/platform-engineering-labs/formae/internal/datastore"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
@@ -18,6 +19,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // reconcileBuilder constructs a reconcile-mode apply forma_command with the
@@ -135,6 +137,24 @@ func RunGetResourcesAtLastReconcile_SuccessReturnsDesiredState(t *testing.T, new
 		}
 		assert.True(t, labels["bucket-1"])
 		assert.True(t, labels["bucket-2"])
+	})
+}
+
+func RunGetResourcesAtLastReconcile_AcceptanceOperations(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("GetResourcesAtLastReconcile_AcceptanceOperations", func(t *testing.T) {
+		td := newDS(t)
+		defer td.CleanUpFn() //nolint:errcheck
+		cmd := reconcileBuilder(forma_command.CommandStateSuccess, pkgmodel.FormaApplyModeReconcile, -time.Minute, []resource_update.ResourceUpdate{
+			resourceUpdate("stack-a", "ksuid-1", "accepted", `{"foo":"observed"}`, types.OperationAccept, resource_update.FormaCommandSourceUser),
+			resourceUpdate("stack-a", "ksuid-2", "accepted-delete", `{}`, types.OperationAcceptDelete, resource_update.FormaCommandSourceUser),
+		})
+		assert.NoError(t, td.StoreFormaCommand(cmd, cmd.ID))
+		snaps, err := td.GetResourcesAtLastReconcile("stack-a")
+		assert.NoError(t, err)
+		if assert.Len(t, snaps, 1) {
+			assert.Equal(t, "accepted", snaps[0].Label)
+			assert.JSONEq(t, `{"foo":"observed"}`, string(snaps[0].Properties))
+		}
 	})
 }
 
@@ -536,5 +556,128 @@ func RunGetResourcesAtLastReconcile_PartialDestroyLeavesUntouchedInBaseline(t *t
 			assert.Equal(t, "ksuid-1", snaps[0].KSUID)
 			assert.Equal(t, "keeper", snaps[0].Label)
 		}
+	})
+}
+
+// Complete declaration metadata is accepted intent even when inventory has no new version.
+func RunDesiredDeclaration(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("DesiredDeclaration", func(t *testing.T) {
+		td := newDS(t)
+		defer func(cleanup func() error) { _ = cleanup() }(td.CleanUpFn)
+		stack := &pkgmodel.Stack{Label: "desired-stack"}
+		_, err := td.CreateStack(stack, "create")
+		require.NoError(t, err)
+		stack, err = td.GetStackByLabel(stack.Label)
+		require.NoError(t, err)
+		update := resourceUpdate(stack.Label, util.NewID(), "bucket", `{"foo":{"$ref":"formae://producer#name"}}`, types.OperationAccept, resource_update.FormaCommandSourceUser)
+		update.DesiredState.Group = "retained-group"
+		update.DesiredState.OwnedMembers = pkgmodel.OwnedMembers{"tags": {Rule: "Mapping", Members: []string{"app"}}}
+		cmd := reconcileBuilder(forma_command.CommandStateSuccess, pkgmodel.FormaApplyModeReconcile, -time.Minute, []resource_update.ResourceUpdate{update})
+		cmd.Stacks = []forma_command.CommandStack{{ID: stack.ID, Label: stack.Label}}
+		require.NoError(t, td.StoreFormaCommand(cmd, cmd.ID))
+		for _, source := range []forma_command.Source{forma_command.SourceGeneratorRotator, forma_command.SourceSynchronizer, forma_command.SourceDiscovery} {
+			partial := reconcileBuilder(forma_command.CommandStateSuccess, pkgmodel.FormaApplyModeReconcile, -time.Second, []resource_update.ResourceUpdate{update})
+			partial.Source = source
+			partial.Stacks = cmd.Stacks
+			require.NoError(t, td.StoreFormaCommand(partial, partial.ID))
+		}
+		snaps, err := td.GetResourcesAtLastReconcile(stack.Label)
+		require.NoError(t, err)
+		require.Len(t, snaps, 1)
+		reader, ok := td.Datastore.(datastore.DesiredOwnershipReader)
+		require.True(t, ok)
+		records, err := reader.GetDesiredOwnership(stack.Label)
+		require.NoError(t, err)
+		require.Equal(t, update.DesiredState.OwnedMembers, records[update.DesiredState.Ksuid])
+		require.Equal(t, stack.ID, snaps[0].StackID)
+		require.Equal(t, cmd.ID, snaps[0].CommandID)
+		encoded, err := json.Marshal(snaps[0])
+		require.NoError(t, err)
+		var fields map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal(encoded, &fields))
+		require.Contains(t, fields, "Declaration", "complete desired declaration must survive the projection")
+		var declaration pkgmodel.Resource
+		require.NoError(t, json.Unmarshal(fields["Declaration"], &declaration))
+		require.Equal(t, update.DesiredState.OwnedMembers, declaration.OwnedMembers)
+		require.Equal(t, update.DesiredState.Group, declaration.Group)
+		require.JSONEq(t, string(update.DesiredState.Properties), string(declaration.Properties))
+	})
+	t.Run("DesiredDeclarationLegacyReusedStack", func(t *testing.T) {
+		td := newDS(t)
+		defer func(cleanup func() error) { _ = cleanup() }(td.CleanUpFn)
+		stack := &pkgmodel.Stack{Label: "legacy-reused"}
+		_, err := td.CreateStack(stack, "create")
+		require.NoError(t, err)
+		// Resource-only historical command has no explicit stable stack membership.
+		cmd := reconcileBuilder(forma_command.CommandStateSuccess, pkgmodel.FormaApplyModeReconcile, -time.Minute, []resource_update.ResourceUpdate{resourceUpdate(stack.Label, util.NewID(), "old", `{"foo":"old"}`, types.OperationCreate, resource_update.FormaCommandSourceUser)})
+		require.NoError(t, td.StoreFormaCommand(cmd, cmd.ID))
+		before, err := td.GetResourcesAtLastReconcile(stack.Label)
+		require.NoError(t, err)
+		require.Len(t, before, 1)
+		_, err = td.DeleteStack(stack.Label, "delete")
+		require.NoError(t, err)
+		_, err = td.CreateStack(&pkgmodel.Stack{Label: stack.Label}, "recreate")
+		require.NoError(t, err)
+		after, err := td.GetResourcesAtLastReconcile(stack.Label)
+		require.NoError(t, err)
+		require.Empty(t, after, "legacy intent cannot cross a reused stack label")
+	})
+}
+
+func RunDesiredCadence(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("DesiredCadence", func(t *testing.T) {
+		td := newDS(t)
+		defer func(cleanup func() error) { _ = cleanup() }(td.CleanUpFn)
+		stack := &pkgmodel.Stack{Label: "cadence"}
+		_, err := td.CreateStack(stack, "create")
+		require.NoError(t, err)
+		stack, err = td.GetStackByLabel(stack.Label)
+		require.NoError(t, err)
+		attach := func() {
+			_, err := td.CreatePolicy(&pkgmodel.AutoReconcilePolicy{Type: "auto-reconcile", Label: "periodic", IntervalSeconds: 60, StackID: stack.ID}, "policy")
+			require.NoError(t, err)
+		}
+		attach()
+		stamp := time.Now().UTC().Truncate(time.Second).Add(-time.Hour)
+		save := func(source forma_command.Source, state forma_command.CommandState, offset time.Duration) {
+			cmd := reconcileBuilder(state, pkgmodel.FormaApplyModeReconcile, 0, nil)
+			cmd.Source = source
+			cmd.StartTs = stamp.Add(offset)
+			cmd.Stacks = []forma_command.CommandStack{{ID: stack.ID, Label: stack.Label}}
+			require.NoError(t, td.StoreFormaCommand(cmd, cmd.ID))
+		}
+		cadence := func(want time.Time) {
+			infos, err := td.GetStacksWithAutoReconcilePolicy()
+			require.NoError(t, err)
+			require.Len(t, infos, 1)
+			require.Equal(t, stack.ID, infos[0].StackID)
+			require.Equal(t, want.Unix(), infos[0].LastReconcileAt.Unix())
+		}
+		save(forma_command.SourceUser, forma_command.CommandStateSuccess, 0)
+		cadence(stamp)
+		for _, source := range []forma_command.Source{forma_command.SourceGeneratorRotator, forma_command.SourceSynchronizer, forma_command.SourceDiscovery} {
+			save(source, forma_command.CommandStateSuccess, time.Minute)
+			cadence(stamp)
+		}
+		nonApply := reconcileBuilder(forma_command.CommandStateSuccess, pkgmodel.FormaApplyModeReconcile, 0, nil)
+		nonApply.Command = pkgmodel.CommandDestroy
+		nonApply.StartTs = stamp.Add(2 * time.Minute)
+		nonApply.Stacks = []forma_command.CommandStack{{ID: stack.ID, Label: stack.Label}}
+		require.NoError(t, td.StoreFormaCommand(nonApply, nonApply.ID))
+		cadence(stamp)
+		save(forma_command.SourceUser, forma_command.CommandStateFailed, 2*time.Minute)
+		cadence(stamp)
+		save(forma_command.SourceAutoReconciler, forma_command.CommandStateSuccess, 3*time.Minute)
+		cadence(stamp.Add(3 * time.Minute))
+		_, err = td.DeleteStack(stack.Label, "delete")
+		require.NoError(t, err)
+		_, err = td.CreateStack(&pkgmodel.Stack{Label: stack.Label}, "recreate")
+		require.NoError(t, err)
+		stack, err = td.GetStackByLabel(stack.Label)
+		require.NoError(t, err)
+		attach()
+		cadence(time.Unix(0, 0))
+		save(forma_command.SourceUser, forma_command.CommandStateSuccess, 4*time.Minute)
+		cadence(stamp.Add(4 * time.Minute))
 	})
 }

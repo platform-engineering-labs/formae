@@ -41,6 +41,8 @@ const (
 	opDetach // "⊘"
 	opCreate // "+"
 	opKeep   // "="
+	opAccept
+	opAcceptDelete
 )
 
 // opGlyph returns the themed glyph for an operation.
@@ -56,7 +58,7 @@ func opGlyph(g theme.Glyphs, o opKind) string {
 		return g.OpDetach
 	case opCreate:
 		return g.OpCreate
-	case opKeep:
+	case opKeep, opAccept, opAcceptDelete:
 		return g.OpKeep
 	}
 	return "?"
@@ -75,7 +77,7 @@ func opColor(p theme.Palette, o opKind) lipgloss.AdaptiveColor {
 		return p.OpDetach
 	case opCreate:
 		return p.OpCreate
-	case opKeep:
+	case opKeep, opAccept, opAcceptDelete:
 		return p.OpKeep
 	}
 	return p.TextPrimary
@@ -96,6 +98,10 @@ func (o opKind) word() string {
 		return "detach"
 	case opCreate:
 		return "create"
+	case opAccept:
+		return "accept"
+	case opAcceptDelete:
+		return "accept deletion"
 	case opKeep:
 		return "keep"
 	}
@@ -461,6 +467,10 @@ func buildResourceRows(updates []apimodel.ResourceUpdate) []simRow {
 // falls through to opCreate.
 func genericOpKind(op string) opKind {
 	switch op {
+	case "accept":
+		return opAccept
+	case "accept_delete":
+		return opAcceptDelete
 	case apimodel.OperationDelete:
 		return opDelete
 	case apimodel.OperationReplace:

@@ -268,6 +268,10 @@ func buildPropertyChangeLines(_ *theme.Theme, r simRow, doneSt, errSt, subtleSt 
 // carries no declared config).
 func cardEmptyNote(r simRow) string {
 	switch r.op {
+	case opAccept:
+		return "Record the observed state as desired intent; no provider write."
+	case opAcceptDelete:
+		return "Record the confirmed deletion as desired intent; no provider delete."
 	case opDelete:
 		return "This resource will be removed."
 	case opDetach:

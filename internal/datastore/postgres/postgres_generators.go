@@ -230,6 +230,14 @@ func (d DatastorePostgres) GetGenerator(label, stackLabel string) (pkgmodel.Gene
 // The stack label is resolved to its current KSUID first, for the same
 // reason GetGenerator does. A stack that doesn't exist owns no generators.
 func (d DatastorePostgres) LoadGeneratorsByStack(stackLabel string) ([]pkgmodel.Generator, error) {
+	return d.loadGeneratorsByStack(stackLabel, false)
+}
+
+func (d DatastorePostgres) LoadDesiredGeneratorsByStack(stackLabel string) ([]pkgmodel.Generator, error) {
+	return d.loadGeneratorsByStack(stackLabel, true)
+}
+
+func (d DatastorePostgres) loadGeneratorsByStack(stackLabel string, strict bool) ([]pkgmodel.Generator, error) {
 	ctx, span := tracer.Start(context.Background(), "LoadGeneratorsByStack")
 	defer span.End()
 
@@ -266,6 +274,9 @@ func (d DatastorePostgres) LoadGeneratorsByStack(stackLabel string) ([]pkgmodel.
 		}
 		gen, err := datastore.GeneratorFromData([]byte(dataStr))
 		if err != nil {
+			if strict {
+				return nil, fmt.Errorf("invalid desired metadata: %w", err)
+			}
 			slog.Warn("Failed to deserialize generator, skipping", "error", err, "stackLabel", stackLabel)
 			continue
 		}

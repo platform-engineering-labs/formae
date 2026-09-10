@@ -27,6 +27,7 @@ import (
 	"ergo.services/ergo"
 	"ergo.services/ergo/gen"
 	"ergo.services/ergo/net/handshake"
+
 	// Registers the sqlite3 driver used to read the agent's datastore directly.
 	// Without it every sql.Open here fails at runtime while still compiling.
 	_ "github.com/mattn/go-sqlite3"
@@ -87,7 +88,8 @@ type TestHarness struct {
 
 	// strictMode disables best-effort self-healing in assertion paths so tests
 	// fail immediately instead of repairing or retrying through anomalies.
-	strictMode bool
+	strictMode             bool
+	synchronizationEnabled bool
 
 	// terminalCommandStates tracks commands once they reach a terminal state so
 	// we can assert they never later regress back to a non-terminal state.
@@ -98,6 +100,10 @@ type TestHarness struct {
 // subprocess, creates an Ergo node for TestController communication, and waits
 // for the plugin to register.
 func NewTestHarness(t *testing.T, timeout time.Duration) *TestHarness {
+	return newTestHarness(t, timeout, false)
+}
+
+func newTestHarness(t *testing.T, timeout time.Duration, synchronizationEnabled bool) *TestHarness {
 	t.Helper()
 
 	pluginsDir := t.TempDir()
@@ -124,6 +130,7 @@ func NewTestHarness(t *testing.T, timeout time.Duration) *TestHarness {
 		pluginNodeName: pluginNodeName,
 	}
 
+	h.synchronizationEnabled = synchronizationEnabled
 	h.cloudStateMirror = make(map[string]testcontrol.CloudStateEntry)
 	h.terminalCommandStates = make(map[string]string)
 
@@ -827,7 +834,8 @@ agent {
         }
     }
     synchronization {
-        enabled = false
+        enabled = %t
+        interval = 1.s
     }
     discovery {
         enabled = false
@@ -845,7 +853,7 @@ agent {
 plugins {
     pluginDir = %q
 }
-`, h.port, h.nodename, h.cookie, h.dbPath, h.pluginsDir)
+`, h.port, h.nodename, h.cookie, h.dbPath, h.synchronizationEnabled, h.pluginsDir)
 	err := os.WriteFile(configPath, []byte(content), 0644)
 	require.NoError(t, err)
 	return configPath

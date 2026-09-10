@@ -40,6 +40,13 @@ import (
 // tracer is used for creating spans within datastore methods to group SQL queries
 var tracer trace.Tracer
 
+func nullableJSONPostgres(value json.RawMessage) any {
+	if value == nil {
+		return nil
+	}
+	return value
+}
+
 func init() {
 	tracer = otel.Tracer("formae/datastore")
 
@@ -365,6 +372,23 @@ func NewDatastorePostgres(ctx context.Context, cfg *pkgmodel.DatastoreConfig, ag
 func (d DatastorePostgres) StoreFormaCommand(fa *forma_command.FormaCommand, commandID string) error {
 	ctx, span := tracer.Start(context.Background(), "StoreFormaCommand")
 	defer span.End()
+	tx, err := d.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err = d.storeFormaCommandTx(ctx, tx, fa, commandID, false); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// storeFormaCommandTx writes metadata, membership and all initial contributions.
+// The caller owns commit/rollback; every SQL operation stays on this transaction.
+func (d DatastorePostgres) storeFormaCommandTx(ctx context.Context, tx pgx.Tx, fa *forma_command.FormaCommand, commandID string, createOnly bool) error {
+	if err := datastore.ValidateAcceptanceContributions(fa.ResourceUpdates); err != nil {
+		return err
+	}
 
 	for _, r := range fa.ResourceUpdates {
 		if r.DesiredState.Properties == nil {
@@ -386,6 +410,10 @@ func (d DatastorePostgres) StoreFormaCommand(fa *forma_command.FormaCommand, com
 		return fmt.Errorf("failed to marshal stack updates: %w", err)
 	}
 
+	setupMetadata, err := fa.MarshalSetupMetadata(createOnly)
+	if err != nil {
+		return err
+	}
 	policyUpdatesJSON, err := json.Marshal(fa.PolicyUpdates)
 	if err != nil {
 		return fmt.Errorf("failed to marshal policy updates: %w", err)
@@ -395,12 +423,12 @@ func (d DatastorePostgres) StoreFormaCommand(fa *forma_command.FormaCommand, com
 	query := fmt.Sprintf(`
 	INSERT INTO %s (command_id, timestamp, command, state, agent_version, client_id, agent_id,
 		description_text, description_confirm, config_mode, config_force, config_simulate,
-		target_updates, stack_updates, policy_updates, modified_ts, source, subject, subject_name)
-	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+		target_updates, stack_updates, policy_updates, modified_ts, source, subject, subject_name, message, input_properties, setup_metadata)
+	VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
 	ON CONFLICT (command_id) DO UPDATE
 	SET timestamp = EXCLUDED.timestamp,
 	command = EXCLUDED.command,
-	state = EXCLUDED.state,
+	state = CASE WHEN forma_commands.setup_metadata::jsonb->>'OnlyMetadata' = 'true' THEN 'Success' ELSE EXCLUDED.state END,
 	agent_version = EXCLUDED.agent_version,
 	client_id = EXCLUDED.client_id,
 	agent_id = EXCLUDED.agent_id,
@@ -415,25 +443,44 @@ func (d DatastorePostgres) StoreFormaCommand(fa *forma_command.FormaCommand, com
 	modified_ts = EXCLUDED.modified_ts,
 	source = EXCLUDED.source,
 	subject = EXCLUDED.subject,
-	subject_name = EXCLUDED.subject_name
+	subject_name = EXCLUDED.subject_name,
+	message = EXCLUDED.message,
+	input_properties = EXCLUDED.input_properties,
+ setup_metadata = CASE WHEN forma_commands.setup_metadata::jsonb->>'Committed' = 'true' THEN forma_commands.setup_metadata ELSE COALESCE(EXCLUDED.setup_metadata, forma_commands.setup_metadata) END
 	`, datastore.CommandsTable)
 
-	_, err = d.pool.Exec(ctx, query, commandID, fa.StartTs.UTC(), fa.Command, fa.State, formae.Version, fa.ClientID, d.agentID,
+	if createOnly {
+		query = query[:strings.Index(query, "ON CONFLICT (command_id)")]
+	}
+
+	_, err = tx.Exec(ctx, query, commandID, fa.StartTs.UTC(), fa.Command, fa.State, formae.Version, fa.ClientID, d.agentID,
 		fa.Description.Text, fa.Description.Confirm, fa.Config.Mode, fa.Config.Force, fa.Config.Simulate,
-		targetUpdatesJSON, stackUpdatesJSON, policyUpdatesJSON, fa.ModifiedTs.UTC(), string(fa.Source), fa.Subject, fa.SubjectName)
+		targetUpdatesJSON, stackUpdatesJSON, policyUpdatesJSON, fa.ModifiedTs.UTC(), string(fa.Source), fa.Subject, fa.SubjectName,
+		fa.Message, nullableJSONPostgres(fa.InputProperties), nullableJSONPostgres(setupMetadata))
 	if err != nil {
 		slog.Error("failed to store FormaCommand", "query", query, "error", err)
 		return err
 	}
-
-	// Store ResourceUpdates in the normalized table
-	// Skip for sync commands - they don't need upfront storage since:
-	// 1. Sync commands are never resumed after restart (excluded from LoadIncompleteFormaCommands)
-	// 2. Progress is tracked in-memory via the FormaCommandPersister cache
-	// 3. Only resource updates with actual changes (Version set) are inserted on completion
-	if len(fa.ResourceUpdates) > 0 && fa.Command != pkgmodel.CommandSync {
-		if err := d.BulkStoreResourceUpdates(commandID, fa.ResourceUpdates); err != nil {
-			return fmt.Errorf("failed to store resource updates: %w", err)
+	// The command row was written above and remains locked through commit.
+	// Lifecycle saves must not replace membership allocated by atomic admission.
+	membershipCondition := ""
+	if !createOnly {
+		membershipCondition = " AND NOT EXISTS (SELECT 1 FROM forma_commands WHERE command_id = $1 AND setup_metadata::jsonb->>'Committed' = 'true')"
+	}
+	if _, err = tx.Exec(ctx, "DELETE FROM command_stacks WHERE command_id = $1"+membershipCondition, commandID); err != nil {
+		return err
+	}
+	for _, stack := range fa.Stacks {
+		if stack.ID == "" {
+			continue
+		}
+		if _, err = tx.Exec(ctx, "INSERT INTO command_stacks(command_id, stack_id, stack_label) SELECT $1, $2, $3 WHERE 1=1"+membershipCondition, commandID, stack.ID, stack.Label); err != nil {
+			return err
+		}
+	}
+	if fa.Command != pkgmodel.CommandSync {
+		if err := d.bulkStoreResourceUpdatesTx(ctx, tx, commandID, fa.ResourceUpdates); err != nil {
+			return err
 		}
 	}
 
@@ -445,6 +492,8 @@ SELECT
 	fc.command_id, fc.timestamp, fc.command, fc.state, fc.client_id,
 	fc.description_text, fc.description_confirm, fc.config_mode, fc.config_force, fc.config_simulate,
 	fc.target_updates, fc.stack_updates, fc.policy_updates, fc.modified_ts, fc.source, fc.subject, fc.subject_name,
+	fc.setup_metadata, fc.message, fc.input_properties,
+	(SELECT json_agg(json_build_object('ID', cs.stack_id, 'Label', cs.stack_label) ORDER BY cs.stack_id) FROM command_stacks cs WHERE cs.command_id = fc.command_id),
 	ru.ksuid, ru.operation, ru.state, ru.start_ts, ru.modified_ts,
 	ru.retries, ru.remaining, ru.version, ru.stack_label, ru.group_id, ru.source,
 	ru.resource, ru.resource_target, ru.existing_resource, ru.existing_target,
@@ -473,6 +522,9 @@ func scanJoinedRowPostgres(rows pgx.Rows) (*forma_command.FormaCommand, *resourc
 	var fcModifiedTs *time.Time
 	var fcSource *string
 	var fcSubject, fcSubjectName *string
+	var fcMessage *string
+	var fcSetupMetadata []byte
+	var fcInputProperties, fcStacks []byte
 
 	// ResourceUpdate fields (all nullable due to LEFT JOIN)
 	var ruKsuid, ruOperation, ruState *string
@@ -492,6 +544,7 @@ func scanJoinedRowPostgres(rows pgx.Rows) (*forma_command.FormaCommand, *resourc
 		&commandID, &fcTimestamp, &fcCommand, &fcState, &fcClientID,
 		&descriptionText, &descriptionConfirm, &configMode, &configForce, &configSimulate,
 		&targetUpdatesJSON, &stackUpdatesJSON, &policyUpdatesJSON, &fcModifiedTs, &fcSource, &fcSubject, &fcSubjectName,
+		&fcSetupMetadata, &fcMessage, &fcInputProperties, &fcStacks,
 		// ResourceUpdate columns
 		&ruKsuid, &ruOperation, &ruState, &ruStartTs, &ruModifiedTs,
 		&ruRetries, &ruRemaining, &ruVersion, &ruStackLabel, &ruGroupID, &ruSource,
@@ -539,6 +592,15 @@ func scanJoinedRowPostgres(rows pgx.Rows) (*forma_command.FormaCommand, *resourc
 	if fcSubjectName != nil {
 		cmd.SubjectName = *fcSubjectName
 	}
+	if fcMessage != nil {
+		cmd.Message = *fcMessage
+	}
+	cmd.InputProperties = fcInputProperties
+	if len(fcStacks) > 0 {
+		if err := json.Unmarshal(fcStacks, &cmd.Stacks); err != nil {
+			return nil, nil, err
+		}
+	}
 
 	if len(targetUpdatesJSON) > 0 {
 		if err := json.Unmarshal(targetUpdatesJSON, &cmd.TargetUpdates); err != nil {
@@ -558,6 +620,9 @@ func scanJoinedRowPostgres(rows pgx.Rows) (*forma_command.FormaCommand, *resourc
 		}
 	}
 
+	if err := cmd.UnmarshalSetupMetadata(fcSetupMetadata); err != nil {
+		return nil, nil, err
+	}
 	// Check if there's a ResourceUpdate (LEFT JOIN may return NULL)
 	if ruKsuid == nil {
 		return &cmd, nil, nil
@@ -721,6 +786,9 @@ func (d DatastorePostgres) DeleteFormaCommand(fa *forma_command.FormaCommand, co
 	_, err := d.pool.Exec(ctx, "DELETE FROM resource_updates WHERE command_id = $1", commandID)
 	if err != nil {
 		return fmt.Errorf("failed to delete resource_updates: %w", err)
+	}
+	if _, err = d.pool.Exec(ctx, "DELETE FROM command_stacks WHERE command_id = $1", commandID); err != nil {
+		return err
 	}
 
 	query := fmt.Sprintf("DELETE FROM %s WHERE command_id = $1", datastore.CommandsTable)
@@ -886,7 +954,7 @@ func (d DatastorePostgres) QueryFormaCommands(query *datastore.StatusQuery) ([]*
 	subqueryStr = extendPostgresQueryString(subqueryStr, query.Source, " AND source %s $%d", &args)
 
 	// Stack filter uses the normalized resource_updates table
-	subqueryStr = extendPostgresQueryString(subqueryStr, query.Stack, " AND EXISTS (SELECT 1 FROM resource_updates ru WHERE ru.command_id = forma_commands.command_id AND ru.stack_label %s $%d)", &args)
+	subqueryStr = extendPostgresQueryString(subqueryStr, query.Stack, " AND EXISTS (SELECT 1 FROM (SELECT command_id, stack_label FROM resource_updates UNION SELECT command_id, stack_label FROM command_stacks) ru WHERE ru.command_id = forma_commands.command_id AND ru.stack_label %s $%d)", &args)
 	subqueryStr = extendPostgresQueryString(subqueryStr, query.Status, " AND LOWER(state) %s LOWER($%d)", &args)
 	subqueryStr = extendPostgresQueryString(subqueryStr, query.Subject, " AND subject %s $%d", &args)
 	subqueryStr = extendPostgresQueryString(subqueryStr, query.SubjectName, " AND subject_name %s $%d", &args)
@@ -905,6 +973,8 @@ func (d DatastorePostgres) QueryFormaCommands(query *datastore.StatusQuery) ([]*
 			fc.command_id, fc.timestamp, fc.command, fc.state, fc.client_id,
 			fc.description_text, fc.description_confirm, fc.config_mode, fc.config_force, fc.config_simulate,
 			fc.target_updates, fc.stack_updates, fc.policy_updates, fc.modified_ts, fc.source, fc.subject, fc.subject_name,
+			fc.setup_metadata, fc.message, fc.input_properties,
+			(SELECT json_agg(json_build_object('ID', cs.stack_id, 'Label', cs.stack_label) ORDER BY cs.stack_id) FROM command_stacks cs WHERE cs.command_id = fc.command_id),
 			ru.ksuid, ru.operation, ru.state, ru.start_ts, ru.modified_ts,
 			ru.retries, ru.remaining, ru.version, ru.stack_label, ru.group_id, ru.source,
 			ru.resource, ru.resource_target, ru.existing_resource, ru.existing_target,
@@ -1017,7 +1087,19 @@ func (d DatastorePostgres) GetResourceModificationsSinceLastReconcile(stack stri
 	defer span.End()
 
 	query := `
-	SELECT DISTINCT
+	WITH modification_boundary AS (
+		SELECT fc.timestamp
+		FROM forma_commands fc
+		WHERE fc.config_mode = 'reconcile' AND (fc.source IS NULL OR fc.source IN ('', 'user', 'auto-reconciler', 'stack-expirer')) AND (fc.state IN ('Success', 'Failed') OR fc.state = '' OR fc.state IS NULL)
+		AND (
+			(fc.state IN ('Success', 'Failed') AND EXISTS (SELECT 1 FROM command_stacks cs JOIN stacks current_stack ON current_stack.id = cs.stack_id WHERE cs.command_id = fc.command_id AND current_stack.label = $1 AND NOT EXISTS (SELECT 1 FROM stacks newer_stack WHERE newer_stack.label = current_stack.label AND newer_stack.version COLLATE "C" > current_stack.version COLLATE "C")))
+			OR (NOT EXISTS (SELECT 1 FROM command_stacks cs WHERE cs.command_id = fc.command_id AND cs.stack_label = $1)
+				AND EXISTS (SELECT 1 FROM resources r WHERE r.command_id = fc.command_id AND r.stack = $1 AND NOT EXISTS (SELECT 1 FROM stacks sa JOIN stacks sb ON sa.label=sb.label AND sa.id != sb.id WHERE sa.label=r.stack)))
+		)
+		ORDER BY fc.timestamp DESC
+		LIMIT 1
+	)
+SELECT DISTINCT
 	T2.type,
 	T2.label,
 	T2.operation,
@@ -1026,33 +1108,18 @@ func (d DatastorePostgres) GetResourceModificationsSinceLastReconcile(stack stri
 	JOIN resources AS T2
 	ON T1.command_id = T2.command_id
 	WHERE
-	EXISTS (
-		SELECT 1
-		FROM resources AS r1
-		WHERE r1.stack = $1
-		AND NOT EXISTS (
-			SELECT 1
-			FROM resources AS r2
-			WHERE r1.ksuid = r2.ksuid
-			AND r2.version COLLATE "C" > r1.version COLLATE "C"
-		)
-		AND r1.operation != 'delete'
-		AND r1.operation != 'reaped'
-	)
-	AND T1.timestamp > (
-		SELECT fc.timestamp
-		FROM forma_commands fc
-		WHERE fc.config_mode = 'reconcile'
-		AND EXISTS (
-			SELECT 1
-			FROM resources r
-			WHERE r.command_id = fc.command_id
-			AND r.stack = $1
-		)
-		ORDER BY fc.timestamp DESC
-		LIMIT 1
-	)
-	AND T2.stack = $1;
+	T2.operation != 'reaped' AND (T1.timestamp > (SELECT timestamp FROM modification_boundary)
+ OR (NOT EXISTS (SELECT 1 FROM modification_boundary)
+     AND T1.state IN ('Success','Failed','Canceled')
+     AND EXISTS (SELECT 1 FROM command_stacks candidate_membership
+       JOIN stacks candidate_stack ON candidate_stack.id=candidate_membership.stack_id
+       WHERE candidate_membership.command_id=T1.command_id
+         AND candidate_membership.stack_label=T2.stack AND candidate_stack.label=T2.stack
+         AND NOT EXISTS (SELECT 1 FROM stacks newer_candidate_stack
+           WHERE newer_candidate_stack.label=candidate_stack.label
+             AND newer_candidate_stack.version COLLATE "C">candidate_stack.version COLLATE "C"))))
+	AND T2.stack = $1
+	ORDER BY T2.ksuid ASC;
 	`
 	rows, err := d.pool.Query(ctx, query, stack)
 	if err != nil {
@@ -1224,32 +1291,39 @@ LIMIT 1
 // resolves to the version it had when that reconcile ran.
 func (d DatastorePostgres) fetchReconcilePropertiesPG(ctx context.Context, ksuid, stack string) (json.RawMessage, error) {
 	query := `
-SELECT r.data->>'Properties'
-FROM resources r
-JOIN forma_commands fc_r
-  ON fc_r.command_id = r.command_id
-WHERE r.ksuid = $1
-  AND fc_r.timestamp <= (
-    SELECT fc.timestamp
-    FROM forma_commands fc
-    WHERE fc.config_mode = 'reconcile'
-      AND EXISTS (
-        SELECT 1 FROM resources rr
-        WHERE rr.command_id = fc.command_id
-          AND rr.stack = $2
-      )
-    ORDER BY fc.timestamp DESC
-    LIMIT 1
-  )
-ORDER BY r.version COLLATE "C" DESC
-LIMIT 1
+WITH boundary AS (
+	SELECT fc.command_id, fc.timestamp FROM forma_commands fc
+	WHERE fc.config_mode = 'reconcile' AND (fc.source IS NULL OR fc.source IN ('', 'user', 'auto-reconciler', 'stack-expirer')) AND (fc.state IN ('Success', 'Failed') OR fc.state = '' OR fc.state IS NULL)
+	AND ((fc.state IN ('Success', 'Failed') AND EXISTS (SELECT 1 FROM command_stacks cs JOIN stacks current_stack ON current_stack.id = cs.stack_id WHERE cs.command_id = fc.command_id AND current_stack.label = $2 AND NOT EXISTS (SELECT 1 FROM stacks newer_stack WHERE newer_stack.label = current_stack.label AND newer_stack.version COLLATE "C" > current_stack.version COLLATE "C")))
+		OR (NOT EXISTS (SELECT 1 FROM command_stacks cs WHERE cs.command_id = fc.command_id AND cs.stack_label = $2)
+			AND EXISTS (SELECT 1 FROM resources rr WHERE rr.command_id = fc.command_id AND rr.stack = $2 AND NOT EXISTS (SELECT 1 FROM stacks sa JOIN stacks sb ON sa.label=sb.label AND sa.id != sb.id WHERE sa.label=rr.stack))))
+	ORDER BY fc.timestamp DESC LIMIT 1
+), accepted AS (
+ SELECT observed.data->>'Properties' properties, CASE WHEN observed.ksuid IS NULL THEN 0 ELSE 1 END AS observation_exists FROM resource_updates ru
+ JOIN boundary b ON b.command_id = ru.command_id
+ LEFT JOIN resources observed ON observed.ksuid = ru.ksuid AND observed.version = ru.version
+ WHERE ru.ksuid = $1 AND ru.operation = 'accept' LIMIT 1
+), previous AS (
+ SELECT r.data->>'Properties' properties FROM resources r
+ JOIN forma_commands fc_r ON fc_r.command_id = r.command_id
+ JOIN boundary b ON 1=1
+ WHERE r.ksuid = $1 AND fc_r.timestamp <= b.timestamp
+ ORDER BY r.version COLLATE "C" DESC LIMIT 1
+)
+SELECT properties, 1 AS accepted, observation_exists FROM accepted
+UNION ALL
+SELECT properties, 0 AS accepted, 1 AS observation_exists FROM previous WHERE NOT EXISTS (SELECT 1 FROM accepted)
 `
+	var accepted, observationExists int
 	var props *string
-	if err := d.pool.QueryRow(ctx, query, ksuid, stack).Scan(&props); err != nil {
+	if err := d.pool.QueryRow(ctx, query, ksuid, stack).Scan(&props, &accepted, &observationExists); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, err
+	}
+	if accepted == 1 && observationExists == 0 {
+		return nil, fmt.Errorf("accepted observation version missing for resource %s", ksuid)
 	}
 	if props == nil || *props == "" {
 		return nil, nil
@@ -2652,6 +2726,14 @@ func (d DatastorePostgres) GetPoliciesForStack(stackID string) ([]pkgmodel.Polic
 }
 
 func (d DatastorePostgres) GetInlinePoliciesForStack(stackID string) ([]pkgmodel.Policy, error) {
+	return d.getInlinePoliciesForStack(stackID, false)
+}
+
+func (d DatastorePostgres) GetDesiredInlinePoliciesForStack(stackID string) ([]pkgmodel.Policy, error) {
+	return d.getInlinePoliciesForStack(stackID, true)
+}
+
+func (d DatastorePostgres) getInlinePoliciesForStack(stackID string, strict bool) ([]pkgmodel.Policy, error) {
 	ctx, span := tracer.Start(context.Background(), "GetInlinePoliciesForStack")
 	defer span.End()
 
@@ -2691,6 +2773,9 @@ func (d DatastorePostgres) GetInlinePoliciesForStack(stackID string) ([]pkgmodel
 
 		policy, err := deserializePolicyPostgres(label, policyType, policyDataStr, stackID)
 		if err != nil {
+			if strict {
+				return nil, fmt.Errorf("invalid desired metadata: %w", err)
+			}
 			slog.Warn("Failed to deserialize policy, skipping", "error", err, "label", label, "type", policyType)
 			continue
 		}
@@ -3376,18 +3461,23 @@ func (d DatastorePostgres) GetStacksWithAutoReconcilePolicy() ([]datastore.Stack
 			UNION
 			SELECT * FROM standalone_auto_reconcile
 		),
-		last_reconcile AS (
-			SELECT ru.stack_label, MAX(fc.timestamp) as last_reconcile_at
-			FROM resource_updates ru
-			JOIN forma_commands fc ON ru.command_id = fc.command_id
-			WHERE fc.config_mode = 'reconcile'
-			AND fc.state = 'Success'
-			GROUP BY ru.stack_label
-		)
+        last_reconcile AS (
+            SELECT s.id AS stack_id, MAX(fc.timestamp) AS last_reconcile_at
+            FROM latest_stacks s
+            JOIN forma_commands fc ON fc.config_mode='reconcile' AND fc.command='apply'
+              AND fc.state='Success'
+              AND (fc.source IS NULL OR fc.source IN ('','user','auto-reconciler','stack-expirer'))
+              AND (EXISTS (SELECT 1 FROM command_stacks cs WHERE cs.command_id=fc.command_id AND cs.stack_id=s.id AND cs.stack_label=s.label)
+                OR (NOT EXISTS (SELECT 1 FROM command_stacks cs WHERE cs.command_id=fc.command_id AND cs.stack_label=s.label)
+                  AND NOT EXISTS (SELECT 1 FROM stacks sa JOIN stacks sb ON sa.label=sb.label AND sa.id!=sb.id WHERE sa.label=s.label)
+                  AND EXISTS (SELECT 1 FROM resource_updates ru WHERE ru.command_id=fc.command_id AND ru.stack_label=s.label)))
+            WHERE s.rn=1 AND s.operation!='delete'
+            GROUP BY s.id
+        )
 		SELECT ar.stack_label, ar.stack_id, ar.interval_seconds,
 		       COALESCE(lr.last_reconcile_at, '1970-01-01 00:00:00'::timestamp) as last_reconcile_at
 		FROM all_auto_reconcile ar
-		LEFT JOIN last_reconcile lr ON ar.stack_label = lr.stack_label
+		LEFT JOIN last_reconcile lr ON ar.stack_id = lr.stack_id
 	`
 
 	rows, err := d.pool.Query(ctx, query)
@@ -3516,7 +3606,9 @@ func (d DatastorePostgres) GetResourcesAtLastReconcile(stackLabel string) ([]dat
 	// user requested is not part of the desired state going forward.
 	query := `
 		WITH user_reconcile_updates AS (
-			SELECT ru.ksuid, ru.resource::json AS resource_json, ru.operation, fc.timestamp
+			SELECT ru.ksuid, ru.resource::json AS resource_json, ru.operation, fc.timestamp, fc.command_id,
+              COALESCE((SELECT MAX(cs.stack_id) FROM command_stacks cs WHERE cs.command_id=fc.command_id AND cs.stack_label=ru.stack_label),
+                (SELECT MIN(h.id) FROM stacks h WHERE h.label=ru.stack_label AND h.valid_from<=fc.timestamp)) AS stack_id
 			FROM resource_updates ru
 			INNER JOIN forma_commands fc ON ru.command_id = fc.command_id
 			WHERE (
@@ -3525,10 +3617,17 @@ func (d DatastorePostgres) GetResourcesAtLastReconcile(stackLabel string) ([]dat
 			)
 			AND fc.state IN ('Success', 'Failed')
 			AND ru.source = 'user'
+            AND (fc.source IS NULL OR fc.source IN ('','user','auto-reconciler','stack-expirer'))
+            AND (NOT EXISTS (SELECT 1 FROM command_stacks cs WHERE cs.command_id = fc.command_id AND cs.stack_label = ru.stack_label)
+                 AND NOT EXISTS (SELECT 1 FROM stacks sa JOIN stacks sb ON sa.label=sb.label AND sa.id!=sb.id WHERE sa.label=ru.stack_label)
+                 OR EXISTS (SELECT 1 FROM command_stacks cs JOIN stacks current_stack ON current_stack.id = cs.stack_id
+                   WHERE cs.command_id = fc.command_id AND current_stack.label = ru.stack_label AND current_stack.operation != 'delete'
+                   AND NOT EXISTS (SELECT 1 FROM stacks newer_stack WHERE newer_stack.label = current_stack.label AND newer_stack.version COLLATE "C" > current_stack.version COLLATE "C")))
+
 			AND ru.stack_label = $1
 		),
 		latest_per_ksuid AS (
-			SELECT ksuid, resource_json, operation,
+			SELECT ksuid, resource_json, operation, command_id, stack_id,
 			       ROW_NUMBER() OVER (
 			           PARTITION BY ksuid
 			           ORDER BY timestamp DESC,
@@ -3536,15 +3635,10 @@ func (d DatastorePostgres) GetResourcesAtLastReconcile(stackLabel string) ([]dat
 			       ) as rn
 			FROM user_reconcile_updates
 		)
-		SELECT ksuid,
-		       resource_json->>'Type'      as type,
-		       resource_json->>'Label'     as label,
-		       resource_json->>'Target'    as target,
-		       resource_json->'Properties' as properties,
-		       resource_json->'Schema'     as schema,
-		       resource_json->>'NativeID'  as native_id
+		SELECT ksuid, resource_json, command_id, stack_id
 		FROM latest_per_ksuid
-		WHERE rn = 1 AND operation != 'delete'
+		WHERE rn = 1 AND operation NOT IN ('delete', 'accept_delete')
+		ORDER BY ksuid ASC
 	`
 
 	rows, err := d.pool.Query(ctx, query, stackLabel)
@@ -3555,23 +3649,16 @@ func (d DatastorePostgres) GetResourcesAtLastReconcile(stackLabel string) ([]dat
 
 	var result []datastore.ResourceSnapshot
 	for rows.Next() {
-		var snapshot datastore.ResourceSnapshot
-		var propsData, schemaData []byte
-		var nativeID *string
-		if err := rows.Scan(&snapshot.KSUID, &snapshot.Type, &snapshot.Label, &snapshot.Target, &propsData, &schemaData, &nativeID); err != nil {
+		var ksuid, declaration, commandID string
+		var stackID sql.NullString
+		if err := rows.Scan(&ksuid, &declaration, &commandID, &stackID); err != nil {
 			return nil, err
 		}
-		if propsData != nil {
-			snapshot.Properties = json.RawMessage(propsData)
+		snapshot, err := datastore.DecodeDesiredSnapshot(ksuid, commandID, stackID.String, []byte(declaration))
+		if err != nil {
+			return nil, err
 		}
-		if schemaData != nil {
-			if err := json.Unmarshal(schemaData, &snapshot.Schema); err != nil {
-				return nil, fmt.Errorf("failed to unmarshal schema for resource %s: %w", snapshot.Label, err)
-			}
-		}
-		if nativeID != nil {
-			snapshot.NativeID = *nativeID
-		}
+
 		result = append(result, snapshot)
 	}
 
@@ -4451,6 +4538,7 @@ func (d DatastorePostgres) CreateTarget(target *pkgmodel.Target) (string, error)
 		return "", err
 	}
 
+	target.ExecutionIncarnation = incarnationID
 	return fmt.Sprintf("%s_1", target.Label), nil
 }
 
@@ -4592,6 +4680,7 @@ func (d DatastorePostgres) UpdateTarget(target *pkgmodel.Target) (string, error)
 	}
 	committed = true
 
+	target.ExecutionIncarnation = newIncarnationID
 	return fmt.Sprintf("%s_%d", target.Label, newVersion), nil
 }
 
@@ -4999,27 +5088,42 @@ func marshalOrNil(v any) any {
 }
 
 func (d DatastorePostgres) BulkStoreResourceUpdates(commandID string, updates []resource_update.ResourceUpdate) error {
-	ctx, span := tracer.Start(context.Background(), "BulkStoreResourceUpdates")
-	defer span.End()
-
+	if err := datastore.ValidateAcceptanceContributions(updates); err != nil {
+		return err
+	}
 	if len(updates) == 0 {
 		return nil
 	}
-
+	ctx := context.Background()
 	tx, err := d.pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
+		return err
 	}
-	defer func() {
-		if err != nil {
-			_ = tx.Rollback(ctx)
-		}
-	}()
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := d.bulkStoreResourceUpdatesTx(ctx, tx, commandID, updates); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
 
+func (d DatastorePostgres) bulkStoreResourceUpdatesTx(ctx context.Context, tx pgx.Tx, commandID string, updates []resource_update.ResourceUpdate) error {
+	if len(updates) == 0 {
+		return nil
+	}
 	for _, ru := range updates {
 		resourceJSON, err := json.Marshal(ru.DesiredState)
 		if err != nil {
 			return fmt.Errorf("failed to marshal resource: %w", err)
+		}
+
+		if string(ru.Operation) == "accept" || string(ru.Operation) == "accept_delete" {
+			resourceJSON, err = datastore.StripOpaqueRefValues(resourceJSON)
+			if err != nil {
+				return fmt.Errorf("strip acceptance opaque values: %w", err)
+			}
+		}
+		if ru.StackLabel == "" {
+			ru.StackLabel = ru.DesiredState.Stack
 		}
 
 		resourceTargetJSON, err := json.Marshal(ru.ResourceTarget)
@@ -5131,10 +5235,6 @@ func (d DatastorePostgres) BulkStoreResourceUpdates(commandID string, updates []
 		if err != nil {
 			return fmt.Errorf("failed to insert resource update: %w", err)
 		}
-	}
-
-	if err = tx.Commit(ctx); err != nil {
-		return fmt.Errorf("failed to commit transaction: %w", err)
 	}
 
 	return nil
@@ -5567,4 +5667,8 @@ func (d DatastorePostgres) RecordAgentBoot(version string) error {
 		return fmt.Errorf("failed to record agent boot: %w", err)
 	}
 	return nil
+}
+
+func (d DatastorePostgres) GetDesiredOwnership(stack string) (map[string]pkgmodel.OwnedMembers, error) {
+	return datastore.ReadDesiredOwnership(d, stack)
 }

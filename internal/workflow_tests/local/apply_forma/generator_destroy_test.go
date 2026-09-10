@@ -9,6 +9,7 @@ package workflow_tests_local
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -224,6 +225,10 @@ func TestDestroyForma_GeneratorAndItsDestinationInOneStack_AreDestroyedTogether(
 		waitForApplyComplete(t, m)
 
 		requireGeneratorRowGone(t, m, ksuid)
+		require.Eventually(t, func() bool {
+			remaining, err := m.Datastore.GetStackByLabel(stack)
+			return err == nil && remaining == nil
+		}, 5*time.Second, 10*time.Millisecond, "destroy still removes a stack after its generators are deleted")
 	})
 }
 

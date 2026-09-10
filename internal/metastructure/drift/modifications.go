@@ -25,6 +25,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/datastore"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/patch"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
@@ -38,13 +39,21 @@ import (
 // no record for that resource, which classifies its movement as tolerated
 // (witness) or everything-undeclared (record), the pre-existing behavior.
 func LoadModificationsAndWitnesses(ds datastore.Datastore, stackLabel string, modificationsByStack map[string][]datastore.ResourceModification, witnessByKsuid map[string]json.RawMessage, recordByKsuid map[string]pkgmodel.OwnedMembers) error {
-	modifications, err := ds.GetResourceModificationsSinceLastReconcile(stackLabel)
+	modifications, err := LoadModifications(ds, stackLabel)
 	if err != nil {
 		slog.Error("Failed to load modifications since last reconcile", "stack", stackLabel, "error", err)
 		return fmt.Errorf("failed to load modifications for stack %s: %w", stackLabel, err)
 	}
 	if len(modifications) == 0 {
 		return nil
+	}
+	var accepted map[string]pkgmodel.OwnedMembers
+	if reader, ok := ds.(datastore.DesiredOwnershipReader); ok {
+		var err error
+		accepted, err = reader.GetDesiredOwnership(stackLabel)
+		if err != nil {
+			return err
+		}
 	}
 	modificationsByStack[stackLabel] = modifications
 	for _, mod := range modifications {
@@ -60,7 +69,11 @@ func LoadModificationsAndWitnesses(ds datastore.Datastore, stackLabel string, mo
 			}
 		}
 		if _, done := recordByKsuid[mod.Ksuid]; !done {
-			record, rerr := ds.GetOwnedMembers(mod.Ksuid)
+			record, acceptedRecord := accepted[mod.Ksuid]
+			var rerr error
+			if !acceptedRecord {
+				record, rerr = ds.GetOwnedMembers(mod.Ksuid)
+			}
 			if rerr != nil {
 				slog.Warn("Failed to load ownership record for drift classification", "ksuid", mod.Ksuid, "error", rerr)
 				continue
@@ -71,10 +84,103 @@ func LoadModificationsAndWitnesses(ds datastore.Datastore, stackLabel string, mo
 	return nil
 }
 
-// stackLabelsFromForma extracts unique stack labels from a forma's resources.
+// LoadModifications excludes completed explicit destruction from the raw drift
+// window. Patch/sync tombstones remain interventions to review; a destroy is
+// already durable desired absence. Read through the caller's protected datastore:
+// even a discarded candidate must register its physical identity/incarnation.
+func LoadModifications(ds datastore.Datastore, stackLabel string) ([]datastore.ResourceModification, error) {
+	modifications, err := ds.GetResourceModificationsSinceLastReconcile(stackLabel)
+	if err != nil || len(modifications) == 0 {
+		return modifications, err
+	}
+	reader, ok := ds.(datastore.ResourceObservationReader)
+	if !ok {
+		return modifications, nil
+	}
+	desired, err := ds.GetResourcesAtLastReconcile(stackLabel)
+	if err != nil {
+		return nil, err
+	}
+	desiredIDs := map[string]bool{}
+	for _, snapshot := range desired {
+		desiredIDs[snapshot.KSUID] = true
+	}
+	settled := map[string]bool{}
+	commands := map[string]*forma_command.FormaCommand{}
+	for _, mod := range modifications {
+		if _, seen := settled[mod.Ksuid]; seen {
+			continue
+		}
+		settled[mod.Ksuid] = false
+		if desiredIDs[mod.Ksuid] {
+			continue
+		}
+		observation, err := reader.GetResourceObservation(mod.Ksuid)
+		if err != nil {
+			return nil, err
+		}
+		if observation == nil || observation.Operation != "delete" || !observation.ConfirmedDeletion || observation.StackID == "" || observation.Stack != stackLabel {
+			continue
+		}
+		current, err := ds.GetStackByLabel(stackLabel)
+		if err != nil {
+			return nil, err
+		}
+		if current != nil && current.ID != observation.StackID {
+			continue
+		}
+		command, loaded := commands[observation.CommandID]
+		if !loaded {
+			command, err = ds.GetFormaCommandByCommandID(observation.CommandID)
+			if err != nil {
+				return nil, err
+			}
+			commands[observation.CommandID] = command
+		}
+		if command == nil || command.Command != pkgmodel.CommandDestroy || (command.State != forma_command.CommandStateSuccess && command.State != forma_command.CommandStateFailed) {
+			continue
+		}
+		switch command.Source {
+		case "", forma_command.SourceUser, forma_command.SourceAutoReconciler, forma_command.SourceStackExpirer:
+		default:
+			continue
+		}
+		// Do not infer an old command's stack identity from today's label mapping.
+		matchingStack := false
+		for _, membership := range command.Stacks {
+			if membership.ID == observation.StackID && membership.Label == stackLabel {
+				matchingStack = true
+			}
+		}
+		if !matchingStack {
+			continue
+		}
+		for _, update := range command.ResourceUpdates {
+			if update.DesiredState.Ksuid == mod.Ksuid && update.StackLabel == stackLabel && update.Source == resource_update.FormaCommandSourceUser && update.Operation == resource_update.OperationDelete {
+				settled[mod.Ksuid] = true
+				break
+			}
+		}
+	}
+	result := make([]datastore.ResourceModification, 0, len(modifications))
+	for _, mod := range modifications {
+		if !settled[mod.Ksuid] {
+			result = append(result, mod)
+		}
+	}
+	return result, nil
+}
+
+// StackLabelsFromForma includes explicitly declared empty stacks in the scope.
 func StackLabelsFromForma(forma *pkgmodel.Forma) []string {
 	seen := make(map[string]bool)
 	var labels []string
+	for _, stack := range forma.Stacks {
+		if !seen[stack.Label] {
+			seen[stack.Label] = true
+			labels = append(labels, stack.Label)
+		}
+	}
 	for _, r := range forma.Resources {
 		if !seen[r.Stack] {
 			seen[r.Stack] = true
@@ -99,6 +205,7 @@ func ToAPIResourceModification(modification datastore.ResourceModification) apim
 		}
 	}
 	return apimodel.ResourceModification{
+		ResourceID:    modification.Ksuid,
 		Stack:         modification.Stack,
 		Type:          modification.Type,
 		Label:         modification.Label,

@@ -20,6 +20,8 @@ import (
 // identically in both.
 func OperationGlyph(g theme.Glyphs, op string) string {
 	switch op {
+	case "accept", "accept_delete":
+		return g.OpKeep
 	case apimodel.OperationCreate:
 		return g.OpCreate
 	case apimodel.OperationUpdate:
@@ -99,6 +101,7 @@ type opTally struct {
 	generatorCreates int
 	generatorUpdates int
 	generatorDraws   int
+	resourceAccepts  int
 	resourceCreates  int
 	resourceUpdates  int
 	resourceDeletes  int
@@ -130,6 +133,10 @@ func analyzeCommands(cmd *apimodel.Command) opTally {
 	ungroupedOperations := make([]apimodel.ResourceUpdate, 0)
 
 	for _, rc := range cmd.ResourceUpdates {
+		if rc.Operation == "accept" || rc.Operation == "accept_delete" {
+			tally.resourceAccepts++
+			continue
+		}
 		if rc.Operation == apimodel.OperationRead {
 			continue
 		}
@@ -249,6 +256,9 @@ func operationSummary(th *theme.Theme, t opTally) string {
 	updateSt := lipgloss.NewStyle().Foreground(th.Palette.TextPrimary)
 
 	var parts []string
+	if t.resourceAccepts > 0 {
+		parts = append(parts, fmt.Sprintf("record %d drift acceptance(s) (no provider writes for these records)", t.resourceAccepts))
+	}
 
 	// Destructive resource ops first
 	if t.resourceDeletes > 0 {
@@ -307,4 +317,21 @@ func operationSummary(th *theme.Theme, t opTally) string {
 	}
 
 	return fmt.Sprintf("This operation will %s.", joinedParts)
+}
+
+// AcceptanceSummary separates logical desired records from provider operations.
+func AcceptanceSummary(command *apimodel.Command) string {
+	accepts, provider := 0, 0
+	for _, update := range command.ResourceUpdates {
+		switch update.Operation {
+		case "accept", "accept_delete":
+			accepts++
+		case "create", "update", "delete", "replace":
+			provider++
+		}
+	}
+	if accepts == 0 {
+		return ""
+	}
+	return fmt.Sprintf("Drift acceptance records: %d; provider resource operations: %d", accepts, provider)
 }

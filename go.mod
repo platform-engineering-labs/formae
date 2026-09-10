@@ -55,10 +55,10 @@ require (
 	github.com/mattn/go-sqlite3 v1.14.24
 	github.com/microsoft/go-mssqldb v1.10.0
 	github.com/muesli/termenv v0.16.0
-	github.com/platform-engineering-labs/formae/pkg/api/model v0.1.1
+	github.com/platform-engineering-labs/formae/pkg/api/model v0.1.2-dev.0
 	github.com/platform-engineering-labs/formae/pkg/auth v0.0.0-00010101000000-000000000000
 	github.com/platform-engineering-labs/formae/pkg/credential v0.1.0
-	github.com/platform-engineering-labs/formae/pkg/model v0.1.28
+	github.com/platform-engineering-labs/formae/pkg/model v0.1.29-dev.0
 	github.com/platform-engineering-labs/formae/pkg/plugin v0.0.0-00010101000000-000000000000
 	github.com/platform-engineering-labs/formae/tests/testcontrol v0.0.0-00010101000000-000000000000
 	github.com/platform-engineering-labs/jsonpatch v0.0.0-20260902161127-c895b20a3c9e

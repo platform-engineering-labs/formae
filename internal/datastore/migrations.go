@@ -9,6 +9,7 @@ import (
 	"embed"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/pressly/goose/v3"
@@ -23,8 +24,16 @@ var EmbedMigrationsPostgres embed.FS
 //go:embed migrations_mssql/*.sql
 var EmbedMigrationsMSSQL embed.FS
 
+var migrationMu sync.Mutex
+
 // RunMigrations runs database migrations using goose for the given dialect.
 func RunMigrations(db *sql.DB, dialect string) error {
+	migrationMu.Lock()
+	defer migrationMu.Unlock()
+	table, err := storageMigrationTable(db, dialect)
+	if err != nil {
+		return err
+	}
 	var migrationsFS embed.FS
 	var migrationsDir string
 
@@ -43,7 +52,7 @@ func RunMigrations(db *sql.DB, dialect string) error {
 	}
 
 	goose.SetBaseFS(migrationsFS)
-	goose.SetTableName("db_version")
+	goose.SetTableName(table)
 
 	if err := goose.SetDialect(dialect); err != nil {
 		slog.Error("Failed to set goose dialect", "dialect", dialect, "error", err)
@@ -69,6 +78,9 @@ func RunMigrations(db *sql.DB, dialect string) error {
 		targetVersion = migrations[len(migrations)-1].Version
 	}
 
+	if currentVersion > targetVersion {
+		return fmt.Errorf("datastore schema %d exceeds supported version %d", currentVersion, targetVersion)
+	}
 	// Only show migration warning if there are pending migrations
 	if currentVersion < targetVersion {
 		slog.Warn("Database migrations are starting. This may take a while depending on your dataset size. Please do not exit the application.",
@@ -90,5 +102,8 @@ func RunMigrations(db *sql.DB, dialect string) error {
 			"duration", duration.Round(time.Millisecond).String())
 	}
 
+	if table == "db_version" {
+		return fenceStorageFormat(db, dialect)
+	}
 	return nil
 }

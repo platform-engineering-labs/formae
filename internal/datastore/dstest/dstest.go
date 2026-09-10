@@ -71,6 +71,7 @@ type TestDatastore struct {
 	// expiry query's defensive behaviour can be asserted. Backends that don't
 	// provide it leave it nil and the relevant tests t.Skip().
 	SetPolicyDataForTest func(label, policyData string) error
+	SetPolicyTypeForTest func(label, policyType string) error
 	// NullResourceUpdateModifiedTsForTest sets modified_ts to SQL NULL on every
 	// resource_updates row for the given ksuid. The column is nullable and the
 	// normalizing migration writes NULL whenever the migrated command carried no
@@ -117,6 +118,8 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunLoadIncompleteFormaCommandsTest(t, newDS)
 	RunGetFormaApplyByFormaHash(t, newDS)
 	RunStoreAndLoadFormaCommandOptionalFields(t, newDS)
+	RunFormaCommandInputPropertiesNilAndEmptyRoundTrip(t, newDS)
+	RunFormaCommandMembershipFailureRollsBackCommand(t, newDS)
 	RunStoreAndLoadFormaCommandEmptySubject(t, newDS)
 	RunFormaCommandSubjectNullRoundTrip(t, newDS)
 	RunGetPropertiesAtLastWrite(t, newDS)
@@ -301,8 +304,12 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 
 	RunStackTransition(t, newDS)
 
+	RunDesiredCadence(t, newDS)
+	RunDesiredDeclaration(t, newDS)
+	RunDesiredMetadataCompleteness(t, newDS)
 	RunGetResourcesAtLastReconcile_Empty(t, newDS)
 	RunGetResourcesAtLastReconcile_SuccessReturnsDesiredState(t, newDS)
+	RunGetResourcesAtLastReconcile_AcceptanceOperations(t, newDS)
 	RunGetResourcesAtLastReconcile_FailedReconcileIncluded(t, newDS)
 	RunGetResourcesAtLastReconcile_CanceledReconcileExcluded(t, newDS)
 	RunGetResourcesAtLastReconcile_InProgressReconcileExcluded(t, newDS)

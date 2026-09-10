@@ -5,6 +5,7 @@
 package pkl
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -25,7 +26,11 @@ import (
 
 // serializeWithPKL is a generic helper function that can serialize any data structure
 func (p PKL) serializeWithPKL(data *model.Forma, options *schema.SerializeOptions) (string, error) {
-	preprocessed, err := preprocessFormaEmbeds(data)
+	prepared, err := prepareDesiredExtraction(data)
+	if err != nil {
+		return "", err
+	}
+	preprocessed, err := preprocessFormaEmbeds(prepared)
 	if err != nil {
 		return "", fmt.Errorf("error pre-processing embed fields: %w", err)
 	}
@@ -36,7 +41,8 @@ func (p PKL) serializeWithPKL(data *model.Forma, options *schema.SerializeOption
 	}
 
 	properties := map[string]string{
-		"Json": string(input),
+		"Json":          string(input),
+		"StrictDesired": fmt.Sprint(data != nil && data.Extraction != nil),
 	}
 	// Create temporary directory and extract embedded files
 	tempDir, err := os.MkdirTemp("", "pkl-generator-*")
@@ -562,7 +568,9 @@ func preprocessFormaEmbeds(f *model.Forma) (*model.Forma, error) {
 // "$templateParts" — a JSON array of alternating literal strings and $res maps.
 func preprocessEmbedInJSON(raw json.RawMessage) (json.RawMessage, error) {
 	var v any
-	if err := json.Unmarshal(raw, &v); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&v); err != nil {
 		return raw, nil // not parseable — leave unchanged
 	}
 	out, err := rewriteEmbedValue(v)

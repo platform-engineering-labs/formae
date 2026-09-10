@@ -523,3 +523,32 @@ func TestMetastructure_ForceCancelCommand_WriteFenceDropsLateMessages(t *testing
 		}
 	})
 }
+
+func (d *faultInjectingDatastore) ReadAdmissionRevisions(keys []string) ([]datastore.RevisionGuard, error) {
+	return d.Datastore.(datastore.CommandAdmitter).ReadAdmissionRevisions(keys)
+}
+func (d *faultInjectingDatastore) LookupCommandAdmission(principal, key string) (*datastore.StoredAdmission, error) {
+	return d.Datastore.(datastore.CommandAdmitter).LookupCommandAdmission(principal, key)
+}
+func (d *faultInjectingDatastore) AdmitFormaCommand(command *forma_command.FormaCommand, admission datastore.CommandAdmission) (datastore.AdmissionResult, error) {
+	return d.Datastore.(datastore.CommandAdmitter).AdmitFormaCommand(command, admission)
+}
+func (d *faultInjectingDatastore) ResolveAdmissionStackGuards(labels []string) ([]string, error) {
+	return d.Datastore.(datastore.AdmissionScopeResolver).ResolveAdmissionStackGuards(labels)
+}
+func (d *faultInjectingDatastore) ResolveAdmissionTargetInventoryGuards(labels []string) ([]string, error) {
+	return d.Datastore.(datastore.AdmissionPredicateResolver).ResolveAdmissionTargetInventoryGuards(labels)
+}
+func (d *faultInjectingDatastore) ResolveAdmissionResourceIdentityGuards(ids []string) ([]string, error) {
+	return d.Datastore.(datastore.AdmissionPredicateResolver).ResolveAdmissionResourceIdentityGuards(ids)
+}
+func (d *faultInjectingDatastore) ReadPolicyIdentity(label, stackID string) (*datastore.PolicyIdentity, error) {
+	return d.Datastore.(datastore.PolicyIdentityReader).ReadPolicyIdentity(label, stackID)
+}
+func (d *faultInjectingDatastore) GetResourceObservation(id string) (*datastore.ResourceObservation, error) {
+	return d.Datastore.(datastore.ResourceObservationReader).GetResourceObservation(id)
+}
+
+func (d *faultInjectingDatastore) PinCommandTargetIncarnation(commandID, target, incarnation string, refs []datastore.ResourceUpdateRef) error {
+	return d.Datastore.(datastore.CommandTargetIdentityWriter).PinCommandTargetIncarnation(commandID, target, incarnation, refs)
+}

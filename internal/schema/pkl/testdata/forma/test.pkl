@@ -14,6 +14,7 @@ properties {
   name = new formae.Prop {
     flag = "name" // flag from --help
     default = "snarf.platform.engineering"
+    sensitive = false
   }
   test = new formae.Prop {
     flag = "test"
@@ -31,6 +32,10 @@ properties {
   }
   mode = new formae.Prop {
     default = formae.mode()
+  }
+  password = new formae.Prop {
+    default = "legacy-secret-default"
+    sensitive = true
   }
 }
 
