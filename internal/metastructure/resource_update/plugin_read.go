@@ -20,10 +20,14 @@ import (
 )
 
 // ReadResourceViaPlugin spawns a PluginOperator for the given resource and
-// executes a single Read call, returning the plugin's progress result.
-// It is a pure dispatch helper — callers own caching, retry, and result
-// interpretation.
-func ReadResourceViaPlugin(proc gen.Process, res pkgmodel.Resource, targetConfig json.RawMessage) (*plugin.TrackedProgress, error) {
+// starts a Read on it, returning the first attempt's progress and the
+// operator's PID. The operator owns retry: when the first attempt fails with
+// a recoverable error and retries remain, the returned progress has not
+// finished (TrackedProgress.HasFinished) and the operator pushes every later
+// attempt's progress to proc as a plugin.TrackedProgress sent from that PID.
+// A caller that can wait must consume those pushes; a caller that cannot
+// treats an unfinished first attempt as a failure of this call.
+func ReadResourceViaPlugin(proc gen.Process, res pkgmodel.Resource, targetConfig json.RawMessage) (*plugin.TrackedProgress, gen.PID, error) {
 	// The provider boundary for this dispatch. A generator reference in the
 	// target's config names a credential that was never drawn, and the envelope
 	// is never that credential: handing it over puts a JSON object where a
@@ -31,7 +35,7 @@ func ReadResourceViaPlugin(proc gen.Process, res pkgmodel.Resource, targetConfig
 	// credentials formae does not have. Only the config is checked — the
 	// resource's own properties are context for a Read, never values written.
 	if err := resolver.GuardNoUnresolvedGenerators(targetConfig); err != nil {
-		return nil, fmt.Errorf("cannot read %s: its target's configuration is bound to a generator whose value has not been drawn: %w", res.URI(), err)
+		return nil, gen.PID{}, fmt.Errorf("cannot read %s: its target's configuration is bound to a generator whose value has not been drawn: %w", res.URI(), err)
 	}
 
 	operationID := uuid.New().String()
@@ -45,14 +49,14 @@ func ReadResourceViaPlugin(proc gen.Process, res pkgmodel.Resource, targetConfig
 			RequestedBy: proc.PID(),
 		}))
 	if err != nil {
-		return nil, fmt.Errorf("failed to spawn plugin operator: %w", err)
+		return nil, gen.PID{}, fmt.Errorf("failed to spawn plugin operator: %w", err)
 	}
 	spawnRes, ok := spawnResult.(messages.SpawnPluginOperatorResult)
 	if !ok {
-		return nil, fmt.Errorf("unexpected result type from PluginCoordinator: %T", spawnResult)
+		return nil, gen.PID{}, fmt.Errorf("unexpected result type from PluginCoordinator: %T", spawnResult)
 	}
 	if spawnRes.Error != "" {
-		return nil, fmt.Errorf("failed to spawn plugin operator: %s", spawnRes.Error)
+		return nil, gen.PID{}, fmt.Errorf("failed to spawn plugin operator: %s", spawnRes.Error)
 	}
 
 	// Use the same call budget as ResourceUpdater.doPluginOperation. The default
@@ -72,12 +76,12 @@ func ReadResourceViaPlugin(proc gen.Process, res pkgmodel.Resource, targetConfig
 		},
 		PluginOperationCallTimeout)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read resource: %w", err)
+		return nil, gen.PID{}, fmt.Errorf("failed to read resource: %w", err)
 	}
 
 	progress, ok := progressResult.(plugin.TrackedProgress)
 	if !ok {
-		return nil, fmt.Errorf("unexpected result type from plugin operator: %T", progressResult)
+		return nil, gen.PID{}, fmt.Errorf("unexpected result type from plugin operator: %T", progressResult)
 	}
-	return &progress, nil
+	return &progress, spawnRes.PID, nil
 }

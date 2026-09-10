@@ -7,11 +7,9 @@ package changeset
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"reflect"
 	"strings"
-	"time"
 
 	"ergo.services/ergo/act"
 	"ergo.services/ergo/gen"
@@ -20,32 +18,49 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/provenance"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
-	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
 
 // The ResolveCache is a transient cache that lives for the duration of a changeset execution. In a changeset
 // multiple resources often resolve the same value. We do not want to do a read for each of these resolvables,
 // therefore we cache these values.
+//
+// A resolve is answered from the cache when it can be, and otherwise reads the
+// source through a PluginOperator. The operator owns retry: the first attempt
+// comes back synchronously, and every later attempt is pushed here as a
+// plugin.TrackedProgress from the operator's PID. A resolve waiting on such a
+// read is parked in inFlight under that PID until the operator reports a
+// finished result.
 type ResolveCache struct {
 	act.Actor
 
-	cache      map[pkgmodel.FormaeURI]gjson.Result
-	maxRetries int
-	retryDelay time.Duration
+	cache    map[pkgmodel.FormaeURI]gjson.Result
+	inFlight map[gen.PID]*resolveInFlight
 }
 
-// resolveRetry is an internal message scheduled via SendAfter to retry a
-// resolve operation without blocking the actor's message loop.
-type resolveRetry struct {
-	From        gen.PID
-	ResourceURI pkgmodel.FormaeURI
-	Attempt     int
-	// Pre-loaded state from the first attempt so we don't re-fetch from persister.
-	loadResult messages.LoadResourceResult
+// resolveInFlight is a resolve that has left the cache-hit fast path. It
+// carries the requester and everything a read's completion needs, so the
+// operator's pushed progress, which names only the native id, can be matched
+// back to the resolve it answers.
+type resolveInFlight struct {
+	from        gen.PID
+	resourceURI pkgmodel.FormaeURI
+	loadResult  messages.LoadResourceResult
+
+	// configRefs are the opaque references in the source target's config whose
+	// live value has not been injected into config yet. At rest such a
+	// credential is a bare $ref with no $value (reference-don't-store), so the
+	// source resource cannot be read until each is resolved, and each resolves
+	// like any other reference: from the cache, or by reading its source.
+	configRefs []pkgmodel.FormaeURI
 	config     json.RawMessage
+
+	// reading is the resource whose read this resolve is parked on: the
+	// source of a config ref, or the resolve's own source resource.
+	reading pkgmodel.Resource
 }
 
 type Shutdown struct{}
@@ -56,20 +71,8 @@ func NewResolveCache() gen.ProcessBehavior {
 
 func (r *ResolveCache) Init(args ...any) error {
 	r.cache = make(map[pkgmodel.FormaeURI]gjson.Result)
-
-	cfg, ok := r.Env("RetryConfig")
-	if !ok {
-		return fmt.Errorf("resolveCache: missing 'RetryConfig' environment variable")
-	}
-	retryCfg, ok := cfg.(pkgmodel.RetryConfig)
-	if !ok {
-		return fmt.Errorf("resolveCache: 'RetryConfig' environment variable has wrong type %T", cfg)
-	}
-	r.maxRetries = retryCfg.MaxRetries
-	r.retryDelay = retryCfg.RetryDelay
-
-	r.Log().Debug("ResolveCache actor initialized maxRetries=%d retryDelay=%s", r.maxRetries, r.retryDelay)
-
+	r.inFlight = make(map[gen.PID]*resolveInFlight)
+	r.Log().Debug("ResolveCache actor initialized")
 	return nil
 }
 
@@ -77,8 +80,8 @@ func (r *ResolveCache) HandleMessage(from gen.PID, message any) error {
 	switch msg := message.(type) {
 	case messages.ResolveValue:
 		r.startResolve(from, msg.ResourceURI)
-	case resolveRetry:
-		r.continueResolve(msg)
+	case plugin.TrackedProgress:
+		r.handleProgress(from, msg)
 	case Shutdown:
 		r.Log().Debug("ResolveCache received shutdown request")
 		return gen.TerminateReasonNormal
@@ -116,159 +119,179 @@ func rootDigestOf(value gjson.Result) string {
 	return provenance.DigestOfJSON(unwrapped.Raw)
 }
 
-// startResolve handles a new ResolveValue request: checks the cache, loads from
-// the persister if needed, and kicks off the first read attempt.
+// startResolve handles a new ResolveValue request: answers from the cache when
+// it can, otherwise loads the source resource from the persister and advances
+// the resolve towards its first read.
 func (r *ResolveCache) startResolve(from gen.PID, resourceURI pkgmodel.FormaeURI) {
-	// Check if the resource is already in the cache
-	if json, ok := r.cache[resourceURI.Stripped()]; ok {
+	if props, ok := r.cache[resourceURI.Stripped()]; ok {
 		r.Log().Debug("Cache hit for resource URI uri=%v", resourceURI)
-		value := resolvedValueAt(json, resourceURI.PropertyPath())
-		if !value.Exists() {
-			r.Log().Error("Unable to resolve property in cached properties property=%s resourceURI=%v", resourceURI.PropertyPath(), resourceURI)
-			_ = r.Send(from, messages.FailedToResolveValue{ResourceURI: resourceURI, Reason: resolveMissReason(resourceURI, nil)})
-			return
-		}
-		_ = r.Send(from, messages.ValueResolved{ResourceURI: resourceURI, Value: value.String(),
-			SourceRootDigest: rootDigestOf(value)})
+		r.answer(from, resourceURI, props, nil)
 		return
 	}
 
-	// Load the resource from the stack to get the native id
 	r.Log().Debug("Cache miss for resource URI uri=%v", resourceURI)
-	stackerResult, err := messages.UnwrapCall(r.Call(
-		gen.ProcessID{Name: actornames.ResourcePersister, Node: r.Node().Name()},
-		messages.LoadResource{
-			ResourceURI: resourceURI.Stripped(),
-		}))
+	loadResult, err := r.loadResource(resourceURI)
 	if err != nil {
 		r.Log().Error("Failed to load resource from resource persister resourceURI=%v: %v", resourceURI, err)
 		_ = r.Send(from, messages.FailedToResolveValue{ResourceURI: resourceURI,
 			Reason: fmt.Sprintf("could not resolve reference %q: %v", string(resourceURI), err)})
 		return
 	}
-	loadResourceResult, ok := stackerResult.(messages.LoadResourceResult)
-	if !ok {
-		r.Log().Error("Unexpected result type from resource persister resultType=%v", reflect.TypeOf(stackerResult))
-		_ = r.Send(from, messages.FailedToResolveValue{ResourceURI: resourceURI,
-			Reason: fmt.Sprintf("could not resolve reference %q: unexpected reply from the resource store", string(resourceURI))})
-		return
-	}
 
-	// Execute the first attempt inline (no delay). Both the source target's
-	// config resolution and the Read happen in continueResolve, so a recoverable
-	// failure in EITHER reschedules via SendAfter on one non-blocking budget.
-	retry := resolveRetry{
-		From:        from,
-		ResourceURI: resourceURI,
-		Attempt:     1,
-		loadResult:  loadResourceResult,
-	}
-	r.continueResolve(retry)
+	r.advance(&resolveInFlight{
+		from:        from,
+		resourceURI: resourceURI,
+		loadResult:  loadResult,
+		configRefs:  resolver.ExtractOpaqueResolvableURIsFromJSON(loadResult.Target.Config),
+		config:      bytes.Clone(loadResult.Target.Config),
+	})
 }
 
-// strategy is the retry strategy for a resolve read: exponential-for-throttling,
-// and the single source of truth the caller's timeout budget is derived from.
-// It uses the command-global RetryConfig the actor reads at startup. Honoring a
-// per-plugin retry override for the source namespace is a known gap: it would
-// need the cache to query the coordinator for that namespace's config, plus a
-// per-namespace timeout budget (a resource can reference secrets across several
-// plugins), so it is deferred.
-func (r *ResolveCache) strategy() resource.RetryStrategy {
-	return resource.RetryStrategy{MaxRetries: r.maxRetries, BaseDelay: r.retryDelay}
-}
-
-// scheduleRetry reschedules a resolve attempt without blocking the actor loop.
-func (r *ResolveCache) scheduleRetry(retry resolveRetry, after time.Duration) {
-	if _, err := r.SendAfter(r.PID(), retry, after); err != nil {
-		r.Log().Error("Failed to schedule resolve retry: %v", err)
-		_ = r.Send(retry.From, messages.FailedToResolveValue{ResourceURI: retry.ResourceURI})
-	}
-}
-
-// continueResolve resolves the source target's config (single-shot) and executes
-// a read attempt; on a recoverable failure in either it schedules a retry via
-// SendAfter (non-blocking), otherwise it resolves or reports failure.
-func (r *ResolveCache) continueResolve(retry resolveRetry) {
-	resourceURI := retry.ResourceURI
-	from := retry.From
-
-	// Resolve the source target's opaque config (single-shot) before the Read.
-	// When the target authenticates from a secret, its persisted config carries a
-	// bare opaque $ref with no $value at rest (reference-don't-store), and
-	// ConvertToPluginFormat only strips metadata — it does not read the source. A
-	// recoverable failure here reschedules the whole resolve via SendAfter, on the
-	// same non-blocking budget as the Read below.
-	if retry.config == nil {
-		targetConfig, err := resource_update.ResolveOpaqueTargetConfig(r, retry.loadResult.Target)
-		if err != nil {
-			var rec *resource_update.RecoverableResolveError
-			if errors.As(err, &rec) {
-				if dec := r.strategy().Decide(retry.Attempt, rec.Code); dec.Retry {
-					r.Log().Info("ResolveCache: recoverable target-config resolve error, retrying errorCode=%s resourceURI=%v attempt=%d",
-						rec.Code, resourceURI, retry.Attempt)
-					retry.Attempt++
-					r.scheduleRetry(retry, dec.After)
-					return
-				}
-			}
-			r.Log().Error("Failed to resolve target config for resolve-read resourceURI=%v: %v", resourceURI, err)
-			_ = r.Send(from, messages.FailedToResolveValue{ResourceURI: resourceURI, Reason: err.Error()})
-			return
-		}
-		retry.config = targetConfig
-	}
-
-	progress, err := r.readViaPlugin(retry)
+// loadResource fetches a resource and its target from the persister.
+func (r *ResolveCache) loadResource(uri pkgmodel.FormaeURI) (messages.LoadResourceResult, error) {
+	result, err := messages.UnwrapCall(r.Call(
+		gen.ProcessID{Name: actornames.ResourcePersister, Node: r.Node().Name()},
+		messages.LoadResource{ResourceURI: uri.Stripped()}))
 	if err != nil {
-		r.Log().Error("Failed to read resource via plugin resourceURI=%v: %v", resourceURI, err)
-		_ = r.Send(from, messages.FailedToResolveValue{ResourceURI: resourceURI})
-		return
+		return messages.LoadResourceResult{}, err
 	}
+	loadResult, ok := result.(messages.LoadResourceResult)
+	if !ok {
+		return messages.LoadResourceResult{}, fmt.Errorf("unexpected reply from the resource store: %T", result)
+	}
+	return loadResult, nil
+}
 
-	// Retry on recoverable read errors via SendAfter (non-blocking), sharing the
-	// same attempt budget as the config resolution above.
-	if progress.OperationStatus == resource.OperationStatusFailure && resource.IsRecoverable(progress.ErrorCode) {
-		if dec := r.strategy().Decide(retry.Attempt, progress.ErrorCode); dec.Retry {
-			r.Log().Info("ResolveCache: recoverable error, retrying errorCode=%s resourceURI=%v attempt=%d maxRetries=%d",
-				progress.ErrorCode, resourceURI, retry.Attempt, r.maxRetries)
-			retry.Attempt++
-			r.scheduleRetry(retry, dec.After)
+// advance takes a resolve as far as the cache allows: it injects every config
+// ref whose source is cached, then answers from the cache when the source
+// resource is there. The first thing it cannot find in the cache it reads,
+// parking the resolve until that read finishes; completing a read re-enters
+// advance, so a resolve is a sequence of reads separated by waits on the
+// operator, each one closer to the answer.
+func (r *ResolveCache) advance(rf *resolveInFlight) {
+	for len(rf.configRefs) > 0 {
+		ref := rf.configRefs[0]
+		props, ok := r.cache[ref.Stripped()]
+		if !ok {
+			source, err := r.loadResource(ref)
+			if err != nil {
+				r.Log().Error("Failed to load credential source for target config ref=%v target=%s: %v", ref, rf.loadResult.Target.Label, err)
+				r.fail(rf, fmt.Sprintf("failed to resolve opaque reference %q for target %q: load error", ref, rf.loadResult.Target.Label))
+				return
+			}
+			// The source of a credential is itself a managed resource whose own
+			// target auth is a plain credential, not another opaque ref
+			// (transitive-opaque is rejected at admission), so a metadata strip
+			// is sufficient for its config.
+			sourceConfig := source.Target.Config
+			if plain, err := resolver.ConvertToPluginFormat(sourceConfig); err == nil {
+				sourceConfig = plain
+			}
+			r.read(rf, source.Resource, sourceConfig)
 			return
 		}
-		r.Log().Error("ResolveCache: exhausted retries errorCode=%s resourceURI=%v attempts=%d",
-			progress.ErrorCode, resourceURI, retry.Attempt)
-		_ = r.Send(from, messages.FailedToResolveValue{ResourceURI: resourceURI})
+		value := resolvedValueAt(props, ref.PropertyPath())
+		if !value.Exists() {
+			r.Log().Error("Credential source has no such property for target config ref=%v target=%s", ref, rf.loadResult.Target.Label)
+			r.fail(rf, fmt.Sprintf("failed to resolve opaque reference %q for target %q: property %q absent from read result",
+				ref, rf.loadResult.Target.Label, ref.PropertyPath()))
+			return
+		}
+		config, err := resolver.ResolvePropertyReferences(ref, rf.config, provenance.UnwrapEffectiveValue(value).String())
+		if err != nil {
+			r.Log().Error("Failed to inject credential into target config ref=%v target=%s: %v", ref, rf.loadResult.Target.Label, err)
+			r.fail(rf, fmt.Sprintf("failed to resolve opaque reference %q for target %q: inject error", ref, rf.loadResult.Target.Label))
+			return
+		}
+		rf.config = config
+		rf.configRefs = rf.configRefs[1:]
+	}
+
+	if props, ok := r.cache[rf.resourceURI.Stripped()]; ok {
+		r.answer(rf.from, rf.resourceURI, props, &rf.loadResult.Resource)
 		return
 	}
 
-	// Non-recoverable failure — do not cache, report immediately.
-	if progress.OperationStatus == resource.OperationStatusFailure {
-		r.Log().Error("ResolveCache: non-recoverable error reading resource errorCode=%s resourceURI=%v",
-			progress.ErrorCode, resourceURI)
-		_ = r.Send(from, messages.FailedToResolveValue{ResourceURI: resourceURI})
+	// Strip the $ref/$value/$visibility wrappers so the plugin receives plain
+	// JSON. Fail closed on a conversion error (e.g. an irrecoverable $hashed
+	// field) rather than hand the raw envelope to the plugin.
+	config, err := resolver.ConvertToPluginFormat(rf.config)
+	if err != nil {
+		r.Log().Error("Failed to prepare target config for resolve-read resourceURI=%v target=%s: %v", rf.resourceURI, rf.loadResult.Target.Label, err)
+		r.fail(rf, fmt.Sprintf("failed to prepare resolved config for target %q: convert error", rf.loadResult.Target.Label))
 		return
 	}
+	r.read(rf, rf.loadResult.Resource, config)
+}
 
-	// Success — cache and respond.
+// read starts a plugin Read of res on behalf of rf. A first attempt that has
+// finished completes inline; otherwise the resolve is parked on the operator,
+// whose later attempts arrive as TrackedProgress pushes.
+func (r *ResolveCache) read(rf *resolveInFlight, res pkgmodel.Resource, config json.RawMessage) {
+	rf.reading = res
+	progress, operator, err := resource_update.ReadResourceViaPlugin(r, res, config)
+	if err != nil {
+		r.Log().Error("Failed to read resource via plugin resourceURI=%v: %v", res.URI(), err)
+		r.fail(rf, fmt.Sprintf("could not read %q: %v", string(res.URI()), err))
+		return
+	}
+	if !progress.HasFinished() {
+		r.inFlight[operator] = rf
+		return
+	}
+	r.completeRead(rf, progress)
+}
+
+// handleProgress consumes an attempt the operator pushed. Only a finished
+// attempt moves the parked resolve on; an unfinished one means the operator is
+// still retrying, and a push no resolve is waiting on is from an operator
+// whose resolve already finished.
+func (r *ResolveCache) handleProgress(operator gen.PID, progress plugin.TrackedProgress) {
+	rf, ok := r.inFlight[operator]
+	if !ok {
+		r.Log().Debug("Ignoring progress from an operator no resolve is waiting on operator=%v nativeID=%s", operator, progress.NativeID)
+		return
+	}
+	if !progress.HasFinished() {
+		r.Log().Debug("Operator retrying read resourceURI=%v errorCode=%s attempt=%d/%d",
+			rf.reading.URI(), progress.ErrorCode, progress.Attempts, progress.MaxAttempts)
+		return
+	}
+	delete(r.inFlight, operator)
+	r.completeRead(rf, &progress)
+}
+
+// completeRead caches a finished read's properties and advances the resolve, or
+// fails it when the operator gave up.
+func (r *ResolveCache) completeRead(rf *resolveInFlight, progress *plugin.TrackedProgress) {
+	if !progress.FinishedSuccessfully() {
+		r.Log().Error("ResolveCache: read failed errorCode=%s resourceURI=%v attempts=%d",
+			progress.ErrorCode, rf.reading.URI(), progress.Attempts)
+		r.fail(rf, fmt.Sprintf("could not read %q: %s after %d attempt(s)", string(rf.reading.URI()), progress.ErrorCode, progress.Attempts))
+		return
+	}
 	parsed := gjson.ParseBytes([]byte(progress.ResourceProperties))
-	enhancedParsed := r.preserveRefMetadata(retry.loadResult.Resource, parsed)
+	r.cache[rf.reading.URI()] = r.preserveRefMetadata(rf.reading, parsed)
+	r.Log().Debug("Cached resolved properties uri=%v", rf.reading.URI())
+	r.advance(rf)
+}
 
-	r.cache[resourceURI.Stripped()] = enhancedParsed
-	r.Log().Debug("Cached resolved properties uri=%v", resourceURI)
-	value := resolvedValueAt(enhancedParsed, resourceURI.PropertyPath())
+// answer sends the requested property out of the source's cached properties,
+// or a terminal miss naming the property when it is absent. source, when
+// known, identifies the resource by triplet in the miss reason.
+func (r *ResolveCache) answer(from gen.PID, resourceURI pkgmodel.FormaeURI, props gjson.Result, source *pkgmodel.Resource) {
+	value := resolvedValueAt(props, resourceURI.PropertyPath())
 	if !value.Exists() {
 		r.Log().Error("Unable to resolve property in cached properties property=%s resourceURI=%v", resourceURI.PropertyPath(), resourceURI)
-		_ = r.Send(from, messages.FailedToResolveValue{ResourceURI: resourceURI, Reason: resolveMissReason(resourceURI, &retry.loadResult.Resource)})
+		_ = r.Send(from, messages.FailedToResolveValue{ResourceURI: resourceURI, Reason: resolveMissReason(resourceURI, source)})
 		return
 	}
-
 	_ = r.Send(from, messages.ValueResolved{ResourceURI: resourceURI, Value: value.String(),
 		SourceRootDigest: rootDigestOf(value)})
 }
 
-// readViaPlugin spawns a PluginOperator and executes a single Read call.
-func (r *ResolveCache) readViaPlugin(retry resolveRetry) (*plugin.TrackedProgress, error) {
-	return resource_update.ReadResourceViaPlugin(r, retry.loadResult.Resource, retry.config)
+func (r *ResolveCache) fail(rf *resolveInFlight, reason string) {
+	_ = r.Send(rf.from, messages.FailedToResolveValue{ResourceURI: rf.resourceURI, Reason: reason})
 }
 
 func (r *ResolveCache) preserveRefMetadata(originalResource pkgmodel.Resource, pluginResult gjson.Result) gjson.Result {

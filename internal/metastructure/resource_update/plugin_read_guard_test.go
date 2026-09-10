@@ -58,7 +58,7 @@ func TestReadResourceViaPlugin_UndrawnGeneratorConfigNeverReachesAPlugin(t *test
 		}
 	}`)
 
-	_, err := ReadResourceViaPlugin(proc, readableResource(), cfg)
+	_, _, err := ReadResourceViaPlugin(proc, readableResource(), cfg)
 
 	assert.Zero(t, proc.calls, "the read must be refused before a plugin operator is even spawned")
 	if assert.Error(t, err) {
@@ -72,7 +72,7 @@ func TestReadResourceViaPlugin_UndrawnGeneratorConfigNeverReachesAPlugin(t *test
 func TestReadResourceViaPlugin_OrdinaryConfigStillDispatches(t *testing.T) {
 	proc := &countingCallProcess{}
 
-	_, err := ReadResourceViaPlugin(proc, readableResource(), json.RawMessage(`{"Region":"us-east-1"}`))
+	_, _, err := ReadResourceViaPlugin(proc, readableResource(), json.RawMessage(`{"Region":"us-east-1"}`))
 
 	require.Error(t, err, "this double has no plugin coordinator, so the spawn fails")
 	assert.Equal(t, 1, proc.calls, "an ordinary config must get as far as the spawn")

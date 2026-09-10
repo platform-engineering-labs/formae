@@ -22,7 +22,7 @@ import (
 // TestResolveTimeoutTimeout_CoversExponentialBackoff asserts the resolve
 // timeout envelope is derived from RetryStrategy.MaxTotalDelay and, for a large
 // MaxRetries, strictly exceeds the old flat (MaxRetries-1)*RetryDelay estimate,
-// so ResolveCache's exponential-backoff retries cannot trip the timeout.
+// so the operator's exponential-backoff retries cannot trip the timeout.
 func TestResolveTimeoutTimeout_CoversExponentialBackoff(t *testing.T) {
 	cfg := pkgmodel.RetryConfig{MaxRetries: 8, RetryDelay: 1 * time.Second}
 
