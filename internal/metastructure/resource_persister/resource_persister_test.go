@@ -3005,3 +3005,38 @@ func TestResourcePersister_StaleReadGuardFailsClosedWhenLookupErrors(t *testing.
 	require.NoError(t, err)
 	require.Len(t, resources, 1, "a staleness lookup that errors must not let the delete through")
 }
+
+// A queued successful read can combine a fresh digest with build inputs from
+// its old snapshot. It must not overwrite a completed apply's version reference.
+func TestResourcePersister_StaleSuccessfulSyncReadPreservesBuildInputs(t *testing.T) {
+	persister, sender, ds, err := newResourcePersisterForTest(t)
+	require.NoError(t, err)
+	old := pkgmodel.Resource{Label: "image", Type: "FakeAWS::ImageBuild", Stack: "test-stack", Ksuid: util.NewID(), Managed: true, NativeID: "repo|current|builder", Properties: json.RawMessage(`{"Dockerfile":"old","ImageDigest":"old"}`)}
+	persistCreateForTest(t, persister, sender, old, "cmd-old")
+	snapshot, err := ds.LoadResource(old.URI())
+	require.NoError(t, err)
+	fresh := old
+	fresh.Properties = json.RawMessage(`{"Dockerfile":"new","ImageDigest":"new","VersionUri":"repo:release"}`)
+	persistCreateForTest(t, persister, sender, fresh, "cmd-build")
+	read := syncReadNotFoundForTest(*snapshot, old.NativeID)
+	read.DesiredState.Properties = json.RawMessage(`{"Dockerfile":"old","ImageDigest":"new"}`)
+	read.ProgressResult[0].ErrorCode = ""
+	read.ProgressResult[0].ResourceProperties = read.DesiredState.Properties
+	result := persister.Call(sender, resource_update.PersistResourceUpdate{CommandID: "cmd-sync", ResourceOperation: resource_update.OperationRead, PluginOperation: resource.OperationRead, ResourceUpdate: read})
+	require.NoError(t, result.Error)
+	stored, err := ds.LoadResource(old.URI())
+	require.NoError(t, err)
+	require.NotNil(t, stored)
+	require.JSONEq(t, string(fresh.Properties), string(stored.Properties))
+
+	// A later cycle planned from the current row must still absorb cloud changes.
+	currentRead := syncReadNotFoundForTest(*stored, old.NativeID)
+	currentRead.DesiredState.Properties = json.RawMessage(`{"Dockerfile":"new","ImageDigest":"newer","VersionUri":"repo:release"}`)
+	currentRead.ProgressResult[0].ErrorCode = ""
+	currentRead.ProgressResult[0].ResourceProperties = currentRead.DesiredState.Properties
+	result = persister.Call(sender, resource_update.PersistResourceUpdate{CommandID: "cmd-fresh-sync", ResourceOperation: resource_update.OperationRead, PluginOperation: resource.OperationRead, ResourceUpdate: currentRead})
+	require.NoError(t, result.Error)
+	stored, err = ds.LoadResource(old.URI())
+	require.NoError(t, err)
+	require.JSONEq(t, string(currentRead.DesiredState.Properties), string(stored.Properties))
+}

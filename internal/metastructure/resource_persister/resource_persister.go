@@ -176,6 +176,18 @@ func (rp *ResourcePersister) storeResourceUpdate(commandID string, resourceOpera
 
 	resourceUpdate.Operation = resourceOperationFromPluginOperation(resourceOperation, pluginOperation, relevantProgress)
 
+	// A successful sync read can also carry properties from its planning
+	// snapshot (including declared inputs the provider cannot read). Do not let
+	// it overwrite a newer apply; the next cycle reads from the current model.
+	if pluginOperation == pkgresource.OperationRead &&
+		resourceUpdate.Source == resource_update.FormaCommandSourceSynchronize &&
+		resourceUpdate.Operation == resource_update.OperationRead &&
+		rp.recordMovedSinceGenerated(resourceUpdate) {
+		slog.Debug("Skipping stale successful sync read; the record moved since planning",
+			"resourceLabel", resourceUpdate.DesiredState.Label)
+		return "", nil
+	}
+
 	// A NotFound Read is converted into a delete above so out-of-band deletions
 	// get absorbed. That conversion is only sound while the record still
 	// describes the object the Read probed. A sync cycle plans against a
@@ -420,7 +432,7 @@ func (rp *ResourcePersister) recordMovedSinceGenerated(resourceUpdate *resource_
 		if resourceUpdate.Source != resource_update.FormaCommandSourceSynchronize {
 			return false
 		}
-		slog.Debug("Treating a NotFound read as stale: the snapshot carries no row version",
+		slog.Debug("Treating a read as stale: the snapshot carries no row version",
 			"resourceLabel", generated.Label)
 		return true
 	}
@@ -433,7 +445,7 @@ func (rp *ResourcePersister) recordMovedSinceGenerated(resourceUpdate *resource_
 		// exists to prevent. A lookup we could not complete is no evidence that
 		// the record still matches, so treat it as moved and let the next sync
 		// cycle decide on fresh state.
-		slog.Warn("Treating a NotFound read as stale: the staleness lookup failed",
+		slog.Warn("Treating a read as stale: the staleness lookup failed",
 			"resourceLabel", generated.Label,
 			"error", err)
 		return true
