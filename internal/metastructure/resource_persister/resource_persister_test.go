@@ -3011,7 +3011,15 @@ func TestResourcePersister_StaleReadGuardFailsClosedWhenLookupErrors(t *testing.
 func TestResourcePersister_StaleSuccessfulSyncReadPreservesBuildInputs(t *testing.T) {
 	persister, sender, ds, err := newResourcePersisterForTest(t)
 	require.NoError(t, err)
-	old := pkgmodel.Resource{Label: "image", Type: "FakeAWS::ImageBuild", Stack: "test-stack", Ksuid: util.NewID(), Managed: true, NativeID: "repo|current|builder", Properties: json.RawMessage(`{"Dockerfile":"old","ImageDigest":"old"}`)}
+	old := pkgmodel.Resource{
+		Label:      "image",
+		Type:       "FakeAWS::ImageBuild",
+		Stack:      "test-stack",
+		Ksuid:      util.NewID(),
+		Managed:    true,
+		NativeID:   "repo|current|builder",
+		Properties: json.RawMessage(`{"Dockerfile":"old","ImageDigest":"old"}`),
+	}
 	persistCreateForTest(t, persister, sender, old, "cmd-old")
 	snapshot, err := ds.LoadResource(old.URI())
 	require.NoError(t, err)
@@ -3022,7 +3030,12 @@ func TestResourcePersister_StaleSuccessfulSyncReadPreservesBuildInputs(t *testin
 	read.DesiredState.Properties = json.RawMessage(`{"Dockerfile":"old","ImageDigest":"new"}`)
 	read.ProgressResult[0].ErrorCode = ""
 	read.ProgressResult[0].ResourceProperties = read.DesiredState.Properties
-	result := persister.Call(sender, resource_update.PersistResourceUpdate{CommandID: "cmd-sync", ResourceOperation: resource_update.OperationRead, PluginOperation: resource.OperationRead, ResourceUpdate: read})
+	result := persister.Call(sender, resource_update.PersistResourceUpdate{
+		CommandID:         "cmd-sync",
+		ResourceOperation: resource_update.OperationRead,
+		PluginOperation:   resource.OperationRead,
+		ResourceUpdate:    read,
+	})
 	require.NoError(t, result.Error)
 	stored, err := ds.LoadResource(old.URI())
 	require.NoError(t, err)
@@ -3034,7 +3047,12 @@ func TestResourcePersister_StaleSuccessfulSyncReadPreservesBuildInputs(t *testin
 	currentRead.DesiredState.Properties = json.RawMessage(`{"Dockerfile":"new","ImageDigest":"newer","VersionUri":"repo:release"}`)
 	currentRead.ProgressResult[0].ErrorCode = ""
 	currentRead.ProgressResult[0].ResourceProperties = currentRead.DesiredState.Properties
-	result = persister.Call(sender, resource_update.PersistResourceUpdate{CommandID: "cmd-fresh-sync", ResourceOperation: resource_update.OperationRead, PluginOperation: resource.OperationRead, ResourceUpdate: currentRead})
+	result = persister.Call(sender, resource_update.PersistResourceUpdate{
+		CommandID:         "cmd-fresh-sync",
+		ResourceOperation: resource_update.OperationRead,
+		PluginOperation:   resource.OperationRead,
+		ResourceUpdate:    currentRead,
+	})
 	require.NoError(t, result.Error)
 	stored, err = ds.LoadResource(old.URI())
 	require.NoError(t, err)
