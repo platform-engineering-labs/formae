@@ -21,7 +21,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/config v1.32.38
 	github.com/aws/aws-sdk-go-v2/service/sts v1.45.7
 	github.com/aws/smithy-go v1.27.8
-	github.com/platform-engineering-labs/formae/pkg/model v0.1.6
+	github.com/platform-engineering-labs/formae/pkg/model v0.1.28
 	github.com/platform-engineering-labs/formae/pkg/plugin v0.0.0
 )
 
@@ -50,7 +50,7 @@ require (
 	github.com/klauspost/compress v1.18.5 // indirect
 	github.com/lufia/plan9stats v0.0.0-20251013123823-9fd1530e3ec3 // indirect
 	github.com/masterminds/semver v1.5.0 // indirect
-	github.com/platform-engineering-labs/formae/pkg/credential v0.0.0-20260821213704-ba68bacf6dd6 // indirect
+	github.com/platform-engineering-labs/formae/pkg/credential v0.1.0 // indirect
 	github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 // indirect
 	github.com/shirou/gopsutil/v4 v4.26.1 // indirect
 	github.com/theory/jsonpath v0.10.2 // indirect
