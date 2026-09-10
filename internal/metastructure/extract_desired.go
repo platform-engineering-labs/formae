@@ -234,6 +234,10 @@ func translatePartialDesiredReferences(ds *planningDatastore, forma *pkgmodel.Fo
 	return translateDesiredReferencesInScope(ds, forma, nil)
 }
 
+type unresolvedDesiredReferenceError struct{ message string }
+
+func (e unresolvedDesiredReferenceError) Error() string { return e.message }
+
 func translateDesiredReferencesInScope(ds *planningDatastore, forma *pkgmodel.Forma, completeStacks []pkgmodel.Stack) error {
 	declared := map[string]pkgmodel.Resource{}
 	loaded := map[string]bool{}
@@ -262,14 +266,14 @@ func translateDesiredReferencesInScope(ds *planningDatastore, forma *pkgmodel.Fo
 			return pkgmodel.Resource{}, e
 		}
 		if observed == nil {
-			return pkgmodel.Resource{}, fmt.Errorf("missing desired reference %s", id)
+			return pkgmodel.Resource{}, unresolvedDesiredReferenceError{fmt.Sprintf("missing desired reference %s", id)}
 		}
 		stack, e := ds.GetStackByLabel(observed.Stack)
 		if e != nil {
 			return pkgmodel.Resource{}, e
 		}
 		if stack == nil || observed.StackID == "" || observed.StackID != stack.ID {
-			return pkgmodel.Resource{}, fmt.Errorf("ambiguous desired reference incarnation %s", id)
+			return pkgmodel.Resource{}, unresolvedDesiredReferenceError{fmt.Sprintf("ambiguous desired reference incarnation %s", id)}
 		}
 		if !loaded[stack.Label] {
 			snapshots, e := ds.GetResourcesAtLastReconcile(stack.Label)
@@ -289,10 +293,10 @@ func translateDesiredReferencesInScope(ds *planningDatastore, forma *pkgmodel.Fo
 		if r, ok := declared[id]; ok {
 			return r, nil
 		}
-		return pkgmodel.Resource{}, fmt.Errorf("reference %s has no eligible desired declaration", id)
+		return pkgmodel.Resource{}, unresolvedDesiredReferenceError{fmt.Sprintf("reference %s has no eligible desired declaration", id)}
 	}
-	var walk func(any) error
-	document := func(raw json.RawMessage) (json.RawMessage, error) {
+	var walk func(any, string) error
+	document := func(raw json.RawMessage, path string) (json.RawMessage, error) {
 		if len(raw) == 0 {
 			return raw, nil
 		}
@@ -305,29 +309,46 @@ func translateDesiredReferencesInScope(ds *planningDatastore, forma *pkgmodel.Fo
 		if e := dec.Decode(&value); e != nil {
 			return nil, e
 		}
-		if e := walk(value); e != nil {
+		if e := walk(value, path); e != nil {
 			return nil, e
 		}
 		return json.Marshal(value)
 	}
-	walk = func(value any) error {
+	walk = func(value any, path string) error {
 		switch n := value.(type) {
 		case []any:
-			for _, child := range n {
-				if e := walk(child); e != nil {
+			for i, child := range n {
+				if e := walk(child, fmt.Sprintf("%s/%d", path, i)); e != nil {
 					return e
 				}
 			}
 		case map[string]any:
+			// Desired references retain identity and authored modifiers, never
+			// the resolved observation, including when lookup yields a diagnostic.
+			_, hasRef := n["$ref"].(string)
+			if hasRef || n["$res"] == true || n["$gen"] == true {
+				for _, key := range []string{"$value", "$hashed", "$applied", "$resolvedFrom"} {
+					delete(n, key)
+				}
+			}
 			if ref, ok := n["$ref"].(string); ok {
 				uri := pkgmodel.FormaeURI(ref)
 				id := uri.KSUID()
-				if id == "" {
+				if !uri.IsValid() || id == "" {
 					return fmt.Errorf("invalid desired resource reference %q", ref)
 				}
 				r, e := reference(id)
 				if e != nil {
-					return e
+					var unresolved unresolvedDesiredReferenceError
+					// Only complete desired extraction emits repair context. Partial
+					// command deltas still fail on omitted dependencies.
+					if !errors.As(e, &unresolved) || forma.Extraction == nil || len(forma.Extraction.CompleteStacks) == 0 {
+						return e
+					}
+					forma.Extraction.Diagnostics = append(forma.Extraction.Diagnostics, pkgmodel.ExtractionDiagnostic{
+						Code: "unresolved_desired_reference", Path: path, Reference: ref, Message: e.Error(),
+					})
+					return nil
 				}
 				delete(n, "$ref")
 				n["$res"] = true
@@ -408,11 +429,6 @@ func translateDesiredReferencesInScope(ds *planningDatastore, forma *pkgmodel.Fo
 				}
 				delete(n, "$strategy")
 			}
-			if n["$res"] == true || n["$gen"] == true {
-				for _, key := range []string{"$value", "$hashed", "$applied", "$resolvedFrom"} {
-					delete(n, key)
-				}
-			}
 			if n["$embed"] == true {
 				if template, ok := n["$template"].(string); ok {
 					spans, e := pkgmodel.ScanEmbedSpans(template)
@@ -421,7 +437,7 @@ func translateDesiredReferencesInScope(ds *planningDatastore, forma *pkgmodel.Fo
 					}
 					for i := len(spans) - 1; i >= 0; i-- {
 						span := spans[i]
-						raw, e := document(json.RawMessage(span.EnvelopeJSON))
+						raw, e := document(json.RawMessage(span.EnvelopeJSON), path+"/$template")
 						if e != nil {
 							return e
 						}
@@ -430,8 +446,14 @@ func translateDesiredReferencesInScope(ds *planningDatastore, forma *pkgmodel.Fo
 					n["$template"] = template
 				}
 			}
-			for _, child := range n {
-				if e := walk(child); e != nil {
+			keys := make([]string, 0, len(n))
+			for key := range n {
+				keys = append(keys, key)
+			}
+			sort.Strings(keys)
+			for _, key := range keys {
+				escaped := strings.ReplaceAll(strings.ReplaceAll(key, "~", "~0"), "/", "~1")
+				if e := walk(n[key], path+"/"+escaped); e != nil {
 					return e
 				}
 			}
@@ -439,14 +461,14 @@ func translateDesiredReferencesInScope(ds *planningDatastore, forma *pkgmodel.Fo
 		return nil
 	}
 	for i := range forma.Resources {
-		raw, e := document(forma.Resources[i].Properties)
+		raw, e := document(forma.Resources[i].Properties, fmt.Sprintf("/Resources/%d/Properties", i))
 		if e != nil {
 			return e
 		}
 		forma.Resources[i].Properties = raw
 	}
 	for i := range forma.Targets {
-		raw, e := document(forma.Targets[i].Config)
+		raw, e := document(forma.Targets[i].Config, fmt.Sprintf("/Targets/%d/Config", i))
 		if e != nil {
 			return e
 		}

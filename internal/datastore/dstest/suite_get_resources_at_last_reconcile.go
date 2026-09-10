@@ -147,6 +147,7 @@ func RunGetResourcesAtLastReconcile_AcceptanceOperations(t *testing.T, newDS fun
 		cmd := reconcileBuilder(forma_command.CommandStateSuccess, pkgmodel.FormaApplyModeReconcile, -time.Minute, []resource_update.ResourceUpdate{
 			resourceUpdate("stack-a", "ksuid-1", "accepted", `{"foo":"observed"}`, types.OperationAccept, resource_update.FormaCommandSourceUser),
 			resourceUpdate("stack-a", "ksuid-2", "accepted-delete", `{}`, types.OperationAcceptDelete, resource_update.FormaCommandSourceUser),
+			resourceUpdate("stack-a", "ksuid-3", "withdrawn", `{}`, types.OperationWithdraw, resource_update.FormaCommandSourceUser),
 		})
 		assert.NoError(t, td.StoreFormaCommand(cmd, cmd.ID))
 		snaps, err := td.GetResourcesAtLastReconcile("stack-a")

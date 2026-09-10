@@ -15,7 +15,7 @@ func ValidateAcceptanceContributions(updates []resource_update.ResourceUpdate) e
 	seen := make(map[string]bool)
 	for _, update := range updates {
 		id := update.DesiredState.Ksuid
-		acceptance := string(update.Operation) == "accept" || string(update.Operation) == "accept_delete"
+		acceptance := update.IsAcceptance()
 		if previous, ok := seen[id]; ok && (previous || acceptance) {
 			return fmt.Errorf("conflicting acceptance contribution for resource %s", id)
 		}

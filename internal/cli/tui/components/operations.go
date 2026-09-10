@@ -20,7 +20,7 @@ import (
 // identically in both.
 func OperationGlyph(g theme.Glyphs, op string) string {
 	switch op {
-	case "accept", "accept_delete":
+	case "accept", "accept_delete", "withdraw":
 		return g.OpKeep
 	case apimodel.OperationCreate:
 		return g.OpCreate
@@ -92,20 +92,21 @@ func PromptForOperations(th *theme.Theme, cmd *apimodel.Command) string {
 // summary reads a dozen of them: a positional list is a transposition waiting
 // to happen.
 type opTally struct {
-	targetCreates    int
-	targetUpdates    int
-	stackCreates     int
-	stackUpdates     int
-	policyCreates    int
-	policyUpdates    int
-	generatorCreates int
-	generatorUpdates int
-	generatorDraws   int
-	resourceAccepts  int
-	resourceCreates  int
-	resourceUpdates  int
-	resourceDeletes  int
-	resourceReplaces int
+	targetCreates       int
+	targetUpdates       int
+	stackCreates        int
+	stackUpdates        int
+	policyCreates       int
+	policyUpdates       int
+	generatorCreates    int
+	generatorUpdates    int
+	generatorDraws      int
+	resourceAccepts     int
+	resourceWithdrawals int
+	resourceCreates     int
+	resourceUpdates     int
+	resourceDeletes     int
+	resourceReplaces    int
 }
 
 // empty reports whether the command performs no operation at all.
@@ -133,6 +134,10 @@ func analyzeCommands(cmd *apimodel.Command) opTally {
 	ungroupedOperations := make([]apimodel.ResourceUpdate, 0)
 
 	for _, rc := range cmd.ResourceUpdates {
+		if rc.Operation == "withdraw" {
+			tally.resourceWithdrawals++
+			continue
+		}
 		if rc.Operation == "accept" || rc.Operation == "accept_delete" {
 			tally.resourceAccepts++
 			continue
@@ -256,6 +261,9 @@ func operationSummary(th *theme.Theme, t opTally) string {
 	updateSt := lipgloss.NewStyle().Foreground(th.Palette.TextPrimary)
 
 	var parts []string
+	if t.resourceWithdrawals > 0 {
+		parts = append(parts, fmt.Sprintf("withdraw %d desired declaration(s) (no provider operations)", t.resourceWithdrawals))
+	}
 	if t.resourceAccepts > 0 {
 		parts = append(parts, fmt.Sprintf("record %d drift acceptance(s) (no provider writes for these records)", t.resourceAccepts))
 	}
@@ -321,17 +329,31 @@ func operationSummary(th *theme.Theme, t opTally) string {
 
 // AcceptanceSummary separates logical desired records from provider operations.
 func AcceptanceSummary(command *apimodel.Command) string {
-	accepts, provider := 0, 0
+	accepts, withdrawals, provider := 0, 0, 0
 	for _, update := range command.ResourceUpdates {
 		switch update.Operation {
 		case "accept", "accept_delete":
 			accepts++
+		case "withdraw":
+			withdrawals++
 		case "create", "update", "delete", "replace":
 			provider++
 		}
 	}
-	if accepts == 0 {
+	if accepts == 0 && withdrawals == 0 {
 		return ""
 	}
-	return fmt.Sprintf("Drift acceptance records: %d; provider resource operations: %d", accepts, provider)
+	var parts []string
+	if accepts > 0 {
+		parts = append(parts, fmt.Sprintf("Drift acceptance records: %d", accepts))
+	}
+	if withdrawals > 0 {
+		label := "Desired intent withdrawals"
+		if accepts > 0 {
+			label = "desired intent withdrawals"
+		}
+		parts = append(parts, fmt.Sprintf("%s: %d", label, withdrawals))
+	}
+	parts = append(parts, fmt.Sprintf("provider resource operations: %d", provider))
+	return strings.Join(parts, "; ")
 }

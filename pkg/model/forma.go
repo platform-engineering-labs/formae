@@ -8,11 +8,22 @@ import (
 	"encoding/json"
 )
 
+// ExtractionDiagnostic identifies an unresolved immutable dependency in accepted
+// desired state. Path is a JSON pointer into the extracted Forma. The original
+// reference remains in the declaration; this context never authorizes an apply.
+type ExtractionDiagnostic struct {
+	Code      string `json:"Code"`
+	Path      string `json:"Path"`
+	Reference string `json:"Reference"`
+	Message   string `json:"Message"`
+}
+
 // ExtractionContext is read-side authoring context. Its dependencies are not
 // managed declarations and must never be applied as generator/stack mutations.
 type ExtractionContext struct {
-	CompleteStacks      []Stack           `json:"CompleteStacks"`
-	ReferenceGenerators []json.RawMessage `json:"ReferenceGenerators,omitempty"`
+	Diagnostics         []ExtractionDiagnostic `json:"Diagnostics,omitempty"`
+	CompleteStacks      []Stack                `json:"CompleteStacks"`
+	ReferenceGenerators []json.RawMessage      `json:"ReferenceGenerators,omitempty"`
 }
 
 type Forma struct {

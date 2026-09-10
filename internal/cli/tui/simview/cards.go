@@ -270,6 +270,8 @@ func cardEmptyNote(r simRow) string {
 	switch r.op {
 	case opAccept:
 		return "Record the observed state as desired intent; no provider write."
+	case opWithdraw:
+		return "Withdraw desired intent; cloud state remains unconfirmed. No provider operation."
 	case opAcceptDelete:
 		return "Record the confirmed deletion as desired intent; no provider delete."
 	case opDelete:

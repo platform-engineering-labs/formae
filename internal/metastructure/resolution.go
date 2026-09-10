@@ -765,10 +765,9 @@ func bindFinalResolution(plan *guardedApplyPlan, input *pkgmodel.Forma, options 
 	return nil
 }
 
-// A full reconcile may omit a confirmed-deleted desired resource. Record that
-// source-edited acceptance even for legacy clients. Conversely, a failed create
-// without any trustworthy observation cannot be silently forgotten or treated
-// as a confirmed deletion, including under force.
+// A full reconcile explicitly omitting desired intent records its withdrawal.
+// Confirmed observed deletion remains a distinct acceptance; withdrawal changes
+// only intent and preserves the original operation outcome and cloud uncertainty.
 func addOmittedDesiredAcceptances(ds datastore.Datastore, forma *pkgmodel.Forma, command *forma_command.FormaCommand) error {
 	reader, ok := ds.(datastore.ResourceObservationReader)
 	if !ok {
@@ -797,8 +796,11 @@ func addOmittedDesiredAcceptances(ds datastore.Datastore, forma *pkgmodel.Forma,
 			if obs != nil && (obs.Operation == "create" || obs.Operation == "update") {
 				continue
 			}
-			if obs == nil || !obs.ConfirmedDeletion || obs.StackID != prior.StackID {
-				return apimodel.DriftResolutionError{Code: "desired-intent-unavailable", ResourceID: prior.KSUID, CommandID: prior.CommandID, Reason: fmt.Sprintf("cannot omit desired resource %s/%s without a trustworthy managed observation; investigate the create outcome, recover or reapply its declaration, then reconcile removal", label, prior.Label)}
+			operation := resource_update.OperationWithdraw
+			version := ""
+			if obs != nil && obs.ConfirmedDeletion && obs.StackID == prior.StackID {
+				operation = resource_update.OperationAcceptDelete
+				version = obs.Version
 			}
 			if prior.Declaration == nil {
 				return resolutionError("desired-intent-unavailable", "previous desired declaration is unavailable", prior.KSUID)
@@ -810,7 +812,7 @@ func addOmittedDesiredAcceptances(ds datastore.Datastore, forma *pkgmodel.Forma,
 				}
 			}
 			if !exists {
-				command.ResourceUpdates = append(command.ResourceUpdates, resource_update.ResourceUpdate{DesiredState: *ownPlanningValue(prior.Declaration), Operation: resource_update.OperationAcceptDelete, State: resource_update.ResourceUpdateStateSuccess, Version: obs.Version, StackLabel: label, Source: resource_update.FormaCommandSourceUser})
+				command.ResourceUpdates = append(command.ResourceUpdates, resource_update.ResourceUpdate{DesiredState: *ownPlanningValue(prior.Declaration), Operation: operation, State: resource_update.ResourceUpdateStateSuccess, Version: version, StackLabel: label, Source: resource_update.FormaCommandSourceUser})
 			}
 		}
 	}

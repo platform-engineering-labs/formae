@@ -80,6 +80,12 @@ func prepareDesiredExtraction(f *model.Forma) (*model.Forma, error) {
 			return nil, err
 		}
 	}
+	unresolved := map[string]bool{}
+	for _, diagnostic := range f.Extraction.Diagnostics {
+		if diagnostic.Code == "unresolved_desired_reference" {
+			unresolved[diagnostic.Reference] = true
+		}
+	}
 	var walk func(any) error
 	walk = func(value any) error {
 		switch n := value.(type) {
@@ -90,6 +96,33 @@ func prepareDesiredExtraction(f *model.Forma) (*model.Forma, error) {
 				}
 			}
 		case map[string]any:
+			if _, exists := n["$unresolved"]; exists {
+				return fmt.Errorf("reserved desired renderer marker")
+			}
+			if ref, ok := n["$ref"].(string); ok {
+				if !model.FormaeURI(ref).IsValid() {
+					return fmt.Errorf("invalid desired resource reference %q", ref)
+				}
+				if !unresolved[ref] {
+					return fmt.Errorf("unclassified desired reference %s", ref)
+				}
+				if _, exists := n["$transform"]; exists {
+					return fmt.Errorf("unsupported desired reference transform")
+				}
+				if strategy, exists := n["$strategy"]; exists && strategy != nil && strategy != "" && strategy != "Update" {
+					return fmt.Errorf("unsupported desired reference strategy %v", strategy)
+				}
+				if visibility, exists := n["$visibility"]; exists && visibility != nil && visibility != "Clear" && visibility != "Opaque" {
+					return fmt.Errorf("unsupported desired reference visibility")
+				}
+				if selector, exists := n["$json"]; exists && selector != nil {
+					if _, ok := selector.(string); !ok {
+						return fmt.Errorf("unsupported desired reference JSON selector")
+					}
+				}
+				n["$unresolved"] = "Unresolved desired reference " + ref + "; remove the dependent declaration, rewire this reference, or explicitly restore the dependency before applying."
+				return nil
+			}
 			if n["$embed"] == true {
 				if parts, ok := n["$templateParts"].([]any); ok {
 					for _, part := range parts {

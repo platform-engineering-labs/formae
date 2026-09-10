@@ -441,7 +441,7 @@ func TestResolutionFailedCreateRetryKeepsDesiredIdentity(t *testing.T) {
 	})
 }
 
-func TestResolutionFailedCreateOmissionRequiresRecovery(t *testing.T) {
+func TestResolutionFailedCreateOmissionWithdrawsIntent(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		path := t.TempDir() + "/failed.db"
 		ds, err := dssqlite.NewDatastoreSQLite(context.Background(), &pkgmodel.DatastoreConfig{Sqlite: pkgmodel.SqliteConfig{FilePath: path}}, "test")
@@ -468,16 +468,43 @@ func TestResolutionFailedCreateOmissionRequiresRecovery(t *testing.T) {
 
 		omitted := ownPlanningValue(f)
 		omitted.Resources = nil
-		for _, force := range []bool{false, true} {
-			_, err = m.ApplyForma(omitted, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Force: force}, "client", "subject", "")
-			var refused apimodel.DriftResolutionError
-			require.ErrorAs(t, err, &refused)
-			require.Equal(t, "desired-intent-unavailable", refused.Code)
-			require.Equal(t, first.CommandID, refused.CommandID)
-		}
+		before, err := m.ExtractDesiredStacks("stack:scope")
+		require.NoError(t, err)
+		require.Len(t, before.Resources, 1, "retaining the failed declaration preserves retry intent")
+		retry, err := m.ApplyForma(ownPlanningValue(f), &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: true}, "client", "subject", "")
+		require.NoError(t, err)
+		require.Len(t, retry.Simulation.Command.ResourceUpdates, 1)
+		require.Equal(t, "create", retry.Simulation.Command.ResourceUpdates[0].Operation)
+		priorID := before.Resources[0].Ksuid
+		observationBefore, err := ds.(datastore.ResourceObservationReader).GetResourceObservation(priorID)
+		require.NoError(t, err)
+		withdrawn, err := m.ApplyForma(omitted, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "client", "subject", "")
+		require.NoError(t, err)
+		require.NotEmpty(t, withdrawn.CommandID)
+		require.Eventually(t, func() bool {
+			c, e := ds.GetFormaCommandByCommandID(withdrawn.CommandID)
+			return e == nil && c.State == forma_command.CommandStateSuccess
+		}, 5*time.Second, 10*time.Millisecond)
+		receipt, err := ds.GetFormaCommandByCommandID(withdrawn.CommandID)
+		require.NoError(t, err)
+		require.Len(t, receipt.ResourceUpdates, 1)
+		require.Equal(t, "withdraw", string(receipt.ResourceUpdates[0].Operation))
+		require.Empty(t, receipt.ResourceUpdates[0].ProgressResult, "withdrawal must never invoke a provider")
+		observationAfter, err := ds.(datastore.ResourceObservationReader).GetResourceObservation(priorID)
+		require.NoError(t, err)
+		require.Equal(t, observationBefore, observationAfter, "withdrawal must preserve uncertainty, never manufacture deletion")
+		original, err := ds.GetFormaCommandByCommandID(first.CommandID)
+		require.NoError(t, err)
+		require.Equal(t, forma_command.CommandStateFailed, original.State)
 		remaining, err := m.ExtractDesiredStacks("stack:scope")
 		require.NoError(t, err)
-		require.Len(t, remaining.Resources, 1, "failed intent remains available for recovery")
+		require.Empty(t, remaining.Resources)
+		repeated, err := m.ApplyForma(omitted, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "client", "subject", "")
+		require.NoError(t, err)
+		require.False(t, repeated.Simulation.ChangesRequired, "repeating the withdrawn declaration is a true no-op")
+		unrecorded, err := ds.GetFormaCommandByCommandID(repeated.CommandID)
+		require.Error(t, err)
+		require.Nil(t, unrecorded)
 	})
 }
 func TestResolutionLegacySourceDeletionRecordsAcceptance(t *testing.T) {

@@ -12,7 +12,7 @@ import (
 )
 
 func TestAcceptanceRecoveryRemainsSuccessfulWithoutProviderProgress(t *testing.T) {
-	for _, op := range []OperationType{OperationAccept, OperationAcceptDelete} {
+	for _, op := range []OperationType{OperationAccept, OperationAcceptDelete, OperationWithdraw} {
 		t.Run(string(op), func(t *testing.T) {
 			ru := ResourceUpdate{Operation: op, State: ResourceUpdateStateSuccess, Version: "reviewed"}
 			ru.UpdateState()

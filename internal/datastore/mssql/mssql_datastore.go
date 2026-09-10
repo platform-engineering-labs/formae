@@ -1011,7 +1011,7 @@ func (d *DatastoreMSSQL) bulkStoreResourceUpdatesTx(ctx context.Context, tx *sql
 		if err != nil {
 			return fmt.Errorf("failed to marshal resource: %w", err)
 		}
-		if string(ru.Operation) == "accept" || string(ru.Operation) == "accept_delete" {
+		if ru.IsAcceptance() {
 			resourceJSON, err = datastore.StripOpaqueRefValues(resourceJSON)
 			if err != nil {
 				return fmt.Errorf("strip acceptance opaque values: %w", err)

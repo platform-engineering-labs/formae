@@ -132,3 +132,25 @@ func TestOfflineExtractOutputConflictAndStrictFields(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, before, after)
 }
+
+func TestDesiredIncompleteDocumentReachesExistingExtractRenderer(t *testing.T) {
+	old, gen := extractDesiredFn, generateFn
+	t.Cleanup(func() { extractDesiredFn = old; generateFn = gen })
+	ref := "formae://3J9W5cCOO9hsfDmzLXyLkJAAdVK#/Arn"
+	extractDesiredFn = func(_ *app.App, query string) (*pkgmodel.Forma, error) {
+		require.Equal(t, "stack:stack", query)
+		return &pkgmodel.Forma{Stacks: []pkgmodel.Stack{{Label: "stack"}}, Extraction: &pkgmodel.ExtractionContext{CompleteStacks: []pkgmodel.Stack{{Label: "stack"}}, Diagnostics: []pkgmodel.ExtractionDiagnostic{{Code: "unresolved_desired_reference", Path: "/Resources/0/Properties/SecretString", Reference: ref}}}, Targets: []pkgmodel.Target{{Label: "aws", Namespace: "FakeAWS", Config: json.RawMessage(`{"Type":"FakeAWS","Region":"us-east-1"}`)}}, Resources: []pkgmodel.Resource{{Label: "consumer", Stack: "stack", Target: "aws", Type: "FakeAWS::SecretsManager::Secret", Properties: json.RawMessage(`{"Name":"kept","SecretString":{"$ref":"` + ref + `"}}`)}}}, nil
+	}
+	generateFn = func(_ *app.App, f *pkgmodel.Forma, path, output string, location schema.SchemaLocation) (schema.GenerateSourcesResult, error) {
+		core, err := filepath.Abs("../../schema/pkl/schema/PklProject")
+		require.NoError(t, err)
+		provider, err := filepath.Abs("../../testplugin/fakeaws/schema/pkl/PklProject")
+		require.NoError(t, err)
+		return (pkl.PKL{}).GenerateSourceCode(f, path, nil, &schema.SerializeOptions{Schema: "pkl", SchemaLocation: schema.SchemaLocationLocal, Dependencies: []string{"local:formae:" + core, "local:fakeaws:" + provider}})
+	}
+	path := filepath.Join(t.TempDir(), "desired.pkl")
+	require.NoError(t, runExtractCore(&app.App{Config: &pkgmodel.Config{}}, &ExtractOptions{Desired: true, TargetPath: path, Query: "stack:stack", OutputSchema: "pkl", Yes: true}))
+	_, err := (pkl.PKL{}).Evaluate(path, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile, nil)
+	require.ErrorContains(t, err, "Unresolved desired reference")
+	require.FileExists(t, path)
+}

@@ -51,6 +51,7 @@ const (
 	OperationReplace      = types.OperationReplace
 	OperationAccept       = types.OperationAccept
 	OperationAcceptDelete = types.OperationAcceptDelete
+	OperationWithdraw     = types.OperationWithdraw
 
 	ResourceUpdateStateUnknown    = types.ResourceUpdateStateUnknown
 	ResourceUpdateStateNotStarted = types.ResourceUpdateStateNotStarted
@@ -867,7 +868,7 @@ func (ru *ResourceUpdate) UpdateState() {
 
 func (ru *ResourceUpdate) requiredOperations() []resource.Operation {
 	switch ru.Operation {
-	case OperationAccept, OperationAcceptDelete:
+	case OperationAccept, OperationAcceptDelete, OperationWithdraw:
 		return nil
 	case OperationRead:
 		return []resource.Operation{resource.OperationRead}
@@ -1780,5 +1781,5 @@ func (m *propertyMerger) cleanPath(path string) string {
 
 // IsAcceptance identifies durable intent contributions that never execute provider work.
 func (ru ResourceUpdate) IsAcceptance() bool {
-	return ru.Operation == OperationAccept || ru.Operation == OperationAcceptDelete
+	return ru.Operation == OperationAccept || ru.Operation == OperationAcceptDelete || ru.Operation == OperationWithdraw
 }

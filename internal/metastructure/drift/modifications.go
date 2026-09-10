@@ -162,6 +162,18 @@ func LoadModifications(ds datastore.Datastore, stackLabel string) ([]datastore.R
 			}
 		}
 	}
+	// A completed stack destroy retires even resources whose last physical
+	// deletion came from sync before the destroy. They have no live incarnation
+	// to review. Read through the protected datastore, after observing the
+	// historical candidates above, so both absence and discarded dependencies
+	// still invalidate the plan when an independent writer changes them.
+	current, err := ds.GetStackByLabel(stackLabel)
+	if err != nil {
+		return nil, err
+	}
+	if current == nil {
+		return nil, nil
+	}
 	result := make([]datastore.ResourceModification, 0, len(modifications))
 	for _, mod := range modifications {
 		if !settled[mod.Ksuid] {

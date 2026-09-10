@@ -11,6 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"testing"
 )
 
@@ -115,5 +117,155 @@ func TestDesiredMembershipNamesDoNotShadow(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, labels[0], g.GetStack())
 		})
+	}
+}
+
+func TestDesiredUnresolvedReferenceCanBeEditedBeforeApply(t *testing.T) {
+	deps, _ := fakeawsDeps(t)
+	ref := "formae://3J9W5cCOO9hsfDmzLXyLkJAAdVK#/Arn"
+	context := &model.ExtractionContext{}
+	require.NoError(t, json.Unmarshal([]byte(`{"CompleteStacks":[{"Label":"stack"}],"Diagnostics":[{"Code":"unresolved_desired_reference","Path":"/Resources/0/Properties/SecretString","Reference":"`+ref+`","Message":"missing desired reference"}]}`), context))
+	f := &model.Forma{Extraction: context, Stacks: []model.Stack{{Label: "stack"}}, Targets: []model.Target{fakeawsTarget()}, Resources: []model.Resource{{Stack: "stack", Target: "aws", Label: "consumer", Type: "FakeAWS::SecretsManager::Secret", Properties: json.RawMessage(`{"Name":"kept","SecretString":{"$ref":"` + ref + `","$visibility":"Opaque","$json":"token","$value":"do-not-emit"}}`)}}}
+	path := filepath.Join(t.TempDir(), "desired.pkl")
+	_, err := (PKL{}).GenerateSourceCode(f, path, nil, &schema.SerializeOptions{Schema: "pkl", SchemaLocation: schema.SchemaLocationLocal, Dependencies: deps})
+	require.NoError(t, err, "a broken reference must not prevent obtaining the desired document")
+	source, err := os.ReadFile(path)
+	require.NoError(t, err)
+	require.Contains(t, string(source), ref)
+	_, err = (PKL{}).Evaluate(path, model.CommandApply, model.FormaApplyModeReconcile, nil)
+	require.ErrorContains(t, err, "Unresolved desired reference")
+	require.ErrorContains(t, err, "rewire")
+	// Replace precisely the non-executable expression, leaving the declaration.
+	repaired := regexp.MustCompile(`throw\("(?:[^"\\]|\\.)*"\)`).ReplaceAllString(string(source), `(new secret.SecretResolvable { label = "replacement"; stack = "owner" }).secretValue`)
+	require.NotEqual(t, string(source), repaired)
+	require.NoError(t, os.WriteFile(path, []byte(repaired), 0600))
+	evaluated, err := (PKL{}).Evaluate(path, model.CommandApply, model.FormaApplyModeReconcile, nil)
+	require.NoError(t, err)
+	require.Len(t, evaluated.Resources, 1)
+	var repairedProps map[string]any
+	require.NoError(t, json.Unmarshal(evaluated.Resources[0].Properties, &repairedProps))
+	repairedRef := repairedProps["SecretString"].(map[string]any)
+	require.Equal(t, "Opaque", repairedRef["$visibility"])
+	require.Equal(t, "token", repairedRef["$json"])
+	require.Equal(t, "replacement", repairedRef["$label"])
+	require.NotContains(t, string(source), "do-not-emit")
+	require.Contains(t, string(f.Resources[0].Properties), `"$ref"`, "renderer must not mutate transport declaration")
+	// Removing the dependent declaration also repairs the document.
+	removed := regexp.MustCompile(`(?s)  new secret.Secret \{.*?\n  \}\n`).ReplaceAllString(string(source), "")
+	require.NotEqual(t, string(source), removed)
+	require.NoError(t, os.WriteFile(path, []byte(removed), 0600))
+	evaluated, err = (PKL{}).Evaluate(path, model.CommandApply, model.FormaApplyModeReconcile, nil)
+	require.NoError(t, err)
+	require.Empty(t, evaluated.Resources)
+	require.Len(t, evaluated.Stacks, 1)
+}
+
+func TestDesiredUnresolvedReferenceNestedAndEmbedded(t *testing.T) {
+	for _, location := range []string{"target-mapping", "target-list", "target-embed", "resource-embed", "resource-nested"} {
+		t.Run(location, func(t *testing.T) {
+			deps, pluginDir := fakeawsDeps(t)
+			if location == "resource-embed" || location == "resource-nested" {
+				fixture := filepath.Join(t.TempDir(), "fakeaws")
+				require.NoError(t, os.CopyFS(fixture, os.DirFS(pluginDir)))
+				project := filepath.Join(fixture, "PklProject")
+				raw, err := os.ReadFile(project)
+				require.NoError(t, err)
+				core, err := filepath.Abs("schema/PklProject")
+				require.NoError(t, err)
+				require.NoError(t, os.WriteFile(project, []byte(strings.ReplaceAll(string(raw), "../../../../schema/pkl/schema/PklProject", core)), 0600))
+				secret := filepath.Join(fixture, "secretsmanager/secret.pkl")
+				raw, err = os.ReadFile(secret)
+				require.NoError(t, err)
+				require.NoError(t, os.WriteFile(secret, []byte(strings.ReplaceAll(string(raw), "(String|formae.ValueSource)?", "(String|formae.ValueSource|formae.Embedded)?")), 0600))
+				types := filepath.Join(fixture, "types.pkl")
+				raw, err = os.ReadFile(types)
+				require.NoError(t, err)
+				content := strings.ReplaceAll(string(raw), "module fakeaws.types", "module fakeaws.types\nimport \"@formae/formae.pkl\"")
+				content = strings.ReplaceAll(content, "hidden value: Any", "hidden value: (String|formae.ValueSource)")
+				require.NoError(t, os.WriteFile(types, []byte(content), 0600))
+				deps[1] = "local:fakeaws:" + project
+			}
+			ref := "formae://3J9W5cCOO9hsfDmzLXyLkJAAdVK#/Arn"
+			envelope := map[string]any{"$ref": ref, "$visibility": "Opaque"}
+			raw, err := json.Marshal(envelope)
+			require.NoError(t, err)
+			embed := map[string]any{"$embed": true, "$template": "before-" + model.FrameEnvelope(string(raw)) + "-after"}
+			f := &model.Forma{Extraction: &model.ExtractionContext{CompleteStacks: []model.Stack{{Label: "stack"}}, Diagnostics: []model.ExtractionDiagnostic{{Code: "unresolved_desired_reference", Reference: ref}}}, Stacks: []model.Stack{{Label: "stack"}}, Targets: []model.Target{fakeawsTarget()}}
+			switch location {
+			case "target-mapping":
+				f.Targets[0].Config, err = json.Marshal(map[string]any{"Auth": map[string]any{"ref": envelope, "keep": "sibling"}})
+			case "target-list":
+				f.Targets[0].Config, err = json.Marshal(map[string]any{"Auth": []any{envelope, "sibling"}})
+			case "target-embed":
+				f.Targets[0].Config, err = json.Marshal(map[string]any{"Auth": embed})
+			case "resource-nested":
+				props, e := json.Marshal(map[string]any{"Name": "kept", "Tags": []any{map[string]any{"Key": "nested", "Value": envelope}}})
+				require.NoError(t, e)
+				f.Resources = []model.Resource{{Stack: "stack", Target: "aws", Label: "consumer", Type: "FakeAWS::SecretsManager::Secret", Properties: props}}
+			case "resource-embed":
+				props, e := json.Marshal(map[string]any{"Name": "kept", "SecretString": embed})
+				require.NoError(t, e)
+				f.Resources = []model.Resource{{Stack: "stack", Target: "aws", Label: "consumer", Type: "FakeAWS::SecretsManager::Secret", Properties: props}}
+			}
+			require.NoError(t, err)
+			path := filepath.Join(t.TempDir(), "desired.pkl")
+			_, err = (PKL{}).GenerateSourceCode(f, path, nil, &schema.SerializeOptions{Schema: "pkl", SchemaLocation: schema.SchemaLocationLocal, Dependencies: deps})
+			require.NoError(t, err)
+			_, err = (PKL{}).Evaluate(path, model.CommandApply, model.FormaApplyModeReconcile, nil)
+			require.ErrorContains(t, err, "Unresolved desired reference")
+			source, err := os.ReadFile(path)
+			require.NoError(t, err)
+			repaired := regexp.MustCompile(`throw\("(?:[^"\\]|\\.)*"\)`).ReplaceAllString(string(source), `(new formae.Resolvable { label = "replacement"; stack = "owner"; type = "FakeAWS::SecretsManager::Secret"; property = "Arn" })`)
+			require.NoError(t, os.WriteFile(path, []byte(repaired), 0600))
+			evaluated, err := (PKL{}).Evaluate(path, model.CommandApply, model.FormaApplyModeReconcile, nil)
+			require.NoError(t, err)
+			var repairedValue any
+			var rawResult json.RawMessage
+			if strings.HasPrefix(location, "resource-") {
+				rawResult = evaluated.Resources[0].Properties
+			} else {
+				rawResult = evaluated.Targets[0].Config
+			}
+			require.NoError(t, json.Unmarshal(rawResult, &repairedValue))
+			references := 0
+			var check func(any)
+			check = func(v any) {
+				switch n := v.(type) {
+				case []any:
+					for _, child := range n {
+						check(child)
+					}
+				case map[string]any:
+					if n["$res"] == true {
+						references++
+						require.Equal(t, "Opaque", n["$visibility"])
+						require.Equal(t, "replacement", n["$label"])
+					}
+					if template, ok := n["$template"].(string); ok {
+						spans, e := model.ScanEmbedSpans(template)
+						require.NoError(t, e)
+						for _, span := range spans {
+							var envelope any
+							require.NoError(t, json.Unmarshal([]byte(span.EnvelopeJSON), &envelope))
+							check(envelope)
+						}
+					}
+					for _, child := range n {
+						check(child)
+					}
+				}
+			}
+			check(repairedValue)
+			require.Equal(t, 1, references)
+		})
+	}
+}
+
+func TestDesiredUnresolvedReferenceRejectsUnsupportedAnnotations(t *testing.T) {
+	ref := "formae://3J9W5cCOO9hsfDmzLXyLkJAAdVK#/Arn"
+	for _, annotation := range []string{`"$transform":{"unknown":true}`, `"$strategy":"SetOnce"`, `"$json":42`, `"$visibility":"unknown"`} {
+		f := &model.Forma{Extraction: &model.ExtractionContext{Diagnostics: []model.ExtractionDiagnostic{{Code: "unresolved_desired_reference", Reference: ref}}}, Resources: []model.Resource{{Properties: json.RawMessage(`{"Name":{"$ref":"` + ref + `",` + annotation + `}}`)}}}
+		_, err := prepareDesiredExtraction(f)
+		require.ErrorContains(t, err, "unsupported desired reference", annotation)
 	}
 }

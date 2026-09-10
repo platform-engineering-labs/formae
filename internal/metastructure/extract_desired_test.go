@@ -6,6 +6,7 @@ package metastructure
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -400,4 +401,63 @@ func (d *desiredReadBarrier) GetDesiredInlinePoliciesForStack(id string) ([]pkgm
 }
 func (d *desiredReadBarrier) LoadDesiredGeneratorsByStack(label string) ([]pkgmodel.Generator, error) {
 	return d.Datastore.(datastore.DesiredMetadataReader).LoadDesiredGeneratorsByStack(label)
+}
+
+// Missing dependencies must leave an editable complete desired declaration;
+// neither inventory absence nor a same-name replacement may erase its identity.
+func TestExtractDesiredStacks_MissingReferenceRemainsRepairable(t *testing.T) {
+	ds := newSQLiteTestDatastore(t)
+	for _, label := range []string{"owner", "consumer"} {
+		_, err := ds.CreateStack(&pkgmodel.Stack{Label: label}, "seed")
+		require.NoError(t, err)
+	}
+	_, err := ds.CreateTarget(&pkgmodel.Target{Label: "aws", Namespace: "FakeAWS", Config: json.RawMessage(`{"Type":"FakeAWS","Region":"us-east-1"}`)})
+	require.NoError(t, err)
+	missing := util.NewID()
+	consumer := pkgmodel.Resource{Ksuid: util.NewID(), Label: "consumer", Stack: "consumer", Target: "aws", Type: "FakeAWS::SecretsManager::Secret", Properties: json.RawMessage(`{"Name":"kept","SecretString":{"$ref":"formae://` + missing + `#/Arn","$visibility":"Opaque","$json":"token","$strategy":"Update","$value":"stale-resolved-value-sentinel","$hashed":true,"$applied":true,"$resolvedFrom":"stale-observation-sentinel"}}`)}
+	storeDesired(t, ds, consumer, types.OperationCreate, forma_command.CommandStateFailed)
+	replacement := pkgmodel.Resource{Ksuid: util.NewID(), Label: "producer", Stack: "owner", Target: "aws", Type: consumer.Type, Properties: json.RawMessage(`{"Name":"replacement"}`)}
+	_, err = ds.StoreResource(&replacement, "seed")
+	require.NoError(t, err)
+	storeDesired(t, ds, replacement, types.OperationCreate, forma_command.CommandStateSuccess)
+	f, err := (&Metastructure{Datastore: ds, Cfg: &pkgmodel.Config{}}).ExtractDesiredStacks("stack:consumer")
+	require.NoError(t, err)
+	require.Len(t, f.Resources, 1)
+	require.JSONEq(t, `{"Name":"kept","SecretString":{"$ref":"formae://`+missing+`#/Arn","$visibility":"Opaque","$json":"token","$strategy":"Update"}}`, string(f.Resources[0].Properties))
+	// This is the raw JSON returned to REST consumers, before Pkl rendering.
+	response, err := json.Marshal(f)
+	require.NoError(t, err)
+	require.NotContains(t, string(response), "stale-resolved-value-sentinel")
+	require.NotContains(t, string(response), "stale-observation-sentinel")
+	raw, err := json.Marshal(f.Extraction)
+	require.NoError(t, err)
+	var context map[string]any
+	require.NoError(t, json.Unmarshal(raw, &context))
+	diagnostics := context["Diagnostics"].([]any)
+	require.Len(t, diagnostics, 1)
+	diagnostic := diagnostics[0].(map[string]any)
+	require.Equal(t, "unresolved_desired_reference", diagnostic["Code"])
+	require.Equal(t, "/Resources/0/Properties/SecretString", diagnostic["Path"])
+	require.Equal(t, "formae://"+missing+"#/Arn", diagnostic["Reference"])
+}
+
+type desiredObservationFailure struct {
+	datastore.Datastore
+	failure error
+}
+
+func (d desiredObservationFailure) GetResourceObservation(string) (*datastore.ResourceObservation, error) {
+	return nil, d.failure
+}
+
+func TestExtractDesiredReferenceReadErrorsRemainHard(t *testing.T) {
+	ds := newSQLiteTestDatastore(t)
+	failure := fmt.Errorf("observation database unavailable")
+	forma := &pkgmodel.Forma{Extraction: &pkgmodel.ExtractionContext{CompleteStacks: []pkgmodel.Stack{{Label: "stack"}}}, Stacks: []pkgmodel.Stack{{Label: "stack"}}, Resources: []pkgmodel.Resource{{Properties: json.RawMessage(`{"Name":{"$ref":"formae://` + util.NewID() + `#/Arn"}}`)}}}
+	scope := newPlanningDatastore(desiredObservationFailure{Datastore: ds, failure: failure}, forma)
+	require.ErrorIs(t, translateDesiredReferences(scope, forma), failure)
+	require.Empty(t, forma.Extraction.Diagnostics)
+	forma.Resources[0].Properties = json.RawMessage(`{"Name":{"$ref":"formae://` + util.NewID() + `#not-a-property-pointer"}}`)
+	require.ErrorContains(t, translateDesiredReferences(scope, forma), "invalid desired resource reference")
+	require.Empty(t, forma.Extraction.Diagnostics)
 }

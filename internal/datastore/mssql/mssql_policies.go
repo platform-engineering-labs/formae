@@ -980,7 +980,7 @@ func (d *DatastoreMSSQL) GetResourcesAtLastReconcile(stackLabel string) ([]datas
 		)
 		SELECT ksuid, resource, command_id, stack_id
 		FROM latest_per_ksuid
-		WHERE rn = 1 AND operation NOT IN ('delete', 'accept_delete')
+		WHERE rn = 1 AND operation NOT IN ('delete', 'accept_delete', 'withdraw')
 		ORDER BY ksuid ASC`
 
 	rows, err := d.conn.QueryContext(ctx, query, stackLabel)

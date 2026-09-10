@@ -58,3 +58,9 @@ func (d DatastoreSQLite) ReadPolicyIdentity(label, stackID string) (*datastore.P
 func (d DatastoreSQLite) PinCommandTargetIncarnation(commandID, target, incarnation string, refs []datastore.ResourceUpdateRef) error {
 	return d.admissionStore().PinCommandTargetIncarnation(commandID, target, incarnation, refs)
 }
+
+func (d DatastoreSQLite) TryRetireEmptyStack(expectedStackID, label, cleanupCommandID string) (bool, error) {
+	return d.admissionStore().TryRetireEmptyStack(expectedStackID, label, cleanupCommandID)
+}
+
+var _ datastore.EmptyStackRetirer = DatastoreSQLite{}

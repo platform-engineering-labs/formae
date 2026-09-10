@@ -114,3 +114,9 @@ func (d *DatastoreAuroraDataAPI) ReadPolicyIdentity(label, stackID string) (*dat
 func (d *DatastoreAuroraDataAPI) PinCommandTargetIncarnation(commandID, target, incarnation string, refs []datastore.ResourceUpdateRef) error {
 	return d.admissionStore().PinCommandTargetIncarnation(commandID, target, incarnation, refs)
 }
+
+func (d *DatastoreAuroraDataAPI) TryRetireEmptyStack(expectedStackID, label, cleanupCommandID string) (bool, error) {
+	return d.admissionStore().TryRetireEmptyStack(expectedStackID, label, cleanupCommandID)
+}
+
+var _ datastore.EmptyStackRetirer = &DatastoreAuroraDataAPI{}

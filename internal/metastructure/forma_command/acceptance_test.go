@@ -15,7 +15,7 @@ import (
 )
 
 func TestConstructorAcceptanceIsSuccessfulLogicalWork(t *testing.T) {
-	for _, op := range []resource_update.OperationType{resource_update.OperationAccept, resource_update.OperationAcceptDelete} {
+	for _, op := range []resource_update.OperationType{resource_update.OperationAccept, resource_update.OperationAcceptDelete, resource_update.OperationWithdraw} {
 		command := NewFormaCommand(&pkgmodel.Forma{Stacks: []pkgmodel.Stack{{ID: "forged", Label: "empty"}}}, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, pkgmodel.CommandApply,
 			[]resource_update.ResourceUpdate{{Operation: op}}, nil, nil, nil, nil, "", "", "", SourceUser)
 		require.Equal(t, resource_update.ResourceUpdateStateSuccess, command.ResourceUpdates[0].State)

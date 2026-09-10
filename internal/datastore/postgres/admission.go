@@ -94,3 +94,9 @@ func (d DatastorePostgres) ReadPolicyIdentity(label, stackID string) (*datastore
 func (d DatastorePostgres) PinCommandTargetIncarnation(commandID, target, incarnation string, refs []datastore.ResourceUpdateRef) error {
 	return d.admissionStore().PinCommandTargetIncarnation(commandID, target, incarnation, refs)
 }
+
+func (d DatastorePostgres) TryRetireEmptyStack(expectedStackID, label, cleanupCommandID string) (bool, error) {
+	return d.admissionStore().TryRetireEmptyStack(expectedStackID, label, cleanupCommandID)
+}
+
+var _ datastore.EmptyStackRetirer = DatastorePostgres{}

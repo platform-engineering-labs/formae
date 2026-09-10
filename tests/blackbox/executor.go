@@ -94,6 +94,10 @@ func (h *TestHarness) ResetAgentState(t *testing.T) {
 
 	// Phase 1: Wait for all in-flight commands to settle.
 	h.waitForAllCommandsTerminal(t, resetTimeout)
+	// Explicitly remove desired declarations across the entire surviving scope.
+	// Failed creates may reference an already-destroyed dependency; withdrawal
+	// records cleanup without recreating resources just to delete them.
+	h.clearDesiredStateBeforeDestroy(t)
 
 	// Phase 2: Destroy all managed resources in a retry loop.
 	// Due to async ResourcePersister message ordering, a single destroy
@@ -101,8 +105,11 @@ func (h *TestHarness) ResetAgentState(t *testing.T) {
 	// command can re-create resources after they're deleted.
 	for attempt := range maxCleanupAttempts {
 		forma, err := h.client.ExtractResources("managed:true")
-		if err != nil || forma == nil || len(forma.Resources) == 0 {
-			t.Logf("ResetAgentState: inventory clean (attempt %d)", attempt+1)
+		require.NoError(t, err, "ResetAgentState: read managed inventory")
+		if forma == nil || len(forma.Resources) == 0 {
+			desired := h.extractRemainingDesiredState(t)
+			require.True(t, desired == nil || len(desired.Resources) == 0, "ResetAgentState: desired resources remain with empty inventory (attempt %d)", attempt+1)
+			t.Logf("ResetAgentState: inventory and desired state clean (attempt %d)", attempt+1)
 			h.resetOutOfBandState(t)
 			return
 		}
@@ -159,19 +166,134 @@ func (h *TestHarness) ResetAgentState(t *testing.T) {
 		time.Sleep(2 * time.Second)
 	}
 
-	// Final check — if resources remain after all attempts, fail.
+	// Final check proves both actual and desired emptiness without more recovery.
 	forma, err := h.client.ExtractResources("managed:true")
-	if err == nil && forma != nil && len(forma.Resources) > 0 {
+	require.NoError(t, err, "ResetAgentState: final managed inventory read")
+	if forma != nil && len(forma.Resources) > 0 {
 		for _, res := range forma.Resources {
 			t.Logf("  remaining resource: %s (nativeID=%s, stack=%s)", res.Label, res.NativeID, res.Stack)
 		}
 		require.Fail(t, "ResetAgentState: inventory not empty after %d cleanup attempts", maxCleanupAttempts)
 	}
 
+	desired := h.extractRemainingDesiredState(t)
+	require.True(t, desired == nil || len(desired.Resources) == 0, "ResetAgentState: desired resources remain after %d cleanup attempts", maxCleanupAttempts)
+
 	// Phase 3: Best-effort cleanup of out-of-band leftovers.
 	// Note: stale ResourceUpdaters from a prior rapid iteration may create
 	// cloud resources AFTER this cleanup (see checkResourceInvariantsWithRetry).
 	h.resetOutOfBandState(t)
+}
+
+// clearDesiredStateBeforeDestroy submits a complete empty reconcile across all
+// surviving managed stacks. This deletes live resources and withdraws failed
+// desired-only creates without requiring their references to be recoverable.
+func (h *TestHarness) clearDesiredStateBeforeDestroy(t *testing.T) {
+	t.Helper()
+	response, err := h.submitEmptyDesiredScope()
+	require.NoError(t, err, "ResetAgentState: clear complete desired scope before destroy")
+	if response == nil || !response.Simulation.ChangesRequired {
+		return
+	}
+	command := h.WaitForCommandDone(response.CommandID, resetTimeout)
+	require.Equal(t, "Success", command.State, "ResetAgentState: desired withdrawal must complete before leftover cleanup")
+	t.Log("ResetAgentState: cleared surviving desired resources")
+}
+
+func (h *TestHarness) submitEmptyDesiredScope() (*apimodel.SubmitCommandResponse, error) {
+	var lastErr error
+	for range maxCleanupAttempts {
+		stacks, err := h.client.ListStacks()
+		if err != nil {
+			return nil, err
+		}
+		empty := &pkgmodel.Forma{}
+		for _, stack := range stacks {
+			if stack.Label != "$unmanaged" {
+				empty.Stacks = append(empty.Stacks, pkgmodel.Stack{Label: stack.Label})
+			}
+		}
+		if len(empty.Stacks) == 0 {
+			return nil, nil
+		}
+		// Force is confined to reset's isolated stacks. Refresh the complete
+		// scope if asynchronous retirement invalidates selection or admission.
+		response, err := h.client.ApplyForma(empty, pkgmodel.FormaApplyModeReconcile, false, clientID, true)
+		if err == nil {
+			return response, nil
+		}
+		var stale *apimodel.ErrorResponse[apimodel.DriftResolutionError]
+		var retired *apimodel.ErrorResponse[apimodel.FormaEmptyStackRejectedError]
+		retry := errors.As(err, &stale) && stale.Data.Code == "stale-review"
+		if errors.As(err, &retired) && len(retired.Data.EmptyStacks) > 0 {
+			retry = true
+			for _, label := range retired.Data.EmptyStacks {
+				selected := false
+				for _, stack := range empty.Stacks {
+					if stack.Label == label {
+						selected = true
+						break
+					}
+				}
+				if !selected {
+					retry = false
+					break
+				}
+			}
+		}
+		if !retry {
+			return nil, err
+		}
+		lastErr = err
+	}
+	return nil, fmt.Errorf("reset desired scope did not stabilize after %d attempts: %w", maxCleanupAttempts, lastErr)
+}
+
+// extractRemainingDesiredState reads all surviving managed stacks as one scope.
+func (h *TestHarness) extractRemainingDesiredState(t *testing.T) *pkgmodel.Forma {
+	t.Helper()
+	desired, err := h.readRemainingDesiredScope()
+	require.NoError(t, err, "ResetAgentState: extract complete surviving desired state")
+	return desired
+}
+
+func (h *TestHarness) readRemainingDesiredScope() (*pkgmodel.Forma, error) {
+	var lastErr error
+	for range maxCleanupAttempts {
+		stacks, err := h.client.ListStacks()
+		if err != nil {
+			return nil, err
+		}
+		var selectors []string
+		for _, stack := range stacks {
+			if stack.Label != "$unmanaged" {
+				selectors = append(selectors, fmt.Sprintf("stack:%q", stack.Label))
+			}
+		}
+		if len(selectors) == 0 {
+			return nil, nil
+		}
+		sort.Strings(selectors)
+		desired, err := h.client.ExtractDesiredStacks(strings.Join(selectors, " "))
+		if err == nil {
+			return desired, nil
+		}
+		var invalid *apimodel.ErrorResponse[apimodel.InvalidQueryError]
+		retry := false
+		if errors.As(err, &invalid) {
+			for _, stack := range stacks {
+				if stack.Label != "$unmanaged" && invalid.Data.Reason == fmt.Sprintf("managed stack %q does not exist", stack.Label) {
+					retry = true
+					break
+				}
+			}
+		}
+		if !retry {
+			return nil, err
+		}
+		lastErr = err
+	}
+	return nil, fmt.Errorf("reset desired extraction scope did not stabilize after %d attempts: %w", maxCleanupAttempts, lastErr)
 }
 
 // resetOutOfBandState clears everything a previous iteration's out-of-band
@@ -2416,43 +2538,65 @@ func (h *TestHarness) reconcileAmbiguousFailedCommands(t *testing.T, model *Stat
 
 // --- Stack setup and policy helpers ---
 
-// SetupStacks creates initial resources on each stack and attaches policies
-// as configured. This ensures stacks exist in the agent before chaos begins.
-func (h *TestHarness) SetupStacks(t *testing.T, model *StateModel, config PropertyTestConfig) {
+// setupTest lets setup failures belong to the current rapid property case, as
+// well as supporting ordinary testing.T callers.
+type setupTest interface {
+	require.TestingT
+	Helper()
+	Logf(string, ...any)
+}
+
+// SetupStacks requires a successful initial apply on every stack, then verifies
+// the modeled resources are persisted before chaos begins. These required
+// commands witness effective work even when later random operations all reject.
+func (h *TestHarness) SetupStacks(t setupTest, model *StateModel, config PropertyTestConfig) {
 	t.Helper()
 
-	// Clear authoritative slots from previous iteration. TTL destroy marks
-	// slots authoritative, which must be cleared before the new iteration
-	// creates resources on those slots.
+	// TTL destroy can mark slots authoritative in a previous iteration.
 	model.AuthoritativeSlots = make(map[string]bool)
 	model.DeletedNativeIDs = make(map[string]string)
 
-	// Create a single resource on each stack to ensure the stack exists.
 	for stackIdx := range model.Stacks {
 		stackLabel := model.Stack(stackIdx).Label
-		ids := []int{0} // just the first resource
-
+		ids := []int{0}
 		forma := FormaFromStackResources(stackLabel, ids, nil)
 		resp, err := h.client.ApplyForma(forma, pkgmodel.FormaApplyModeReconcile, false, clientID, false)
-		if err != nil {
-			t.Logf("SetupStacks: stack %s apply rejected: %v", stackLabel, err)
-			continue
-		}
-		if !resp.Simulation.ChangesRequired {
-			t.Logf("SetupStacks: stack %s no changes required", stackLabel)
-			continue
-		}
-		cmd := h.WaitForCommandDone(resp.CommandID, defaultCommandTimeout)
-		if cmd.State == "Success" {
-			props := resourceProperties(stackLabel, ids)
-			model.ApplyCreated(stackIdx, ids, props)
-			// SetupStacks is a reconcile apply — save for ForceReconcile prediction.
-			model.SaveLastReconcile(stackIdx, ids, model.CurrentProperties(stackIdx, ids))
-			t.Logf("SetupStacks: stack %s created with %d resources", stackLabel, len(ids))
-		} else {
-			t.Logf("SetupStacks: stack %s command failed: %s", stackLabel, cmd.State)
-		}
+		require.NoError(t, err, "SetupStacks: stack %s apply rejected", stackLabel)
+		require.NotNil(t, resp, "SetupStacks: stack %s apply returned no response", stackLabel)
+		require.True(t, resp.Simulation.ChangesRequired, "SetupStacks: stack %s initial apply must require changes", stackLabel)
+		cmd, ok := h.waitForCommand(resp.CommandID, defaultCommandTimeout)
+		require.True(t, ok, "SetupStacks: stack %s command %s timed out", stackLabel, resp.CommandID)
+		require.Equal(t, "Success", cmd.State, "SetupStacks: stack %s command %s failed", stackLabel, resp.CommandID)
+		props := resourceProperties(stackLabel, ids)
+		model.ApplyCreated(stackIdx, ids, props)
+		model.SaveLastReconcile(stackIdx, ids, model.CurrentProperties(stackIdx, ids))
+		t.Logf("SetupStacks: stack %s created with %d resources", stackLabel, len(ids))
 	}
+
+	// ResourcePersister can lag behind terminal command status. Wait for the
+	// actual inventory to match the initial model, without changing the model
+	// to accommodate resources that were never created.
+	var inventoryErr error
+	var violations []Violation
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		forma, err := h.client.ExtractResources("managed:true")
+		inventoryErr = err
+		var inventory []pkgmodel.Resource
+		if forma != nil {
+			inventory = forma.Resources
+		}
+		violations = CheckModelVsInventory(model, inventory)
+		if err == nil && len(violations) == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	require.NoError(t, inventoryErr, "SetupStacks: initial inventory unavailable")
+	require.Empty(t, violations, "SetupStacks: initial inventory must match the model")
 }
 
 // ForceCheckTTLAndWait triggers a TTL check. If stacks have expired, the agent

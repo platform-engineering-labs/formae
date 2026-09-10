@@ -31,3 +31,13 @@ func TestAcceptDeletionExplainsNoProviderDelete(t *testing.T) {
 	text := RenderSimulationPlain(theme.New("formae"), &apimodel.Simulation{Command: apimodel.Command{ResourceUpdates: []apimodel.ResourceUpdate{{Operation: "accept_delete", ResourceLabel: "gone"}}}}, 120)
 	require.Contains(t, text, "Record the confirmed deletion as desired intent; no provider delete.")
 }
+
+func TestWithdrawalExplainsUnconfirmedCloudState(t *testing.T) {
+	sim := &apimodel.Simulation{ChangesRequired: true, Command: apimodel.Command{ResourceUpdates: []apimodel.ResourceUpdate{{Operation: "withdraw", ResourceLabel: "failed-create"}}}}
+	th := theme.New("formae")
+	text := RenderSimulationPlain(th, sim, 120)
+	require.Contains(t, text, "Withdraw desired intent; cloud state remains unconfirmed. No provider operation.")
+	model := New(th, sim, Options{})
+	require.Contains(t, model.planSummary(), "withdraw 1 desired declaration(s)")
+	require.NotContains(t, model.planSummary(), "drift acceptance")
+}

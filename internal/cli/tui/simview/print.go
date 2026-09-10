@@ -31,7 +31,7 @@ func RenderSimulationPlain(th *theme.Theme, sim *apimodel.Simulation, width int)
 	// The glyph is colored per-op from the theme palette; the count and word
 	// stay in the base text color.
 	wordSt := lipgloss.NewStyle().Foreground(p.TextPrimary)
-	ordered := []opKind{opCreate, opUpdate, opDelete, opReplace, opDraw, opDetach, opKeep, opAccept, opAcceptDelete}
+	ordered := []opKind{opCreate, opUpdate, opDelete, opReplace, opDraw, opDetach, opKeep, opAccept, opAcceptDelete, opWithdraw}
 	var parts []string
 	for _, op := range ordered {
 		n := counts[op]

@@ -660,6 +660,12 @@ class FakeResolvable extends formae.Resolvable {
 /// Carrier for a pre-processed $embed field.
 /// FakeParts is a List whose elements are alternately String (literal segment)
 /// and Map (decoded $res envelope — same shape FakeResolvable already handles).
+class FakeUnresolved {
+  Visibility: String?
+  Selector: String?
+  Message: String
+}
+
 class FakeEmbed {
   FakeParts: List
 }
@@ -988,6 +994,9 @@ local function getAllProperties(clazz: reflect.Class?): Map<String, reflect.Prop
   else getAllProperties(clazz.superclass!!) + clazz.properties //Double check what !!
 
 local function applyType(type: reflect.Type, value: Any): Any|GenerationFailure =
+  if (strictDesired && value is Dynamic|Mapping && value.toMap().getOrNull("$unresolved") is String)
+    new FakeUnresolved { Message = value.toMap()["$unresolved"]; Visibility = value.toMap().getOrNull("$visibility"); Selector = value.toMap().getOrNull("$json") }
+  else
   let (clazz = type.getClass())
   if (reflectTypeHandlers.containsKey(clazz))
     reflectTypeHandlers[clazz].apply(type, value)
@@ -1109,7 +1118,9 @@ local function parseValueEnhanced(value: Any): Any =
     let (typeName = getTypeName(value))
     // FakeEmbed: preserve parts as-is (each part is either a String literal
     // or a Dynamic/$res map — formatValueWithTypes handles the rendering).
-    if (typeName == "FakeEmbed")
+    if (typeName == "FakeUnresolved")
+      Map("__type__", "FakeUnresolved", "Message", (value as FakeUnresolved).Message, "Visibility", (value as FakeUnresolved).Visibility, "Selector", (value as FakeUnresolved).Selector)
+    else if (typeName == "FakeEmbed")
       Map("__type__", "FakeEmbed", "FakeParts", (value as FakeEmbed).FakeParts)
     // FakeGeneratorOutput: the carrier is declared in this module rather than a
     // schema package, so there is no import to look up for it.
@@ -1252,7 +1263,15 @@ local function localNameOf(input: String): String =
 ///
 /// The split the agent's extract pre-processing performs is envelope-agnostic,
 /// so a part is whichever envelope the template framed at that offset.
+local function renderUnresolved(message: String, selector: String?, visibility: String?): String =
+  "(throw(\"\(escapeString(message))\"))"
+    + (if (selector != null) ".json(\"\(escapeString(selector))\")" else "")
+    + (if (visibility == "Opaque") ".opaque" else "")
+
 local function renderEmbedEnvelopePart(envelope: Map<String, Any>, indent: String): String =
+  if (strictDesired && envelope.getOrNull("$unresolved") is String)
+    "\\(\(renderUnresolved(envelope["$unresolved"], envelope.getOrNull("$json"), envelope.getOrNull("$visibility"))))"
+  else
   if (envelope.getOrNull("$gen") == true)
     renderEmbedGenPart(envelope)
   else
@@ -1332,7 +1351,9 @@ local function formatValueWithTypes(value: Any, indent: String): String =
         else
           "new " + typeName
       )
-        if (typeName.contains("FakeResolvable"))
+        if (typeName == "FakeUnresolved")
+          renderUnresolved(value["Message"], value.getOrNull("Selector"), value.getOrNull("Visibility"))
+        else if (typeName.contains("FakeResolvable"))
           // Special handling for FakeResolvable - only show Stack and Label, comment RealValue
           let (stack = value.getOrNull("FakeStack"))
           let (label = value.getOrNull("FakeLabel"))
@@ -1650,7 +1671,9 @@ function genMapToPklStringWithTypes(
 function renderDesiredConfigValue(value: Any): String =
   if (value is Dynamic)
     let (fields = value.toMap())
-    if (envelopeMarkerOf(fields) != null)
+    if (strictDesired && fields.getOrNull("$unresolved") is String)
+      renderUnresolved(fields["$unresolved"], fields.getOrNull("$json"), fields.getOrNull("$visibility"))
+    else if (envelopeMarkerOf(fields) != null)
       let (converted = applyDynamicOrMapping(reflect.Class(formae.Resolvable), value))
       if (converted is GenerationFailure) throw("Unsupported desired target reference: " + failureMessage(converted))
       else formatValueWithTypes(parseValueEnhanced(converted), "        ")

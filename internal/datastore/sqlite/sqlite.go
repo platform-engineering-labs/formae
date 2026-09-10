@@ -3742,7 +3742,7 @@ func (d DatastoreSQLite) GetResourcesAtLastReconcile(stackLabel string) ([]datas
 		)
 		SELECT ksuid, resource, command_id, stack_id
 		FROM latest_per_ksuid
-		WHERE rn = 1 AND operation NOT IN ('delete', 'accept_delete')
+		WHERE rn = 1 AND operation NOT IN ('delete', 'accept_delete', 'withdraw')
 		ORDER BY ksuid ASC
 	`
 
@@ -5575,7 +5575,7 @@ func (d DatastoreSQLite) bulkStoreResourceUpdatesTx(tx *sql.Tx, commandID string
 			return fmt.Errorf("failed to marshal resource: %w", err)
 		}
 
-		if string(ru.Operation) == "accept" || string(ru.Operation) == "accept_delete" {
+		if ru.IsAcceptance() {
 			resourceJSON, err = datastore.StripOpaqueRefValues(resourceJSON)
 			if err != nil {
 				return fmt.Errorf("strip acceptance opaque values: %w", err)

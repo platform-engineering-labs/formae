@@ -63,12 +63,16 @@ func (m *Metastructure) ExtractCommandDesiredDelta(commandID string) (*apimodel.
 			deleted := map[string]bool{}
 			for i, u := range current.ResourceUpdates {
 				r := ownPlanningValue(u.DesiredState)
-				if u.Operation == resource_update.OperationDelete || u.Operation == resource_update.OperationAcceptDelete {
+				if u.Operation == resource_update.OperationDelete || u.Operation == resource_update.OperationAcceptDelete || u.Operation == resource_update.OperationWithdraw {
 					if _, survives := declarations[r.Ksuid]; survives || deleted[r.Ksuid] {
 						continue
 					}
 					deleted[r.Ksuid] = true
-					result.DeletedResources = append(result.DeletedResources, pkgmodel.DriftObservation{ResourceID: r.Ksuid, Stack: r.Stack, Type: r.Type, Label: r.Label, Kind: "delete", ObservedVersion: u.Version})
+					kind := "delete"
+					if u.Operation == resource_update.OperationWithdraw {
+						kind = "withdraw"
+					}
+					result.DeletedResources = append(result.DeletedResources, pkgmodel.DriftObservation{ResourceID: r.Ksuid, Stack: r.Stack, Type: r.Type, Label: r.Label, Kind: kind, ObservedVersion: u.Version})
 					continue
 				}
 				if u.Operation != resource_update.OperationCreate && u.Operation != resource_update.OperationUpdate && u.Operation != resource_update.OperationReplace && u.Operation != resource_update.OperationAccept {

@@ -101,7 +101,7 @@ func NewChangeset(
 	// command contributions without creating executable nodes for them.
 	executionUpdates := make([]resource_update.ResourceUpdate, 0, len(resourceUpdates))
 	for _, update := range resourceUpdates {
-		if update.Operation != resource_update.OperationAccept && update.Operation != resource_update.OperationAcceptDelete {
+		if !update.IsAcceptance() {
 			executionUpdates = append(executionUpdates, update)
 		}
 	}
