@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/generator_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/provenance"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
@@ -65,7 +66,9 @@ func TestGeneratorRotationReconcile_PreservesCredentials(t *testing.T) {
 					require.NoError(t, err)
 					drawnUnder, err := json.Marshal(stored)
 					require.NoError(t, err)
-					require.NoError(t, ds.AdvanceGeneration(identity.ID, "generation-1", "cmd-draw", drawnUnder))
+					draw := &forma_command.FormaCommand{ID: "cmd-draw", Command: pkgmodel.CommandApply, State: forma_command.CommandStateSuccess, StartTs: time.Now().UTC().Add(-2 * time.Hour)}
+					require.NoError(t, ds.StoreFormaCommand(draw, draw.ID))
+					require.NoError(t, ds.AdvanceGeneration(identity.ID, "generation-1", draw.ID, drawnUnder))
 					identity, err = ds.GetGeneratorIdentity("credential", stack.Label)
 					require.NoError(t, err)
 
@@ -98,7 +101,9 @@ func TestGeneratorRotationReconcile_PreservesCredentials(t *testing.T) {
 					require.Equal(t, generator_update.GeneratorOperationUpdate, update.Operation)
 					assert.Equal(t, identity.ID, update.Generator.GetID())
 					update.Generator.SetStackID(stack.ID)
-					_, err = ds.UpdateGenerator(update.Generator, "cmd-schedule")
+					command.State = forma_command.CommandStateSuccess
+					require.NoError(t, ds.StoreFormaCommand(command, command.ID))
+					_, err = ds.UpdateGenerator(update.Generator, command.ID)
 					require.NoError(t, err)
 					after, err := ds.GetGeneratorIdentity("credential", stack.Label)
 					require.NoError(t, err)
@@ -110,6 +115,7 @@ func TestGeneratorRotationReconcile_PreservesCredentials(t *testing.T) {
 					} else {
 						require.Len(t, infos, 1)
 						assert.Equal(t, tc.after, infos[0].IntervalSeconds)
+						assert.WithinDuration(t, draw.StartTs, infos[0].LastRotationAt, 2*time.Second, "schedule-only edits must preserve last committed draw time")
 					}
 					command, err = FormaCommandFromForma(plan(), &config.FormaCommandConfig{Mode: mode, Simulate: true}, pkgmodel.CommandApply, ds, "test", "", "", resource_update.FormaCommandSourceUser, time.Minute)
 					require.NoError(t, err)
