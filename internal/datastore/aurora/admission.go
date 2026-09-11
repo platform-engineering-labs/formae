@@ -120,3 +120,7 @@ func (d *DatastoreAuroraDataAPI) TryRetireEmptyStack(expectedStackID, label, cle
 }
 
 var _ datastore.EmptyStackRetirer = &DatastoreAuroraDataAPI{}
+
+func (d *DatastoreAuroraDataAPI) HasOnlyExternalChanges(ksuid, baselineCommandID, observedVersion string) (bool, error) {
+	return d.admissionStore().HasOnlyExternalChanges(ksuid, baselineCommandID, observedVersion)
+}

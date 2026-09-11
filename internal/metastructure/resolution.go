@@ -124,6 +124,12 @@ func bindDriftObservation(ds datastore.Datastore, forma *pkgmodel.Forma, options
 				kind = "create"
 			}
 			mod.ObservedCommandID = obs.CommandID
+			if history, ok := ds.(datastore.ExternalChangeReader); ok {
+				mod.ExternalChangesOnly, err = history.HasOnlyExternalChanges(id, commandID, obs.Version)
+				if err != nil {
+					return rejected, nil, err
+				}
+			}
 			// Origin is display metadata from the exact observed command. Old
 			// observations may outlive that history; leave their origin absent.
 			if obs.CommandID != "" {

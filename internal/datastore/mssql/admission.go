@@ -66,3 +66,7 @@ func (d *DatastoreMSSQL) TryRetireEmptyStack(expectedStackID, label, cleanupComm
 }
 
 var _ datastore.EmptyStackRetirer = &DatastoreMSSQL{}
+
+func (d *DatastoreMSSQL) HasOnlyExternalChanges(ksuid, baselineCommandID, observedVersion string) (bool, error) {
+	return d.admissionStore().HasOnlyExternalChanges(ksuid, baselineCommandID, observedVersion)
+}

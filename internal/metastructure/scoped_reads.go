@@ -318,6 +318,15 @@ func (p *planningDatastore) GetResourceObservation(id string) (*datastore.Resour
 	return r, e
 }
 
+func (p *planningDatastore) HasOnlyExternalChanges(id, baselineCommandID, observedVersion string) (bool, error) {
+	p.ids[id] = true
+	reader, ok := p.Datastore.(datastore.ExternalChangeReader)
+	if !ok {
+		return false, nil
+	}
+	return reader.HasOnlyExternalChanges(id, baselineCommandID, observedVersion)
+}
+
 func (p *planningDatastore) recordFailure(err error) {
 	if err != nil && p.readFailure == nil {
 		p.readFailure = err

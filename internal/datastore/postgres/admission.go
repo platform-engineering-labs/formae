@@ -100,3 +100,7 @@ func (d DatastorePostgres) TryRetireEmptyStack(expectedStackID, label, cleanupCo
 }
 
 var _ datastore.EmptyStackRetirer = DatastorePostgres{}
+
+func (d DatastorePostgres) HasOnlyExternalChanges(ksuid, baselineCommandID, observedVersion string) (bool, error) {
+	return d.admissionStore().HasOnlyExternalChanges(ksuid, baselineCommandID, observedVersion)
+}
