@@ -362,6 +362,10 @@ func (d *DatastoreMSSQL) GetGeneratorIdentityByID(generatorID string) (datastore
 // last rotation committed. The cadence itself is read from the stored spec by
 // datastore.RotationInfoFromRows, so this query never parses JSON.
 //
+// A new generation_id marks a draw; config edits carry the existing ID
+// forward. Compare adjacent versions before filtering by command success so
+// neither a schedule edit nor a copied failed draw can advance the anchor.
+//
 // last_committed_draw is the derivation the rotation scheduler runs on: a
 // generation row records that a value was drawn and the command that drew it,
 // and joining that command's state is what says whether the value ever reached
@@ -383,11 +387,17 @@ func (d *DatastoreMSSQL) GetGeneratorsWithRotation() ([]datastore.GeneratorRotat
 			       ROW_NUMBER() OVER (PARTITION BY id ORDER BY version COLLATE Latin1_General_BIN2 DESC) as rn
 			FROM stacks
 		),
+		generator_history AS (
+			SELECT id, command_id, generation_id,
+			       LAG(generation_id) OVER (PARTITION BY id ORDER BY version COLLATE Latin1_General_BIN2) as previous_generation_id
+			FROM generators
+		),
 		last_committed_draw AS (
 			SELECT g.id as generator_id, MAX(fc.timestamp) as last_rotation_at
-			FROM generators g
+			FROM generator_history g
 			JOIN forma_commands fc ON fc.command_id = g.command_id
 			WHERE g.generation_id != '' AND fc.state = 'Success'
+			AND (g.previous_generation_id IS NULL OR g.previous_generation_id COLLATE Latin1_General_BIN2 != g.generation_id)
 			GROUP BY g.id
 		)
 		SELECT g.id, g.label, s.label, g.generator_data, d.last_rotation_at
