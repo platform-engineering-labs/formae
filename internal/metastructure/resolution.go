@@ -65,6 +65,7 @@ func bindDriftObservation(ds datastore.Datastore, forma *pkgmodel.Forma, options
 	}
 	var observations []pkgmodel.DriftObservation
 	baselines := map[string][]datastore.ResourceSnapshot{}
+	externalOnly := map[string]bool{}
 	for label, stack := range rejected.ModifiedStacks {
 		baseline, err := ds.GetResourcesAtLastReconcile(label)
 		if err != nil {
@@ -145,6 +146,7 @@ func bindDriftObservation(ds datastore.Datastore, forma *pkgmodel.Forma, options
 			mod.StackID = current.ID
 			mod.Operation = kind
 			mods = append(mods, mod)
+			externalOnly[id] = mod.ExternalChangesOnly
 			observations = append(observations, pkgmodel.DriftObservation{ResourceID: id, StackID: current.ID, Stack: label, Type: mod.Type, Label: mod.Label, Kind: kind, ObservedVersion: obs.Version, ObservedCommandID: obs.CommandID, BaselineCommandID: commandID})
 		}
 		sort.Slice(mods, func(i, j int) bool { return mods[i].ResourceID < mods[j].ResourceID })
@@ -153,12 +155,15 @@ func bindDriftObservation(ds datastore.Datastore, forma *pkgmodel.Forma, options
 		sort.Slice(baselines[label], func(i, j int) bool { return baselines[label][i].KSUID < baselines[label][j].KSUID })
 	}
 	sort.Slice(observations, func(i, j int) bool { return observations[i].ResourceID < observations[j].ResourceID })
+	// Eligibility may change without a new physical version or desired baseline
+	// when a firefighting patch fails. Pin that decision input as well.
 	rejected.ObservationID, _ = resolutionHash(struct {
-		Forma        *pkgmodel.Forma
-		Options      config.FormaCommandConfig
-		Observations []pkgmodel.DriftObservation
-		Baselines    map[string][]datastore.ResourceSnapshot
-	}{forma, infrastructureOptions(options), observations, baselines})
+		Forma               *pkgmodel.Forma
+		Options             config.FormaCommandConfig
+		Observations        []pkgmodel.DriftObservation
+		Baselines           map[string][]datastore.ResourceSnapshot
+		ExternalChangesOnly map[string]bool
+	}{forma, infrastructureOptions(options), observations, baselines, externalOnly})
 	return rejected, observations, nil
 }
 

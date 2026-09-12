@@ -50,7 +50,9 @@ func (s AdmissionStore) HasOnlyExternalChanges(ksuid, baselineCommandID, observe
 	}
 	// Failed patches can leave intent without a physical resource version (the
 	// provider may have changed before reporting failure). Such interventions
-	// still require a decision. Acceptance starts a new command boundary even
+	// still require a decision. This also catches successful patches whose
+	// physical version was relabeled by a later read-only sync in place.
+	// Acceptance starts a new command boundary even
 	// when it keeps the same physical version. Include timestamp ties rather
 	// than guessing which intervention came first; missing evidence is manual.
 	intent, err := tx.Query(`SELECT CAST(COUNT(*) AS VARCHAR(20)) FROM resource_updates ru LEFT JOIN forma_commands fc ON fc.command_id=ru.command_id WHERE ru.ksuid=? AND ru.command_id<>? AND (fc.command_id IS NULL OR fc.timestamp IS NULL OR (fc.timestamp >= (SELECT timestamp FROM forma_commands WHERE command_id=?) AND (COALESCE(fc.command,'')<>'sync' OR COALESCE(fc.source,'')<>'synchronizer')))`, ksuid, baselineCommandID, baselineCommandID)

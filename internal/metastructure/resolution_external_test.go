@@ -19,7 +19,7 @@ import (
 )
 
 func TestResolutionExternalOnlyRequiresCompleteHistory(t *testing.T) {
-	for _, kind := range []string{"sync-only", "patch-then-sync", "unknown-then-sync", "accepted-patch-then-sync", "failed-baseline-then-sync", "external-delete", "failed-patch-then-sync", "accepted-failed-patch-then-sync"} {
+	for _, kind := range []string{"sync-only", "patch-then-sync", "unknown-then-sync", "accepted-patch-then-sync", "failed-baseline-then-sync", "external-delete", "failed-patch-then-sync", "accepted-failed-patch-then-sync", "patch-after-observation"} {
 		t.Run(kind, func(t *testing.T) {
 			m, _, f, _ := scopedFixture(t)
 			r, err := m.Datastore.LoadResourceById("a")
@@ -86,8 +86,28 @@ func TestResolutionExternalOnlyRequiresCompleteHistory(t *testing.T) {
 				_, err := m.Datastore.DeleteResource(r, id)
 				require.NoError(t, err)
 			}
-			got := observeResolution(t, m, f).ModifiedStacks["a"].ModifiedResources[0]
-			require.Equal(t, kind == "sync-only" || kind == "accepted-patch-then-sync" || kind == "external-delete" || kind == "accepted-failed-patch-then-sync", got.ExternalChangesOnly)
+			observation := observeResolution(t, m, f)
+			got := observation.ModifiedStacks["a"].ModifiedResources[0]
+			require.Equal(t, kind == "sync-only" || kind == "accepted-patch-then-sync" || kind == "external-delete" || kind == "accepted-failed-patch-then-sync" || kind == "patch-after-observation", got.ExternalChangesOnly)
+			if kind == "patch-after-observation" {
+				opts := &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: true, Resolution: &pkgmodel.DriftResolution{ObservationID: observation.ObservationID, Decisions: []pkgmodel.DriftDecision{{ResourceID: "a", Action: "absorb"}}}}
+				_, err = m.ApplyForma(f, opts, "client", "subject", "")
+				require.NoError(t, err)
+				failed := *baseline
+				failed.ID = util.NewID()
+				failed.Config.Mode = pkgmodel.FormaApplyModePatch
+				failed.State = forma_command.CommandStateFailed
+				failed.StartTs = time.Now()
+				failed.ModifiedTs = failed.StartTs
+				failed.ResourceUpdates = []resource_update.ResourceUpdate{{DesiredState: *r, Source: resource_update.FormaCommandSourceUser, StackLabel: "a", Operation: resource_update.OperationUpdate, State: resource_update.ResourceUpdateStateFailed}}
+				failed.ResourceUpdates[0].DesiredState.Properties = []byte(`{"name":"firefight"}`)
+				require.NoError(t, m.Datastore.StoreFormaCommand(&failed, failed.ID))
+				current := observeResolution(t, m, f)
+				require.False(t, current.ModifiedStacks["a"].ModifiedResources[0].ExternalChangesOnly)
+				require.Equal(t, got.ObservedVersion, current.ModifiedStacks["a"].ModifiedResources[0].ObservedVersion)
+				_, err = m.ApplyForma(f, opts, "client", "subject", "")
+				require.ErrorContains(t, err, "stale-review", "an automatic choice made before a failed patch requires a fresh decision")
+			}
 		})
 	}
 }

@@ -39,6 +39,7 @@ func TestAdmissionPrimitive(t *testing.T) {
 	defer func() { first.Close() }()
 	second := open()
 	defer second.Close()
+	dstest.RunExternalChangeHistory(t, first)
 	dstest.RunAdmissionPrimitive(t, first, second, first.admissionStore(), second.admissionStore(), func() datastore.CommandAdmitter { first.Close(); first = open(); return first })
 	dstest.RunAdmissionWriters(t, first, second, first.admissionStore())
 	dstest.RunAdmissionWriterReviewFixes(t, first, second, first.admissionStore(), second.admissionStore())
