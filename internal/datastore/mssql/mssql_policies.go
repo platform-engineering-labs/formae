@@ -965,7 +965,7 @@ func (d *DatastoreMSSQL) GetResourcesAtLastReconcile(stackLabel string) ([]datas
                 THEN 1 ELSE 0 END AS legacy_failed_create,
               JSON_VALUE(ru.resource, '$.Label') AS declared_label,
               JSON_VALUE(ru.resource, '$.Type') AS declared_type,
-              JSON_VALUE(ru.resource, '$.Target') AS declared_target, 
+              JSON_VALUE(ru.resource, '$.Target') AS declared_target,
               COALESCE((SELECT MAX(cs.stack_id) FROM command_stacks cs WHERE cs.command_id=fc.command_id AND cs.stack_label=ru.stack_label),
                 (SELECT MIN(h.id) FROM stacks h WHERE h.label=ru.stack_label)) AS stack_id
 			FROM resource_updates ru

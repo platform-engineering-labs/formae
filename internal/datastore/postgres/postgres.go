@@ -3621,7 +3621,7 @@ func (d DatastorePostgres) GetResourcesAtLastReconcile(stackLabel string) ([]dat
                 THEN 1 ELSE 0 END AS legacy_failed_create,
               ru.resource::json->>'Label' AS declared_label,
               ru.resource::json->>'Type' AS declared_type,
-              ru.resource::json->>'Target' AS declared_target, 
+              ru.resource::json->>'Target' AS declared_target,
               COALESCE((SELECT MAX(cs.stack_id) FROM command_stacks cs WHERE cs.command_id=fc.command_id AND cs.stack_label=ru.stack_label),
                 (SELECT MIN(h.id) FROM stacks h WHERE h.label=ru.stack_label)) AS stack_id
 			FROM resource_updates ru
