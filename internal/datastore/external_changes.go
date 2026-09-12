@@ -26,7 +26,9 @@ func (s AdmissionStore) HasOnlyExternalChanges(ksuid, baselineCommandID, observe
 	}
 	// The desired contribution carries the physical version it was planned
 	// against, including acceptance commands which perform no provider write.
-	boundary, err := tx.Query("SELECT COALESCE(MAX(version"+coll+"),'') FROM resource_updates WHERE command_id=? AND ksuid=?", baselineCommandID, ksuid)
+	// Failed intent is still desired intent, not proof that the provider
+	// realized it. Never automatically absorb it away after a later sync.
+	boundary, err := tx.Query("SELECT COALESCE(MAX(version"+coll+"),'') FROM resource_updates WHERE command_id=? AND ksuid=? AND state='Success'", baselineCommandID, ksuid)
 	if err != nil {
 		return false, err
 	}

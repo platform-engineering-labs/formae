@@ -16,7 +16,7 @@ import (
 )
 
 func TestResolutionExternalOnlyRequiresCompleteHistory(t *testing.T) {
-	for _, kind := range []string{"sync-only", "patch-then-sync", "unknown-then-sync", "accepted-patch-then-sync"} {
+	for _, kind := range []string{"sync-only", "patch-then-sync", "unknown-then-sync", "accepted-patch-then-sync", "failed-baseline-then-sync", "external-delete"} {
 		t.Run(kind, func(t *testing.T) {
 			m, _, f, _ := scopedFixture(t)
 			r, err := m.Datastore.LoadResourceById("a")
@@ -27,6 +27,11 @@ func TestResolutionExternalOnlyRequiresCompleteHistory(t *testing.T) {
 			stack, err := m.Datastore.GetStackByLabel("a")
 			require.NoError(t, err)
 			baseline := &forma_command.FormaCommand{ID: baselineID, Command: pkgmodel.CommandApply, Source: forma_command.SourceUser, Config: config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, State: forma_command.CommandStateSuccess, StartTs: time.Now(), ModifiedTs: time.Now(), Stacks: []forma_command.CommandStack{{ID: stack.ID, Label: "a"}}, ResourceUpdates: []resource_update.ResourceUpdate{{DesiredState: *r, Version: version, Source: resource_update.FormaCommandSourceUser, StackLabel: "a", Operation: resource_update.OperationUpdate, State: resource_update.ResourceUpdateStateSuccess}}}
+			if kind == "failed-baseline-then-sync" {
+				baseline.State = forma_command.CommandStateFailed
+				baseline.ResourceUpdates[0].State = resource_update.ResourceUpdateStateFailed
+				baseline.ResourceUpdates[0].DesiredState.Properties = []byte(`{"name":"failed-intent"}`)
+			}
 			require.NoError(t, m.Datastore.StoreFormaCommand(baseline, baselineID))
 			f.Resources[0].Properties = append([]byte(nil), r.Properties...)
 			write := func(command pkgmodel.Command, source forma_command.Source, mode pkgmodel.FormaApplyMode, props string) {
@@ -57,8 +62,15 @@ func TestResolutionExternalOnlyRequiresCompleteHistory(t *testing.T) {
 				require.NoError(t, err)
 			}
 			write(pkgmodel.CommandSync, forma_command.SourceSynchronizer, "", `{"name":"external"}`)
+			if kind == "external-delete" {
+				id := util.NewID()
+				c := &forma_command.FormaCommand{ID: id, Command: pkgmodel.CommandSync, Source: forma_command.SourceSynchronizer, State: forma_command.CommandStateSuccess, StartTs: time.Now(), ModifiedTs: time.Now()}
+				require.NoError(t, m.Datastore.StoreFormaCommand(c, id))
+				_, err := m.Datastore.DeleteResource(r, id)
+				require.NoError(t, err)
+			}
 			got := observeResolution(t, m, f).ModifiedStacks["a"].ModifiedResources[0]
-			require.Equal(t, kind == "sync-only" || kind == "accepted-patch-then-sync", got.ExternalChangesOnly)
+			require.Equal(t, kind == "sync-only" || kind == "accepted-patch-then-sync" || kind == "external-delete", got.ExternalChangesOnly)
 		})
 	}
 }
