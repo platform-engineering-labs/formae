@@ -6503,11 +6503,14 @@ func (d *DatastoreAuroraDataAPI) GetResourcesAtLastReconcile(stackLabel string) 
 	//
 	// Delete operations are excluded from the outer SELECT: a deletion the
 	// user requested is not part of the desired state going forward.
+	// Legacy commands have no command_stacks row and may start before the
+	// stack they create is persisted. The single-incarnation guard below,
+	// not the command timestamp, makes label-based identity recovery safe.
 	query := `
 		WITH user_reconcile_updates AS (
 			SELECT ru.ksuid, ru.resource::json AS resource_json, ru.operation, fc.timestamp, fc.command_id,
               COALESCE((SELECT MAX(cs.stack_id) FROM command_stacks cs WHERE cs.command_id=fc.command_id AND cs.stack_label=ru.stack_label),
-                (SELECT MIN(h.id) FROM stacks h WHERE h.label=ru.stack_label AND h.valid_from<=fc.timestamp)) AS stack_id
+                (SELECT MIN(h.id) FROM stacks h WHERE h.label=ru.stack_label)) AS stack_id
 			FROM resource_updates ru
 			INNER JOIN forma_commands fc ON ru.command_id = fc.command_id
 			WHERE (

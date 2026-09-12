@@ -461,3 +461,60 @@ func TestExtractDesiredReferenceReadErrorsRemainHard(t *testing.T) {
 	require.ErrorContains(t, translateDesiredReferences(scope, forma), "invalid desired resource reference")
 	require.Empty(t, forma.Extraction.Diagnostics)
 }
+
+// Pre-upgrade commands have no command_stacks rows. In particular, the first
+// failed create starts before the stack is persisted by that same apply.
+func TestExtractDesiredStacks_LegacyFailedCreateThenExternalLabel(t *testing.T) {
+	m, _, _, _ := scopedFixture(t)
+	ds := m.Datastore
+	live, err := ds.LoadResourceById("a")
+	require.NoError(t, err)
+	live.Schema.Fields = []string{"name", "labels"}
+	live.Properties = json.RawMessage(`{"name":"bucket","labels":{"environment":"dev"}}`)
+	for i := 0; i < 3; i++ {
+		r := ownPlanningValue(*live)
+		state := forma_command.CommandStateFailed
+		updateState := resource_update.ResourceUpdateStateFailed
+		if i < 2 {
+			r.Ksuid = fmt.Sprintf("failed-%d", i)
+			r.Label = fmt.Sprintf("failed-%d", i)
+		} else {
+			state = forma_command.CommandStateSuccess
+			updateState = resource_update.ResourceUpdateStateSuccess
+		}
+		ts := time.Now().UTC()
+		if i == 0 {
+			ts = ts.Add(-time.Hour)
+		}
+		cmd := &forma_command.FormaCommand{ID: util.NewID(), StartTs: ts, ModifiedTs: ts, Command: pkgmodel.CommandApply, Source: forma_command.SourceUser, State: state, Config: config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, ResourceUpdates: []resource_update.ResourceUpdate{{DesiredState: r, StackLabel: r.Stack, Operation: types.OperationCreate, Source: resource_update.FormaCommandSourceUser, State: updateState}}}
+		if i == 2 {
+			version, e := ds.StoreResource(live, cmd.ID)
+			require.NoError(t, e)
+			cmd.ResourceUpdates[0].Version = version
+		}
+		require.NoError(t, ds.StoreFormaCommand(cmd, cmd.ID))
+	}
+	live.Properties = json.RawMessage(`{"name":"bucket","labels":{"environment":"dev","oob":"drift"}}`)
+	syncCmd := &forma_command.FormaCommand{ID: util.NewID(), StartTs: time.Now().UTC(), ModifiedTs: time.Now().UTC(), Command: pkgmodel.CommandSync, Source: forma_command.SourceSynchronizer, State: forma_command.CommandStateSuccess, Config: config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModePatch}}
+	require.NoError(t, ds.StoreFormaCommand(syncCmd, syncCmd.ID))
+	_, err = ds.StoreResource(live, syncCmd.ID)
+	require.NoError(t, err)
+	desired, err := m.ExtractDesiredStacks("stack:a")
+	require.NoError(t, err)
+	require.Len(t, desired.Resources, 3, "unresolved failed intents remain inspectable, not silently dropped")
+	for i := range desired.Resources {
+		require.NotContains(t, string(desired.Resources[i].Properties), "oob", "live labels must not leak into desired extraction")
+		if desired.Resources[i].Label == "a" {
+			desired.Resources[i].Properties = json.RawMessage(`{"name":"bucket","labels":{"environment":"dev","app":"demo"}}`)
+		}
+	}
+	rejected := observeResolution(t, m, desired)
+	require.NotEmpty(t, rejected.ObservationID)
+	for _, action := range []string{"absorb", "revert"} {
+		t.Run(action, func(t *testing.T) {
+			result, err := m.ApplyForma(desired, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: true, Resolution: &pkgmodel.DriftResolution{ObservationID: rejected.ObservationID, Decisions: []pkgmodel.DriftDecision{{ResourceID: "a", Action: action}}}}, "client", "subject", "")
+			require.NoError(t, err)
+			require.NotEmpty(t, result.Review.ReviewID)
+		})
+	}
+}
