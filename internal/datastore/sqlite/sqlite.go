@@ -3712,9 +3712,21 @@ func (d DatastoreSQLite) GetResourcesAtLastReconcile(stackLabel string) ([]datas
 	// Legacy commands have no command_stacks row and may start before the
 	// stack they create is persisted. The single-incarnation guard below,
 	// not the command timestamp, makes label-based identity recovery safe.
+	// Legacy retries minted new IDs. A later successful reconcile fulfills a
+	// never-created failed attempt of the same identity; retain its command
+	// history, but don't render duplicate declarations or resurrect it after
+	// the successful successor is deleted. Modern intent stays explicit.
 	query := `
 		WITH user_reconcile_updates AS (
 			SELECT ru.ksuid, ru.resource, ru.operation, fc.timestamp, fc.command_id,
+              ru.state AS resource_state,
+              CASE WHEN ru.operation='create' AND ru.state='Failed'
+                AND NOT EXISTS (SELECT 1 FROM command_stacks legacy_cs WHERE legacy_cs.command_id=fc.command_id)
+                AND NOT EXISTS (SELECT 1 FROM resources physical WHERE physical.ksuid=ru.ksuid)
+                THEN 1 ELSE 0 END AS legacy_failed_create,
+              json_extract(ru.resource, '$.Label') AS declared_label,
+              json_extract(ru.resource, '$.Type') AS declared_type,
+              json_extract(ru.resource, '$.Target') AS declared_target, 
               COALESCE((SELECT MAX(cs.stack_id) FROM command_stacks cs WHERE cs.command_id=fc.command_id AND cs.stack_label=ru.stack_label),
                 (SELECT MIN(h.id) FROM stacks h WHERE h.label=ru.stack_label)) AS stack_id
 			FROM resource_updates ru
@@ -3735,7 +3747,7 @@ func (d DatastoreSQLite) GetResourcesAtLastReconcile(stackLabel string) ([]datas
 			AND ru.stack_label = ?
 		),
 		latest_per_ksuid AS (
-			SELECT ksuid, resource, operation, command_id, stack_id,
+			SELECT ksuid, resource, operation, command_id, stack_id, timestamp, legacy_failed_create, declared_label, declared_type, declared_target,
 			       ROW_NUMBER() OVER (
 			           PARTITION BY ksuid
 			           ORDER BY timestamp DESC,
@@ -3746,6 +3758,17 @@ func (d DatastoreSQLite) GetResourcesAtLastReconcile(stackLabel string) ([]datas
 		SELECT ksuid, resource, command_id, stack_id
 		FROM latest_per_ksuid
 		WHERE rn = 1 AND operation NOT IN ('delete', 'accept_delete', 'withdraw')
+          AND NOT (legacy_failed_create=1 AND EXISTS (
+            SELECT 1 FROM user_reconcile_updates successor
+            WHERE successor.timestamp > latest_per_ksuid.timestamp
+              AND successor.ksuid != latest_per_ksuid.ksuid
+              AND successor.stack_id = latest_per_ksuid.stack_id
+              AND successor.declared_label = latest_per_ksuid.declared_label
+              AND successor.declared_type = latest_per_ksuid.declared_type
+              AND successor.declared_target = latest_per_ksuid.declared_target
+              AND successor.resource_state='Success'
+              AND successor.operation IN ('create','update','accept')
+          ))
 		ORDER BY ksuid ASC
 	`
 

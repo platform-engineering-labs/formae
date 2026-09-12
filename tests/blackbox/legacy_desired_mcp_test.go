@@ -88,9 +88,14 @@ forma {
 		old.ModifiedTs = old.StartTs
 		old.ResourceUpdates = append([]resource_update.ResourceUpdate(nil), c.ResourceUpdates...)
 		old.ResourceUpdates[0].DesiredState.Ksuid = util.NewID()
-		old.ResourceUpdates[0].DesiredState.Label = "earlier-failed-create"
+		old.ResourceUpdates[0].DesiredState.Label = "res-a"
 		old.ResourceUpdates[0].State = resource_update.ResourceUpdateStateFailed
 		old.ResourceUpdates[0].Version = ""
+		require.NoError(t, ds.StoreFormaCommand(&old, old.ID))
+		old.ID = util.NewID()
+		old.StartTs = old.StartTs.Add(-time.Hour)
+		old.ModifiedTs = old.StartTs
+		old.ResourceUpdates[0].DesiredState.Ksuid = util.NewID()
 		require.NoError(t, ds.StoreFormaCommand(&old, old.ID))
 		ds.Close()
 		changeResolutionCloud(t, h, "outside")
@@ -101,14 +106,14 @@ forma {
 		var prepared preparedSource
 		require.Empty(t, mcp.call("prepare_authoring", map[string]any{"temporary_directory": t.TempDir(), "stacks": []string{"default"}}, &prepared))
 		desired := evalSharedPkl(t, env, prepared.FilePath)
-		require.Len(t, desired.Resources, 2)
+		require.Len(t, desired.Resources, 1, "successful retry supersedes a legacy failed create of the same logical resource")
 		for _, r := range desired.Resources {
 			require.NotContains(t, string(r.Properties), "outside")
 		}
 		source, e := os.ReadFile(prepared.FilePath)
 		require.NoError(t, e)
 		// SetTags is independent of the out-of-band Value edit, analogous to two
-		// distinct label keys. Keep the old failed declaration available for review.
+		// distinct label keys. The successful retry is the single desired declaration.
 		require.NoError(t, os.WriteFile(prepared.FilePath, regexp.MustCompile(`SetTags = new Listing\s*\{\s*\}`).ReplaceAll(source, []byte(`SetTags = new Listing { "app=demo" }`)), 0600))
 		edited := evalSharedPkl(t, env, prepared.FilePath)
 		require.NotEqual(t, string(desired.Resources[0].Properties), string(edited.Resources[0].Properties))

@@ -603,6 +603,66 @@ func RunDesiredDeclaration(t *testing.T, newDS func(t *testing.T) TestDatastore)
 		require.Equal(t, update.DesiredState.Group, declaration.Group)
 		require.JSONEq(t, string(update.DesiredState.Properties), string(declaration.Properties))
 	})
+	t.Run("DesiredDeclarationLegacyRetry", func(t *testing.T) {
+		for _, scenario := range []string{"successful", "patch", "failed-retry", "different-target", "different-type", "different-label", "physical-history", "modern-intent", "deleted-retry"} {
+			t.Run(scenario, func(t *testing.T) {
+				td := newDS(t)
+				defer func() { _ = td.CleanUpFn() }()
+				stack := &pkgmodel.Stack{Label: "legacy-retry"}
+				_, err := td.CreateStack(stack, "seed")
+				require.NoError(t, err)
+				stack, err = td.GetStackByLabel(stack.Label)
+				require.NoError(t, err)
+				oldID, newID := util.NewID(), util.NewID()
+				old := reconcileBuilder(forma_command.CommandStateFailed, pkgmodel.FormaApplyModeReconcile, -time.Minute, []resource_update.ResourceUpdate{resourceUpdate(stack.Label, oldID, "bucket", `{"foo":"old"}`, types.OperationCreate, resource_update.FormaCommandSourceUser)})
+				old.ResourceUpdates[0].State = resource_update.ResourceUpdateStateFailed
+				if scenario == "modern-intent" {
+					old.Stacks = []forma_command.CommandStack{{ID: stack.ID, Label: stack.Label}}
+				}
+				require.NoError(t, td.StoreFormaCommand(old, old.ID))
+				if scenario == "physical-history" {
+					_, err = td.StoreResource(&old.ResourceUpdates[0].DesiredState, old.ID)
+					require.NoError(t, err)
+				}
+				next := reconcileBuilder(forma_command.CommandStateSuccess, pkgmodel.FormaApplyModeReconcile, -time.Second, []resource_update.ResourceUpdate{resourceUpdate(stack.Label, newID, "bucket", `{"foo":"new"}`, types.OperationCreate, resource_update.FormaCommandSourceUser)})
+				switch scenario {
+				case "patch":
+					next.Config.Mode = pkgmodel.FormaApplyModePatch
+				case "failed-retry":
+					next.State = forma_command.CommandStateFailed
+					next.ResourceUpdates[0].State = resource_update.ResourceUpdateStateFailed
+				case "different-target":
+					next.ResourceUpdates[0].DesiredState.Target = "another"
+				case "different-type":
+					next.ResourceUpdates[0].DesiredState.Type = "AWS::Other"
+				case "different-label":
+					next.ResourceUpdates[0].DesiredState.Label = "another"
+				}
+				require.NoError(t, td.StoreFormaCommand(next, next.ID))
+				if scenario == "deleted-retry" {
+					deleted := destroyBuilder(forma_command.CommandStateSuccess, 0, []resource_update.ResourceUpdate{resourceUpdate(stack.Label, newID, "bucket", `{"foo":"new"}`, types.OperationDelete, resource_update.FormaCommandSourceUser)})
+					require.NoError(t, td.StoreFormaCommand(deleted, deleted.ID))
+				}
+				snapshots, err := td.GetResourcesAtLastReconcile(stack.Label)
+				require.NoError(t, err)
+				var ids []string
+				for _, v := range snapshots {
+					ids = append(ids, v.KSUID)
+				}
+				if scenario == "successful" {
+					require.Equal(t, []string{newID}, ids)
+				} else if scenario == "deleted-retry" {
+					require.Empty(t, ids, "deleting the successful retry must not resurrect its failed predecessor")
+				} else {
+					require.Contains(t, ids, oldID, "only a legacy never-created intent with a successful reconcile successor is superseded")
+				}
+				history, err := td.GetFormaCommandByCommandID(old.ID)
+				require.NoError(t, err)
+				require.Equal(t, forma_command.CommandStateFailed, history.State, "original failure history remains intact")
+			})
+		}
+	})
+
 	t.Run("DesiredDeclarationLegacyReusedStack", func(t *testing.T) {
 		td := newDS(t)
 		defer func(cleanup func() error) { _ = cleanup() }(td.CleanUpFn)
