@@ -312,3 +312,23 @@ func FilterUnabsorbedModifications(
 	}
 	return unabsorbed
 }
+
+// ToAPIResourceModificationForForma filters initial provider defaults from
+// the displayed change set. Full before/after properties remain intact for
+// observation binding and resolution.
+func ToAPIResourceModificationForForma(modification datastore.ResourceModification, forma *pkgmodel.Forma, witness json.RawMessage) apimodel.ResourceModification {
+	result := ToAPIResourceModification(modification)
+	if modification.Operation != "update" || len(modification.OldProperties) == 0 || len(modification.Properties) == 0 {
+		return result
+	}
+	decl := findDeclarationForModification(forma, modification)
+	if decl == nil {
+		return result
+	}
+	if p, err := patch.DriftReviewPatch(modification.OldProperties, modification.Properties, decl.Properties, witness, decl.Schema); err == nil {
+		result.PatchDocument = p
+	} else {
+		slog.Warn("Failed to filter provider defaults from drift display; keeping full patch", "stack", modification.Stack, "label", modification.Label, "error", err)
+	}
+	return result
+}

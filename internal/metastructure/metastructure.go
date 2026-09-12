@@ -445,7 +445,7 @@ func (m *Metastructure) planApplyFormaCore(ds datastore.Datastore, forma *pkgmod
 		for stackLabel, modifications := range modificationsByStack {
 			unabsorbed := drift.FilterUnabsorbedModifications(modifications, forma, fa)
 			unabsorbed = append(unabsorbed, drift.WitnessedMovedModifications(modifications, witnessByKsuid, recordByKsuid, forma, fa)...)
-			unabsorbed = drift.RetainConfrontable(unabsorbed, recordByKsuid, forma)
+			unabsorbed = drift.RetainConfrontable(unabsorbed, recordByKsuid, witnessByKsuid, forma)
 			if len(unabsorbed) > 0 {
 				modifiedResources := make([]apimodel.ResourceModification, 0, len(unabsorbed))
 				for _, modification := range unabsorbed {
@@ -462,7 +462,7 @@ func (m *Metastructure) planApplyFormaCore(ds datastore.Datastore, forma *pkgmod
 					if acceptedDelete {
 						continue
 					}
-					modifiedResources = append(modifiedResources, drift.ToAPIResourceModification(modification))
+					modifiedResources = append(modifiedResources, drift.ToAPIResourceModificationForForma(modification, forma, witnessByKsuid[modification.Ksuid]))
 				}
 				if len(modifiedResources) == 0 {
 					continue
