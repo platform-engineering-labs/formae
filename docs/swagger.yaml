@@ -12,6 +12,12 @@ definitions:
         items:
           $ref: '#/definitions/model.GeneratorUpdate'
         type: array
+      InputProperties:
+        items:
+          type: integer
+        type: array
+      Message:
+        type: string
       Mode:
         description: '"reconcile" | "patch"'
         type: string
@@ -19,6 +25,8 @@ definitions:
         items:
           $ref: '#/definitions/model.PolicyUpdate'
         type: array
+      Resolution:
+        $ref: '#/definitions/model.DriftReview'
       ResourceUpdates:
         items:
           $ref: '#/definitions/model.ResourceUpdate'
@@ -49,6 +57,18 @@ definitions:
       Text:
         type: string
     type: object
+  github_com_platform-engineering-labs_formae_pkg_model.Command:
+    enum:
+    - apply
+    - eval
+    - destroy
+    - sync
+    type: string
+    x-enum-varnames:
+    - CommandApply
+    - CommandEval
+    - CommandDestroy
+    - CommandSync
   github_com_platform-engineering-labs_formae_pkg_model.Description:
     properties:
       Confirm:
@@ -56,6 +76,64 @@ definitions:
       Text:
         type: string
     type: object
+  model.APIError:
+    enum:
+    - DriftResolutionRejected
+    - ConflictingCommands
+    - PatchRejected
+    - ReconcileRejected
+    - CyclesDetected
+    - EmptyStackRejected
+    - TargetAlreadyExists
+    - TargetReaped
+    - ReferencedResourcesNotFound
+    - ReferencedGeneratorsNotFound
+    - RequiredFieldMissingOnCreate
+    - StackReferenceNotFound
+    - TargetReferenceNotFound
+    - InvalidQueryError
+    - StackDeletedDuringApply
+    - ReconcilePolicyRequired
+    - NonPortableResources
+    - PluginNotFound
+    - PluginVersionNotFound
+    - PluginDependencyConflict
+    - PluginRepositoryUnreachable
+    - PluginSignatureInvalid
+    - TargetHasDependents
+    - ResourceHasDependents
+    - GeneratorDestinationsUnreachable
+    - GeneratorBoundToSetOnceField
+    - GeneratorHasDependents
+    type: string
+    x-enum-varnames:
+    - DriftResolutionRejected
+    - ConflictingCommands
+    - PatchRejected
+    - ReconcileRejected
+    - CyclesDetected
+    - EmptyStackRejected
+    - TargetAlreadyExists
+    - TargetReaped
+    - ReferencedResourcesNotFound
+    - ReferencedGeneratorsNotFound
+    - RequiredFieldMissingOnCreate
+    - StackReferenceNotFound
+    - TargetReferenceNotFound
+    - InvalidQuery
+    - StackDeletedDuringApply
+    - ReconcilePolicyRequired
+    - NonPortableResources
+    - PluginNotFound
+    - PluginVersionNotFound
+    - PluginDependencyConflict
+    - PluginRepositoryUnreachable
+    - PluginSignatureInvalid
+    - TargetHasDependents
+    - ResourceHasDependents
+    - GeneratorDestinationsUnreachable
+    - GeneratorBoundToSetOnceField
+    - GeneratorHasDependents
   model.CancelCommandResponse:
     properties:
       CommandIds:
@@ -91,6 +169,34 @@ definitions:
         description: '"Canceled", "InProgress", "Success", "Failed"'
         type: string
     type: object
+  model.CoOwnership:
+    properties:
+      SystemPatterns:
+        description: |-
+          SystemPatterns are glob patterns over member identities naming entries
+          injected by the platform itself. Consulted only by extract on resources
+          with no ownership record; never by plan or drift.
+        items:
+          type: string
+        type: array
+    type: object
+  model.CommandDesiredDelta:
+    properties:
+      CommandId:
+        type: string
+      DeletedResources:
+        items:
+          $ref: '#/definitions/model.DriftObservation'
+        type: array
+      Forma:
+        $ref: '#/definitions/model.Forma'
+      Partial:
+        type: boolean
+      Resolution:
+        $ref: '#/definitions/model.DriftReview'
+      State:
+        type: string
+    type: object
   model.ConfigFieldHint:
     properties:
       CreateOnly:
@@ -103,6 +209,62 @@ definitions:
           $ref: '#/definitions/model.ConfigFieldHint'
         type: object
     type: object
+  model.DriftDecision:
+    properties:
+      Action:
+        description: absorb or revert
+        type: string
+      ResourceID:
+        type: string
+    type: object
+  model.DriftObservation:
+    properties:
+      BaselineCommandID:
+        type: string
+      Kind:
+        description: update, create, or delete
+        type: string
+      Label:
+        type: string
+      ObservedCommandID:
+        type: string
+      ObservedVersion:
+        type: string
+      ResourceID:
+        type: string
+      Stack:
+        type: string
+      StackID:
+        type: string
+      Type:
+        type: string
+    type: object
+  model.DriftResolutionError:
+    properties:
+      Code:
+        type: string
+      CommandId:
+        type: string
+      Reason:
+        type: string
+      ResourceID:
+        type: string
+    type: object
+  model.DriftReview:
+    properties:
+      Decisions:
+        items:
+          $ref: '#/definitions/model.DriftDecision'
+        type: array
+      ObservationID:
+        type: string
+      Observations:
+        items:
+          $ref: '#/definitions/model.DriftObservation'
+        type: array
+      ReviewID:
+        type: string
+    type: object
   model.EdgeKind:
     enum:
     - default
@@ -113,12 +275,38 @@ definitions:
     - EdgeKindDefault
     - EdgeKindAttachesTo
     - EdgeKindRuntimeDependency
+  model.ErrorResponse-model_DriftResolutionError:
+    properties:
+      data:
+        $ref: '#/definitions/model.DriftResolutionError'
+      error:
+        $ref: '#/definitions/model.APIError'
+    type: object
+  model.ExtractionContext:
+    properties:
+      CompleteStacks:
+        items:
+          $ref: '#/definitions/model.Stack'
+        type: array
+      ReferenceGenerators:
+        items:
+          items:
+            type: integer
+          type: array
+        type: array
+    type: object
   model.FieldHint:
     properties:
       AttachesTo:
         description: 'DEPRECATED: kept for one release; engine derives EdgeKind from
           this when set.'
         type: boolean
+      CoOwned:
+        allOf:
+        - $ref: '#/definitions/model.CoOwnership'
+        description: |-
+          CoOwned marks a collection field whose live content legitimately has
+          writers other than this forma. nil = not co-owned.
       CreateOnly:
         type: boolean
       EdgeKind:
@@ -206,6 +394,8 @@ definitions:
     properties:
       Description:
         $ref: '#/definitions/github_com_platform-engineering-labs_formae_pkg_model.Description'
+      Extraction:
+        $ref: '#/definitions/model.ExtractionContext'
       Generators:
         description: Generators, keyed to a stack by their own Stack field
         items:
@@ -237,6 +427,18 @@ definitions:
           $ref: '#/definitions/model.Target'
         type: array
     type: object
+  model.FormaApplyMode:
+    enum:
+    - patch
+    - reconcile
+    - none
+    - properties
+    type: string
+    x-enum-varnames:
+    - FormaApplyModePatch
+    - FormaApplyModeReconcile
+    - FormaApplyModeNone
+    - FormaApplyModeProperties
   model.GeneratorDestination:
     properties:
       ResourceLabel:
@@ -346,6 +548,24 @@ definitions:
           $ref: '#/definitions/model.ResourceModification'
         type: array
     type: object
+  model.OwnedMembers:
+    additionalProperties:
+      $ref: '#/definitions/model.OwnedPathRecord'
+    type: object
+  model.OwnedPathRecord:
+    properties:
+      Members:
+        description: Members are member identities, sorted, in provider spelling.
+        items:
+          type: string
+        type: array
+      Rule:
+        description: |-
+          Rule is the record-compatibility rule the members were computed under
+          (see IdentityRule). A stored record whose Rule no longer matches the
+          field's current hint is stale and must not be trusted for comparison.
+        type: string
+    type: object
   model.ParentMapping:
     properties:
       childProperty:
@@ -436,6 +656,10 @@ definitions:
       Default: {}
       Flag:
         type: string
+      Sensitive:
+        type: boolean
+      Source:
+        type: string
       Type:
         type: string
       Value: {}
@@ -461,6 +685,13 @@ definitions:
         type: boolean
       NativeID:
         type: string
+      OwnedMembers:
+        allOf:
+        - $ref: '#/definitions/model.OwnedMembers'
+        description: |-
+          OwnedMembers records, per co-owned collection field, the set of member
+          identities this forma last declared. Absent (nil) means no field on
+          this resource carries a declared ownership record.
       PatchDocument:
         description: Need this for CLI patch display
         items:
@@ -487,6 +718,16 @@ definitions:
     properties:
       Label:
         type: string
+      ObservedCommand:
+        $ref: '#/definitions/github_com_platform-engineering-labs_formae_pkg_model.Command'
+      ObservedCommandID:
+        type: string
+      ObservedMode:
+        $ref: '#/definitions/model.FormaApplyMode'
+      ObservedSource:
+        type: string
+      ObservedVersion:
+        type: string
       OldProperties:
         description: properties at last reconcile — update ops only
         items:
@@ -505,7 +746,11 @@ definitions:
         items:
           type: integer
         type: array
+      ResourceID:
+        type: string
       Stack:
+        type: string
+      StackID:
         type: string
       Type:
         type: string
@@ -685,6 +930,10 @@ definitions:
     properties:
       AgentId:
         type: string
+      Capabilities:
+        items:
+          type: string
+        type: array
       Clients:
         type: integer
       Commands:
@@ -741,6 +990,8 @@ definitions:
         type: string
       Description:
         $ref: '#/definitions/github_com_platform-engineering-labs_formae_pkg_api_model.Description'
+      Review:
+        $ref: '#/definitions/model.DriftReview'
       Simulation:
         $ref: '#/definitions/model.Simulation'
     type: object
@@ -754,6 +1005,11 @@ definitions:
         $ref: '#/definitions/model.ConfigSchema'
       Discoverable:
         type: boolean
+      ExecutionIncarnation:
+        description: |-
+          ExecutionIncarnation is nonsecret internal resource-update provenance.
+          Apply planning discards client supplied values and pins datastore evidence.
+        type: string
       Label:
         type: string
       Namespace:
@@ -948,6 +1204,10 @@ paths:
         name: command
         required: true
         type: string
+      - description: Optional human-readable reason for the command.
+        in: formData
+        name: message
+        type: string
       - description: Only applies to the apply command. The desired command mode,
           either reconcile or patch.
         in: formData
@@ -964,6 +1224,14 @@ paths:
         in: formData
         name: force
         type: boolean
+      - description: 'JSON drift-resolution controls for soft reconcile: ObservationID,
+          Decisions [{ResourceID, Action (absorb or revert)}], ReviewID, IdempotencyKey.
+          Simulate the final choices first; real submission requires its ReviewID
+          and a stable IdempotencyKey. Mutually exclusive with force. Requires shared-drift-resolution
+          capability.'
+        in: formData
+        name: resolution
+        type: string
       - description: Only applies to destroy commands. A query string to select the
           resources to be destroyed.
         in: formData
@@ -995,11 +1263,59 @@ paths:
               type: string
           schema:
             $ref: '#/definitions/model.SubmitCommandResponse'
+        "409":
+          description: 'Conflict: drift resolution rejected; inspect data.Code and
+            data.Reason before retrying.'
+          schema:
+            $ref: '#/definitions/model.ErrorResponse-model_DriftResolutionError'
         "500":
           description: Internal Server Error.
           schema:
             type: string
       summary: Submit a Forma command
+      tags:
+      - commands
+  /commands/{id}/desired-delta:
+    get:
+      description: Returns partial recorded desired intent for source catch-up. This
+        is not a complete reconcile declaration. Requires shared-drift-resolution
+        capability.
+      parameters:
+      - description: Unique identifier for the client.
+        in: header
+        name: Client-ID
+        required: true
+        type: string
+      - description: Command ID returned by the accepted submission.
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: Partial desired source guidance and command state.
+          schema:
+            $ref: '#/definitions/model.CommandDesiredDelta'
+        "400":
+          description: 'Bad Request: missing Client-ID or invalid command.'
+          schema:
+            type: string
+        "409":
+          description: 'Conflict: resolution receipt or terminal desired intent is
+            unavailable; inspect data.Code and data.Reason.'
+          schema:
+            $ref: '#/definitions/model.ErrorResponse-model_DriftResolutionError'
+        "500":
+          description: 'Internal Server Error: command lookup or extraction failed.'
+          schema:
+            type: string
+        "501":
+          description: 'Not Implemented: shared drift resolution unavailable.'
+          schema:
+            type: string
+      summary: Get a command's desired source delta
       tags:
       - commands
   /commands/cancel:
@@ -1166,6 +1482,15 @@ paths:
         in: query
         name: query
         required: true
+        type: string
+      - description: Extraction state. desired requires desired-stack-extraction capability
+          and complete stack selectors; returns accepted declarations including complete
+          empty stacks. Defaults to actual inventory.
+        enum:
+        - actual
+        - desired
+        in: query
+        name: state
         type: string
       produces:
       - application/json

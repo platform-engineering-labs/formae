@@ -1,0 +1,113 @@
+//go:build unit
+
+// © 2026 Platform Engineering Labs Inc.
+// SPDX-License-Identifier: FSL-1.1-ALv2
+
+package metastructure
+
+import (
+	"testing"
+	"time"
+
+	"github.com/platform-engineering-labs/formae/internal/datastore"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
+	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
+	"github.com/stretchr/testify/require"
+)
+
+func TestResolutionExternalOnlyRequiresCompleteHistory(t *testing.T) {
+	for _, kind := range []string{"sync-only", "patch-then-sync", "unknown-then-sync", "accepted-patch-then-sync", "failed-baseline-then-sync", "external-delete", "failed-patch-then-sync", "accepted-failed-patch-then-sync", "patch-after-observation"} {
+		t.Run(kind, func(t *testing.T) {
+			m, _, f, _ := scopedFixture(t)
+			r, err := m.Datastore.LoadResourceById("a")
+			require.NoError(t, err)
+			baselineID := util.NewID()
+			version, err := m.Datastore.StoreResource(r, baselineID)
+			require.NoError(t, err)
+			stack, err := m.Datastore.GetStackByLabel("a")
+			require.NoError(t, err)
+			baseline := &forma_command.FormaCommand{ID: baselineID, Command: pkgmodel.CommandApply, Source: forma_command.SourceUser, Config: config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, State: forma_command.CommandStateSuccess, StartTs: time.Now(), ModifiedTs: time.Now(), Stacks: []forma_command.CommandStack{{ID: stack.ID, Label: "a"}}, ResourceUpdates: []resource_update.ResourceUpdate{{DesiredState: *r, Version: version, Source: resource_update.FormaCommandSourceUser, StackLabel: "a", Operation: resource_update.OperationUpdate, State: resource_update.ResourceUpdateStateSuccess}}}
+			if kind == "failed-baseline-then-sync" {
+				baseline.State = forma_command.CommandStateFailed
+				baseline.ResourceUpdates[0].State = resource_update.ResourceUpdateStateFailed
+				baseline.ResourceUpdates[0].DesiredState.Properties = []byte(`{"name":"failed-intent"}`)
+			}
+			require.NoError(t, m.Datastore.StoreFormaCommand(baseline, baselineID))
+			f.Resources[0].Properties = append([]byte(nil), r.Properties...)
+			write := func(command pkgmodel.Command, source forma_command.Source, mode pkgmodel.FormaApplyMode, props string) {
+				id := util.NewID()
+				c := &forma_command.FormaCommand{ID: id, Command: command, Source: source, Config: config.FormaCommandConfig{Mode: mode}, State: forma_command.CommandStateSuccess, StartTs: time.Now(), ModifiedTs: time.Now()}
+				require.NoError(t, m.Datastore.StoreFormaCommand(c, id))
+				r.Properties = []byte(props)
+				_, err := m.Datastore.StoreResource(r, id)
+				require.NoError(t, err)
+			}
+			if kind == "patch-then-sync" || kind == "accepted-patch-then-sync" {
+				write(pkgmodel.CommandApply, forma_command.SourceUser, pkgmodel.FormaApplyModePatch, `{"name":"patched"}`)
+			}
+			if kind == "failed-patch-then-sync" || kind == "accepted-failed-patch-then-sync" {
+				id := util.NewID()
+				failed := *baseline
+				failed.ID = id
+				failed.Config.Mode = pkgmodel.FormaApplyModePatch
+				failed.State = forma_command.CommandStateFailed
+				failed.StartTs = time.Now()
+				failed.ModifiedTs = failed.StartTs
+				failed.ResourceUpdates = []resource_update.ResourceUpdate{{DesiredState: *r, Source: resource_update.FormaCommandSourceUser, StackLabel: "a", Operation: resource_update.OperationUpdate, State: resource_update.ResourceUpdateStateFailed}}
+				failed.ResourceUpdates[0].DesiredState.Properties = []byte(`{"name":"firefight"}`)
+				require.NoError(t, m.Datastore.StoreFormaCommand(&failed, id))
+			}
+			if kind == "accepted-patch-then-sync" || kind == "accepted-failed-patch-then-sync" {
+				observed, e := m.Datastore.(datastore.ResourceObservationReader).GetResourceObservation("a")
+				require.NoError(t, e)
+				accepted := *baseline
+				accepted.ID = util.NewID()
+				accepted.StartTs = time.Now()
+				accepted.ModifiedTs = accepted.StartTs
+				accepted.ResourceUpdates = []resource_update.ResourceUpdate{{DesiredState: *r, Version: observed.Version, Source: resource_update.FormaCommandSourceUser, StackLabel: "a", Operation: resource_update.OperationAccept, State: resource_update.ResourceUpdateStateSuccess}}
+				require.NoError(t, m.Datastore.StoreFormaCommand(&accepted, accepted.ID))
+				f.Resources[0].Properties = append([]byte(nil), r.Properties...)
+			}
+			if kind == "unknown-then-sync" {
+				r.Properties = []byte(`{"name":"unknown-origin"}`)
+				_, err := m.Datastore.StoreResource(r, "missing-command")
+				require.NoError(t, err)
+			}
+			// Synchronizer commands use patch mode internally; a user patch is
+			// distinguished by its apply command and user source, not this mode.
+			write(pkgmodel.CommandSync, forma_command.SourceSynchronizer, pkgmodel.FormaApplyModePatch, `{"name":"external"}`)
+			if kind == "external-delete" {
+				id := util.NewID()
+				c := &forma_command.FormaCommand{ID: id, Command: pkgmodel.CommandSync, Source: forma_command.SourceSynchronizer, State: forma_command.CommandStateSuccess, StartTs: time.Now(), ModifiedTs: time.Now()}
+				require.NoError(t, m.Datastore.StoreFormaCommand(c, id))
+				_, err := m.Datastore.DeleteResource(r, id)
+				require.NoError(t, err)
+			}
+			observation := observeResolution(t, m, f)
+			got := observation.ModifiedStacks["a"].ModifiedResources[0]
+			require.Equal(t, kind == "sync-only" || kind == "accepted-patch-then-sync" || kind == "external-delete" || kind == "accepted-failed-patch-then-sync" || kind == "patch-after-observation", got.ExternalChangesOnly)
+			if kind == "patch-after-observation" {
+				opts := &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: true, Resolution: &pkgmodel.DriftResolution{ObservationID: observation.ObservationID, Decisions: []pkgmodel.DriftDecision{{ResourceID: "a", Action: "absorb"}}}}
+				_, err = m.ApplyForma(f, opts, "client", "subject", "")
+				require.NoError(t, err)
+				failed := *baseline
+				failed.ID = util.NewID()
+				failed.Config.Mode = pkgmodel.FormaApplyModePatch
+				failed.State = forma_command.CommandStateFailed
+				failed.StartTs = time.Now()
+				failed.ModifiedTs = failed.StartTs
+				failed.ResourceUpdates = []resource_update.ResourceUpdate{{DesiredState: *r, Source: resource_update.FormaCommandSourceUser, StackLabel: "a", Operation: resource_update.OperationUpdate, State: resource_update.ResourceUpdateStateFailed}}
+				failed.ResourceUpdates[0].DesiredState.Properties = []byte(`{"name":"firefight"}`)
+				require.NoError(t, m.Datastore.StoreFormaCommand(&failed, failed.ID))
+				current := observeResolution(t, m, f)
+				require.False(t, current.ModifiedStacks["a"].ModifiedResources[0].ExternalChangesOnly)
+				require.Equal(t, got.ObservedVersion, current.ModifiedStacks["a"].ModifiedResources[0].ObservedVersion)
+				_, err = m.ApplyForma(f, opts, "client", "subject", "")
+				require.ErrorContains(t, err, "stale-review", "an automatic choice made before a failed patch requires a fresh decision")
+			}
+		})
+	}
+}

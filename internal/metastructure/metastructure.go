@@ -39,6 +39,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/policy_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/querier"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/reaping"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/stack_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/target_reaper"
@@ -85,6 +86,10 @@ type Metastructure struct {
 	Datastore datastore.Datastore
 	Cfg       *pkgmodel.Config
 	AgentID   string
+
+	// Exact prevalidated dispatch inputs retained across uncertain commit replies.
+	// Protected by commandMu; never an authoritative command/cache snapshot.
+	pendingApplyDispatch map[string]*changeset.Changeset
 
 	// TestResourcePlugin is a test-only field for injecting a resource plugin (e.g. FakeAWS)
 	// directly into the actor system. Must be nil in production.
@@ -334,9 +339,14 @@ func (m *Metastructure) callActor(targetPID gen.ProcessID, message any) (any, er
 	}
 }
 
-func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string, subject string, subjectName string) (*apimodel.SubmitCommandResponse, error) {
-	m.commandMu.Lock()
-	defer m.commandMu.Unlock()
+func (m *Metastructure) planApplyForma(ds datastore.Datastore, forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string, subject string, subjectName string) (*guardedApplyPlan, error) {
+	if config.Resolution != nil {
+		return m.planResolution(ds, forma, config, clientID, subject, subjectName)
+	}
+	return m.planApplyFormaCore(ds, forma, config, clientID, subject, subjectName, nil)
+}
+func (m *Metastructure) planApplyFormaCore(ds datastore.Datastore, forma *pkgmodel.Forma, config *config.FormaCommandConfig, clientID string, subject string, subjectName string, resolved map[string]string) (*guardedApplyPlan, error) {
+	observationInput := ownPlanningValue(forma)
 
 	// Check for conflicting commands BEFORE generating resource updates. This ordering is
 	// critical: the resource queries in FormaCommandFromForma must run after any concurrent
@@ -360,6 +370,10 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 		}
 	}
 
+	if err := pinReapedRecoveryIdentities(ds, forma); err != nil {
+		return nil, err
+	}
+
 	// A forced reconcile asserts the write witness (the state formae's own
 	// last write observed, which sync never refreshes) into the desired
 	// state before planning, so witnessed out-of-band movement is reverted
@@ -376,14 +390,14 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 		// one shared loader for both records.
 		assertRecords := make(map[string]pkgmodel.OwnedMembers)
 		for _, stackLabel := range drift.StackLabelsFromForma(forma) {
-			if err := drift.LoadModificationsAndWitnesses(m.Datastore, stackLabel, assertMods, assertWitnesses, assertRecords); err != nil {
+			if err := drift.LoadModificationsAndWitnesses(ds, stackLabel, assertMods, assertWitnesses, assertRecords); err != nil {
 				return nil, err
 			}
 		}
 		forma = drift.AssertWitnessesIntoForma(forma, assertMods, assertWitnesses)
 	}
 
-	fa, err := FormaCommandFromForma(forma, config, pkgmodel.CommandApply, m.Datastore, clientID, subject, subjectName, resource_update.FormaCommandSourceUser, m.Cfg.Agent.Synchronization.Interval)
+	fa, err := FormaCommandFromForma(forma, config, pkgmodel.CommandApply, ds, clientID, subject, subjectName, resource_update.FormaCommandSourceUser, m.Cfg.Agent.Synchronization.Interval)
 	if err != nil {
 		if requiredFieldsErr, ok := err.(apimodel.RequiredFieldMissingOnCreateError); ok {
 			return nil, requiredFieldsErr
@@ -398,6 +412,12 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 		return nil, err
 	}
 
+	if config.Mode == pkgmodel.FormaApplyModeReconcile {
+		if err := addOmittedDesiredAcceptances(ds, forma, fa); err != nil {
+			return nil, err
+		}
+	}
+
 	// Drift rejection runs before the no-changes return: a drift-only soft
 	// reconcile must confront, not report "no changes". Out-of-band movement
 	// on provider-default content formae's own write witnessed is drift like
@@ -405,8 +425,8 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 	// defaults, runtime registrations) stays the infrastructure's business
 	// and never rejects. The snapshot is loaded AFTER planning so drift a
 	// sync persists mid-submission is still confronted rather than silently
-	// overwritten; a sync landing after this check keeps the pre-existing
-	// race window.
+	// overwritten. The enclosing certified interval and guarded admission also
+	// reject a covered sync write after this check.
 	if config.Mode == pkgmodel.FormaApplyModeReconcile && !config.Force {
 		modificationsByStack := make(map[string][]datastore.ResourceModification)
 		witnessByKsuid := make(map[string]json.RawMessage)
@@ -417,7 +437,7 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 				continue
 			}
 			seenStacks[stackLabel] = true
-			if err := drift.LoadModificationsAndWitnesses(m.Datastore, stackLabel, modificationsByStack, witnessByKsuid, recordByKsuid); err != nil {
+			if err := drift.LoadModificationsAndWitnesses(ds, stackLabel, modificationsByStack, witnessByKsuid, recordByKsuid); err != nil {
 				return nil, err
 			}
 		}
@@ -425,11 +445,27 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 		for stackLabel, modifications := range modificationsByStack {
 			unabsorbed := drift.FilterUnabsorbedModifications(modifications, forma, fa)
 			unabsorbed = append(unabsorbed, drift.WitnessedMovedModifications(modifications, witnessByKsuid, recordByKsuid, forma, fa)...)
-			unabsorbed = drift.RetainConfrontable(unabsorbed, recordByKsuid, forma)
+			unabsorbed = drift.RetainConfrontable(unabsorbed, recordByKsuid, witnessByKsuid, forma)
 			if len(unabsorbed) > 0 {
 				modifiedResources := make([]apimodel.ResourceModification, 0, len(unabsorbed))
 				for _, modification := range unabsorbed {
-					modifiedResources = append(modifiedResources, drift.ToAPIResourceModification(modification))
+					if resolved[modification.Ksuid] != "" {
+						continue
+					}
+					acceptedDelete := false
+					for _, u := range fa.ResourceUpdates {
+						if u.DesiredState.Ksuid == modification.Ksuid && u.Operation == resource_update.OperationAcceptDelete {
+							acceptedDelete = true
+							break
+						}
+					}
+					if acceptedDelete {
+						continue
+					}
+					modifiedResources = append(modifiedResources, drift.ToAPIResourceModificationForForma(modification, forma, witnessByKsuid[modification.Ksuid]))
+				}
+				if len(modifiedResources) == 0 {
+					continue
 				}
 				modifiedStacks[stackLabel] = apimodel.ModifiedStack{
 					ModifiedResources: modifiedResources,
@@ -437,39 +473,61 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 			}
 		}
 		if len(modifiedStacks) > 0 {
-			return nil, apimodel.FormaReconcileRejectedError{ModifiedStacks: modifiedStacks}
+			rejected, _, bindErr := bindDriftObservation(ds, observationInput, config, apimodel.FormaReconcileRejectedError{ModifiedStacks: modifiedStacks})
+			if bindErr != nil {
+				return nil, bindErr
+			}
+			return nil, rejected
 		}
+		if err := drift.AddDeclaredAcceptances(ds, modificationsByStack, forma, fa); err != nil {
+			return nil, err
+		}
+
+	}
+
+	// An absorbed ownership-only change belongs to desired metadata. Persisting
+	// an ordinary record-only update would create an identical inventory version.
+	for i := range fa.ResourceUpdates {
+		u := &fa.ResourceUpdates[i]
+		if resolved[u.DesiredState.Ksuid] != "absorb" || !u.RecordOnly {
+			continue
+		}
+		observation, e := ds.(datastore.ResourceObservationReader).GetResourceObservation(u.DesiredState.Ksuid)
+		if e != nil {
+			return nil, e
+		}
+		if observation == nil || observation.Resource == nil {
+			return nil, datastore.ErrStaleAdmission
+		}
+		u.Operation = resource_update.OperationAccept
+		u.State = resource_update.ResourceUpdateStateSuccess
+		u.Version = observation.Version
+		u.RecordOnly = false
+		u.DesiredState.PatchDocument = nil
 	}
 
 	if !fa.HasChanges() {
-		return &apimodel.SubmitCommandResponse{
+		return &guardedApplyPlan{Command: fa, Response: &apimodel.SubmitCommandResponse{
 			CommandID:   fa.ID,
 			Description: apimodel.Description(fa.Description),
 			Simulation: apimodel.Simulation{
 				ChangesRequired: false,
 				Command:         apimodel.Command{},
 			},
-		}, nil
+		}}, nil
 	}
 
 	// Create changeset early to catch validation errors before simulate
 	var cs changeset.Changeset
-	if len(fa.ResourceUpdates) > 0 || len(fa.TargetUpdates) > 0 {
+	if fa.HasExecutableChanges() {
 		synth, synthErr := target_update.SynthesizeResolveTargetUpdates(
 			resource_update.ReferencedTargetLabels(fa.ResourceUpdates),
 			resource_update.SourceTargetByKsuid(fa.ResourceUpdates),
-			fa.TargetUpdates, m.Datastore)
+			fa.TargetUpdates, ds)
 		if synthErr != nil {
 			return nil, synthErr
 		}
 		cs, err = changeset.NewChangeset(fa.ResourceUpdates, append(fa.TargetUpdates, synth...), fa.DrawGeneratorUpdates, fa.ID, fa.Command, config.Mode)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	if config.Mode == pkgmodel.FormaApplyModePatch {
-		err = m.checkIfPatchCanBeApplied(fa)
 		if err != nil {
 			return nil, err
 		}
@@ -481,9 +539,16 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 		return nil, err
 	}
 
+	if config.Mode == pkgmodel.FormaApplyModePatch {
+		err = m.checkIfPatchCanBeApplied(fa)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	if config.Simulate {
 		var warnings []string
-		allByStack, loadErr := m.Datastore.LoadAllResourcesByStack()
+		allByStack, loadErr := ds.LoadAllResourcesByStack()
 		if loadErr != nil {
 			slog.Warn("Failed to load resources for simulate warning", "error", loadErr)
 		}
@@ -509,7 +574,7 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 			}
 		}
 
-		return &apimodel.SubmitCommandResponse{
+		return &guardedApplyPlan{Command: fa, Response: &apimodel.SubmitCommandResponse{
 			CommandID:   fa.ID,
 			Description: apimodel.Description(fa.Description),
 			Simulation: apimodel.Simulation{
@@ -517,270 +582,26 @@ func (m *Metastructure) ApplyForma(forma *pkgmodel.Forma, config *config.FormaCo
 				Command:         translateToAPICommand(fa),
 				Warnings:        warnings,
 			},
-		}, nil
+		}}, nil
 	}
 
-	m.Node.Log().Debug("Storing forma command commandID=%s", fa.ID)
-	_, err = m.callActor(
-		gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
-		forma_persister.StoreNewFormaCommand{Command: *fa},
-	)
-	if err != nil {
-		slog.Error("Failed to store forma command", "error", err)
-		return nil, fmt.Errorf("failed to store forma command: %w", err)
-	}
-
-	if len(fa.StackUpdates) > 0 {
-		_, err = m.callActor(
-			gen.ProcessID{Name: actornames.ResourcePersister, Node: m.Node.Name()},
-			stack_update.PersistStackUpdates{
-				StackUpdates: fa.StackUpdates,
-				CommandID:    fa.ID,
-			},
-		)
-		if err != nil {
-			slog.Error("Failed to persist stack updates", "error", err)
-			return nil, fmt.Errorf("failed to persist stack updates: %w", err)
-		}
-		m.Node.Log().Debug("Successfully persisted stack updates count=%d", len(fa.StackUpdates))
-
-		_, err = m.callActor(
-			gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
-			messages.UpdateStackStates{
-				CommandID:    fa.ID,
-				StackUpdates: fa.StackUpdates,
-			},
-		)
-		if err != nil {
-			slog.Error("Failed to update forma command with stack states", "error", err)
-			return nil, fmt.Errorf("failed to update forma command with stack states: %w", err)
-		}
-	}
-
-	if len(fa.PolicyUpdates) > 0 {
-		// Build StackIDMap from persisted stack updates
-		stackIDMap := make(map[string]string)
-		for _, su := range fa.StackUpdates {
-			if su.Stack.ID != "" {
-				stackIDMap[su.Stack.Label] = su.Stack.ID
-			}
-		}
-
-		// For inline policies whose stacks aren't in the map (existing stacks with no changes),
-		// look up the stack ID from the database
-		for _, pu := range fa.PolicyUpdates {
-			if pu.StackLabel != "" {
-				if _, ok := stackIDMap[pu.StackLabel]; !ok {
-					stack, err := m.Datastore.GetStackByLabel(pu.StackLabel)
-					if err != nil {
-						return nil, fmt.Errorf("failed to look up stack %q for policy update: %w", pu.StackLabel, err)
-					}
-					if stack != nil {
-						stackIDMap[pu.StackLabel] = stack.ID
-					} else {
-						// STOPGAP: The stack was deleted by a concurrent command between conflict check
-						// and policy persist. This race is possible because stack/target/policy updates
-						// are persisted outside the changeset execution DAG. The correct fix is to
-						// incorporate these updates into the changeset so they are executed atomically
-						// with resource updates. For now, fail the stored command to prevent it from
-						// being orphaned in NotStarted state.
-						slog.Warn("Stack deleted during apply setup, failing stored command",
-							"commandID", fa.ID, "stackLabel", pu.StackLabel)
-						refs := make([]forma_persister.ResourceUpdateRef, len(fa.ResourceUpdates))
-						for i, ru := range fa.ResourceUpdates {
-							refs[i] = forma_persister.ResourceUpdateRef{
-								URI:       ru.DesiredState.URI(),
-								Operation: ru.Operation,
-							}
-						}
-						_, markErr := m.callActor(
-							gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
-							forma_persister.MarkResourcesAsFailed{
-								CommandID:          fa.ID,
-								Resources:          refs,
-								ResourceModifiedTs: time.Now(),
-							},
-						)
-						if markErr != nil {
-							slog.Error("Failed to mark resources as failed after stack deletion",
-								"commandID", fa.ID, "stackLabel", pu.StackLabel, "error", markErr)
-						}
-						return nil, apimodel.StackDeletedDuringApplyError{StackLabel: pu.StackLabel}
-					}
-				}
-			}
-		}
-
-		_, err = m.callActor(
-			gen.ProcessID{Name: actornames.ResourcePersister, Node: m.Node.Name()},
-			policy_update.PersistPolicyUpdates{
-				PolicyUpdates: fa.PolicyUpdates,
-				CommandID:     fa.ID,
-				StackIDMap:    stackIDMap,
-			},
-		)
-		if err != nil {
-			slog.Error("Failed to persist policy updates", "error", err)
-			return nil, fmt.Errorf("failed to persist policy updates: %w", err)
-		}
-		m.Node.Log().Debug("Successfully persisted policy updates count=%d", len(fa.PolicyUpdates))
-
-		_, err = m.callActor(
-			gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
-			messages.UpdatePolicyStates{
-				CommandID:     fa.ID,
-				PolicyUpdates: fa.PolicyUpdates,
-			},
-		)
-		if err != nil {
-			slog.Error("Failed to update forma command with policy states", "error", err)
-			return nil, fmt.Errorf("failed to update forma command with policy states: %w", err)
-		}
-	}
-
-	if len(fa.GeneratorUpdates) > 0 {
-		// A generator has no standalone form, so every update is stack-scoped —
-		// unlike the policy StackIDMap above there is no "empty = standalone"
-		// case to skip. Build it the same way: prefer a stack this same command
-		// just created or updated, else resolve the label from the datastore.
-		stackIDMap := make(map[string]string)
-		for _, su := range fa.StackUpdates {
-			if su.Stack.ID != "" {
-				stackIDMap[su.Stack.Label] = su.Stack.ID
-			}
-		}
-
-		for _, gu := range fa.GeneratorUpdates {
-			if _, ok := stackIDMap[gu.StackLabel]; ok {
-				continue
-			}
-			stack, err := m.Datastore.GetStackByLabel(gu.StackLabel)
-			if err != nil {
-				return nil, fmt.Errorf("failed to look up stack %q for generator update: %w", gu.StackLabel, err)
-			}
-			if stack != nil {
-				stackIDMap[gu.StackLabel] = stack.ID
-				continue
-			}
-			// STOPGAP: the stack was deleted by a concurrent command between
-			// conflict check and generator persist. See the identical race
-			// noted on the policy StackIDMap above.
-			slog.Warn("Stack deleted during apply setup, failing stored command",
-				"commandID", fa.ID, "stackLabel", gu.StackLabel)
-			refs := make([]forma_persister.ResourceUpdateRef, len(fa.ResourceUpdates))
-			for i, ru := range fa.ResourceUpdates {
-				refs[i] = forma_persister.ResourceUpdateRef{
-					URI:       ru.DesiredState.URI(),
-					Operation: ru.Operation,
-				}
-			}
-			_, markErr := m.callActor(
-				gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
-				forma_persister.MarkResourcesAsFailed{
-					CommandID:          fa.ID,
-					Resources:          refs,
-					ResourceModifiedTs: time.Now(),
-				},
-			)
-			if markErr != nil {
-				slog.Error("Failed to mark resources as failed after stack deletion",
-					"commandID", fa.ID, "stackLabel", gu.StackLabel, "error", markErr)
-			}
-			return nil, apimodel.StackDeletedDuringApplyError{StackLabel: gu.StackLabel}
-		}
-
-		_, err = m.callActor(
-			gen.ProcessID{Name: actornames.ResourcePersister, Node: m.Node.Name()},
-			generator_update.PersistGeneratorUpdates{
-				GeneratorUpdates: fa.GeneratorUpdates,
-				CommandID:        fa.ID,
-				StackIDMap:       stackIDMap,
-			},
-		)
-		if err != nil {
-			slog.Error("Failed to persist generator updates", "error", err)
-			return nil, fmt.Errorf("failed to persist generator updates: %w", err)
-		}
-		m.Node.Log().Debug("Successfully persisted generator updates count=%d", len(fa.GeneratorUpdates))
-
-		// Unlike PolicyUpdates and StackUpdates, GeneratorUpdates is not
-		// round-tripped through the forma_commands table: that table's
-		// resource/target/stack/policy update snapshots live in dedicated
-		// columns (see StoreFormaCommand), and adding a generator_updates
-		// column is command-status observability, not part of connecting
-		// Forma.Generators to the datastore. The generator writes themselves
-		// (CreateGenerator/UpdateGenerator/DeleteGenerator, just above) are
-		// fully durable regardless.
-
-		// A command whose only work is generator work has now done all of it,
-		// and nothing downstream will ever move it off NotStarted: the
-		// changeset executor below starts only for resource or target
-		// updates, and a generator update has no state message of its own to
-		// recompute the command state the way UpdateStackStates and
-		// UpdatePolicyStates do for theirs. Left alone the command sits
-		// incomplete forever, which is worse than failing: it never
-		// self-heals, and dropping an unreferenced generator from a forma is
-		// an ordinary edit. Finalize it here instead, which recomputes the
-		// command state over its (empty) resource updates and reads Success.
-		//
-		// A failure to finalize is logged rather than returned: the generator
-		// writes are already durable, so reporting the apply as failed would
-		// misdescribe it, and the recovery sweep finalizes the command on the
-		// agent's next start.
-		if len(fa.ResourceUpdates) == 0 && len(fa.TargetUpdates) == 0 {
-			if _, ferr := m.callActor(
-				gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
-				forma_persister.FinalizeIncompleteCommand{CommandID: fa.ID},
-			); ferr != nil {
-				slog.Error("Failed to finalize a generator-only command",
-					"commandID", fa.ID, "error", ferr)
-			}
-		}
-	}
-
-	if len(fa.ResourceUpdates) > 0 || len(fa.TargetUpdates) > 0 {
-		m.Node.Log().Debug("Starting ChangesetExecutor of changeset from forma command commandID=%s", fa.ID)
-		_, err = m.callActor(
-			gen.ProcessID{Name: actornames.ChangesetSupervisor, Node: m.Node.Name()},
-			changeset.EnsureChangesetExecutor{CommandID: fa.ID},
-		)
-		if err != nil {
-			slog.Error("Failed to ensure ChangesetExecutor for forma command", "command", fa.Command, "forma", fa, "error", err)
-			return nil, fmt.Errorf("failed to ensure ChangesetExecutor: %w", err)
-		}
-
-		m.Node.Log().Debug("Sending Start message to ChangesetExecutor commandID=%s", fa.ID)
-		err = m.Node.Send(
-			gen.ProcessID{Name: actornames.ChangesetExecutor(fa.ID), Node: m.Node.Name()},
-			changeset.Start{Changeset: cs},
-		)
-		if err != nil {
-			slog.Error("Failed to start ChangesetExecutor for forma command", "command", fa.Command, "forma", fa, "error", err)
-			return nil, fmt.Errorf("failed to start ChangesetExecutor: %w", err)
-		}
-	}
-
-	return &apimodel.SubmitCommandResponse{
-		CommandID:   fa.ID,
-		Description: apimodel.Description(fa.Description),
-		Simulation: apimodel.Simulation{
-			ChangesRequired: fa.HasChanges(),
-			Command:         translateToAPICommand(fa),
-		},
-	}, nil
+	return &guardedApplyPlan{Command: fa, Changeset: cs, Response: &apimodel.SubmitCommandResponse{CommandID: fa.ID, Description: apimodel.Description(fa.Description), Simulation: apimodel.Simulation{ChangesRequired: fa.HasChanges(), Command: translateToAPICommand(fa)}}}, nil
 }
 
 func translateToAPICommand(fa *forma_command.FormaCommand) apimodel.Command {
 	apiCommand := apimodel.Command{
-		CommandID:   fa.ID,
-		Command:     string(fa.Command),
-		Mode:        string(fa.Config.Mode),
-		Source:      string(fa.Source),
-		Subject:     fa.Subject,
-		SubjectName: fa.SubjectName,
-		State:       string(fa.State),
-		StartTs:     fa.StartTs,
-		EndTs:       fa.ModifiedTs,
+		Resolution:      ownPlanningValue(fa.Resolution),
+		Message:         fa.Message,
+		InputProperties: append(json.RawMessage(nil), fa.InputProperties...),
+		CommandID:       fa.ID,
+		Command:         string(fa.Command),
+		Mode:            string(fa.Config.Mode),
+		Source:          string(fa.Source),
+		Subject:         fa.Subject,
+		SubjectName:     fa.SubjectName,
+		State:           string(fa.State),
+		StartTs:         fa.StartTs,
+		EndTs:           fa.ModifiedTs,
 	}
 	for _, ru := range fa.ResourceUpdates {
 		var dur time.Duration = 0
@@ -1129,7 +950,7 @@ func (m *Metastructure) DestroyForma(forma *pkgmodel.Forma, config *config.Forma
 		m.Node.Log().Debug("Successfully persisted generator updates count=%d", len(fa.GeneratorUpdates))
 	}
 
-	if len(fa.ResourceUpdates) > 0 || len(fa.TargetUpdates) > 0 {
+	if fa.HasExecutableChanges() {
 		synth, synthErr := target_update.SynthesizeResolveTargetUpdates(
 			resource_update.ReferencedTargetLabels(fa.ResourceUpdates),
 			resource_update.SourceTargetByKsuid(fa.ResourceUpdates),
@@ -1545,7 +1366,7 @@ func (m *Metastructure) resolveReferencedGenerators(
 }
 
 func (m *Metastructure) ListDrift(stack string) (*apimodel.ModifiedStack, error) {
-	modifications, err := m.Datastore.GetResourceModificationsSinceLastReconcile(stack)
+	modifications, err := drift.LoadModifications(m.Datastore, stack)
 	if err != nil {
 		slog.Error("Failed to get drift for stack", "stack", stack, "error", err)
 		return nil, fmt.Errorf("failed to get drift for stack %s: %w", stack, err)
@@ -1747,112 +1568,28 @@ func (m *Metastructure) ReRunIncompleteCommands() error {
 		slog.Error("Failed to read incomplete forma commands", "error", err)
 		return err
 	}
+	// Preflight the complete batch before starting any actor/provider work.
+	for _, command := range commands {
+		if err := command.CheckSetupRecovery(); err != nil {
+			return err
+		}
+	}
 	if len(commands) > 0 {
 		slog.Debug("Retrying %d incomplete forma commands", "count", len(commands))
 	}
 
 	for _, fa := range commands {
-		// Derive state from progress and prepare for re-execution.
-		// - InProgress: Reset to NotStarted (was interrupted, needs retry)
-		// - NotStarted: Keep as NotStarted (never started, needs execution)
-		// - Terminal states (Success, Failed, etc.): Exclude from the new
-		//   changeset entirely. Including them would re-create dependency
-		//   links that can never be resolved (the changeset executor only
-		//   picks up NotStarted resources, so a Success parent would block
-		//   its children forever).
-		var pendingUpdates []resource_update.ResourceUpdate
-		for i := range fa.ResourceUpdates {
-			ru := &fa.ResourceUpdates[i]
-			// Only re-derive state for non-terminal resources.
-			// Terminal resources (e.g. cascaded failures) have authoritative DB state
-			// but may have empty ProgressResult, which UpdateState() would
-			// incorrectly interpret as NotStarted.
-			switch ru.State {
-			case resource_update.ResourceUpdateStateSuccess,
-				resource_update.ResourceUpdateStateFailed,
-				resource_update.ResourceUpdateStateRejected,
-				resource_update.ResourceUpdateStateCanceled:
-				continue
-			}
-			ru.UpdateState()
-			if ru.State == resource_update.ResourceUpdateStateInProgress {
-				ru.State = resource_update.ResourceUpdateStateNotStarted
-			}
-			if ru.State == resource_update.ResourceUpdateStateNotStarted {
-				pendingUpdates = append(pendingUpdates, *ru)
-			}
-		}
-
-		// If all resource updates already reached a terminal state, the command
-		// just needs its own state updated — no changeset execution needed.
-		// This happens when the agent crashed after all CRUD ops completed but
-		// before the command transitioned to a final state.
-		if len(pendingUpdates) == 0 {
-			_, err := m.callActor(
-				gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
-				forma_persister.FinalizeIncompleteCommand{CommandID: fa.ID},
-			)
-			if err != nil {
-				slog.Error("Failed to finalize incomplete command", "commandID", fa.ID, "error", err)
-			}
-			continue
-		}
-
-		var pendingTargetUpdates []target_update.TargetUpdate
-		for _, tu := range fa.TargetUpdates {
-			if tu.State == target_update.TargetUpdateStateNotStarted {
-				pendingTargetUpdates = append(pendingTargetUpdates, tu)
-			}
-		}
-
-		// Build the changeset from only the pending (non-terminal) resource
-		// updates. Terminal resources are excluded so they don't create
-		// phantom dependency links in the new changeset's pipeline.
-		synth, synthErr := target_update.SynthesizeResolveTargetUpdates(
-			resource_update.ReferencedTargetLabels(pendingUpdates),
-			resource_update.SourceTargetByKsuid(pendingUpdates),
-			pendingTargetUpdates, m.Datastore)
-		if synthErr != nil {
-			slog.Error("Failed to build changeset for incomplete forma command, skipping", "commandID", fa.ID, "error", synthErr)
-			continue
-		}
-		// A draw is meaningless outside the changeset it produced a value for:
-		// the value was never persisted, so an interrupted command cannot
-		// replay it and has to draw again for whatever it still owes. That is
-		// the same synthesis the planning path runs, over the surviving
-		// destinations, so the rule that suppresses a stable binding applies
-		// here unchanged and a credential the interrupted command never meant
-		// to touch is not rotated by the resume.
-		draws, drawErr := generator_update.SynthesizeDrawGeneratorUpdates(
-			pendingUpdates, nil, generatorLookup(m.Datastore))
-		if drawErr != nil {
-			slog.Error("Failed to build changeset for incomplete forma command, skipping", "commandID", fa.ID, "error", drawErr)
-			continue
-		}
-		cs, err := changeset.NewChangeset(pendingUpdates, append(pendingTargetUpdates, synth...), draws, fa.ID, pkgmodel.CommandApply, fa.Config.Mode)
+		cs, err := m.prepareIncompleteChangeset(fa)
 		if err != nil {
-			slog.Error("Failed to build changeset for incomplete forma command, skipping", "commandID", fa.ID, "error", err)
-			continue
+			return fmt.Errorf("recover command %s: %w", fa.ID, err)
 		}
-
-		m.Node.Log().Debug("Starting ChangesetExecutor of changeset from incomplete forma command commandID=%s", fa.ID)
-		_, err = m.callActor(
-			gen.ProcessID{Name: actornames.ChangesetSupervisor, Node: m.Node.Name()},
-			changeset.EnsureChangesetExecutor{CommandID: fa.ID},
-		)
-		if err != nil {
-			slog.Error("Failed to ensure ChangesetExecutor for incomplete forma command", "command", fa.Command, "forma", fa, "error", err)
-			return err
+		if cs == nil {
+			_, err = m.callActor(gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()}, forma_persister.FinalizeIncompleteCommand{CommandID: fa.ID})
+		} else {
+			_, err = m.callActor(gen.ProcessID{Name: actornames.ChangesetSupervisor, Node: m.Node.Name()}, changeset.DispatchAdmittedChangeset{CommandID: fa.ID, Changeset: cs})
 		}
-
-		m.Node.Log().Debug("Sending Start message to ChangesetExecutor commandID=%s", fa.ID)
-		err = m.Node.Send(
-			gen.ProcessID{Name: actornames.ChangesetExecutor(fa.ID), Node: m.Node.Name()},
-			changeset.Start{Changeset: cs},
-		)
 		if err != nil {
-			slog.Error("Failed to start ChangesetExecutor for incomplete forma command", "command", fa.Command, "forma", fa, "error", err)
-			return err
+			return fmt.Errorf("recover command %s: %w", fa.ID, err)
 		}
 	}
 
@@ -2261,6 +1998,7 @@ func findCascadeTargetDeletes(
 		if len(newDeletedTargetLabels) > 0 {
 			newDeletedSet := make(map[string]bool, len(newDeletedTargetLabels))
 			for _, label := range newDeletedTargetLabels {
+				resolver.ObservePlanningTargetInventory(ds, label)
 				newDeletedSet[label] = true
 			}
 
@@ -2636,6 +2374,17 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 		resourceUpdates = append(resourceUpdates, generatorCascade...)
 	}
 
+	commandSource := forma_command.SourceUser
+	switch source {
+	case resource_update.FormaCommandSourceSynchronize:
+		commandSource = forma_command.SourceSynchronizer
+	case resource_update.FormaCommandSourceDiscovery:
+		commandSource = forma_command.SourceDiscovery
+	case resource_update.FormaCommandSourcePolicyAutoReconcile:
+		commandSource = forma_command.SourceAutoReconciler
+	case resource_update.FormaCommandSourceGeneratorRotation:
+		commandSource = forma_command.SourceGeneratorRotator
+	}
 	fc := forma_command.NewFormaCommand(
 		forma,
 		formaCommandConfig,
@@ -2648,9 +2397,12 @@ func FormaCommandFromForma(forma *pkgmodel.Forma,
 		clientID,
 		subject,
 		subjectName,
-		forma_command.SourceUser,
+		commandSource,
 	)
 	fc.DrawGeneratorUpdates = drawGeneratorUpdates
+	if err := fc.ResolveStackIdentities(ds); err != nil {
+		return nil, err
+	}
 
 	return fc, nil
 }
@@ -2898,6 +2650,7 @@ func (m *Metastructure) Stats() (*apimodel.Stats, error) {
 	}
 
 	return &apimodel.Stats{
+		Capabilities:       []string{"command-metadata", "shared-drift-resolution", "desired-stack-extraction"},
 		Version:            formae.Version,
 		AgentID:            m.AgentID,
 		Clients:            stats.Clients,

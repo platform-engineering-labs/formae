@@ -1,844 +1,248 @@
-// © 2025 Platform Engineering Labs Inc.
-//
-// SPDX-License-Identifier: FSL-1.1-ALv2
-
 //go:build unit
 
+// © 2026 Platform Engineering Labs Inc.
+// SPDX-License-Identifier: FSL-1.1-ALv2
 package apply
 
 import (
-	"encoding/json"
-	"io"
-	"strings"
-	"testing"
-
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
+	"errors"
 	"github.com/platform-engineering-labs/formae/internal/cli/app"
-	"github.com/platform-engineering-labs/formae/internal/cli/printer"
-	"github.com/platform-engineering-labs/formae/internal/cli/tui/driftview"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/simview"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
+	"github.com/stretchr/testify/require"
+	"io"
+	"os"
+	"testing"
 )
 
-// ---- sameDrift tests ----
-
-func TestSameDrift_EqualDifferentOrder(t *testing.T) {
-	patch := json.RawMessage(`{"op":"replace","path":"/Foo"}`)
-	a := apimodel.FormaReconcileRejectedError{
-		ModifiedStacks: map[string]apimodel.ModifiedStack{
-			"prod": {ModifiedResources: []apimodel.ResourceModification{
-				{Type: "AWS::S3::Bucket", Label: "a", Operation: "update", PatchDocument: patch},
-				{Type: "AWS::S3::Bucket", Label: "b", Operation: "update", PatchDocument: patch},
-			}},
-		},
-	}
-	b := apimodel.FormaReconcileRejectedError{
-		ModifiedStacks: map[string]apimodel.ModifiedStack{
-			"prod": {ModifiedResources: []apimodel.ResourceModification{
-				{Type: "AWS::S3::Bucket", Label: "b", Operation: "update", PatchDocument: patch},
-				{Type: "AWS::S3::Bucket", Label: "a", Operation: "update", PatchDocument: patch},
-			}},
-		},
-	}
-	assert.True(t, sameDrift(a, b), "same mods in different order should be equal")
+func resolutionRejection(id string) apimodel.FormaReconcileRejectedError {
+	return apimodel.FormaReconcileRejectedError{ObservationID: id, ModifiedStacks: map[string]apimodel.ModifiedStack{"production": {ModifiedResources: []apimodel.ResourceModification{{ResourceID: "a", Stack: "production", Label: "one", Operation: "update"}, {ResourceID: "b", Stack: "production", Label: "two", Operation: "delete"}}}}}
 }
 
-func TestSameDrift_DifferentPatchBytes(t *testing.T) {
-	a := apimodel.FormaReconcileRejectedError{
-		ModifiedStacks: map[string]apimodel.ModifiedStack{
-			"prod": {ModifiedResources: []apimodel.ResourceModification{
-				{Type: "AWS::S3::Bucket", Label: "a", Operation: "update", PatchDocument: json.RawMessage(`{"op":"replace","path":"/Foo","value":"old"}`)},
-			}},
-		},
+func TestRecordedResolutionCompleteness(t *testing.T) {
+	r := resolutionRejection("obs")
+	for _, decisions := range [][]pkgmodel.DriftDecision{nil, {{ResourceID: "a", Action: "absorb"}}, {{ResourceID: "a", Action: "absorb"}, {ResourceID: "b", Action: ""}}, {{ResourceID: "a", Action: "absorb"}, {ResourceID: "a", Action: "revert"}}, {{ResourceID: "a", Action: "skip"}, {ResourceID: "b", Action: "revert"}}} {
+		require.Error(t, validateDecisions(r, decisions))
 	}
-	b := apimodel.FormaReconcileRejectedError{
-		ModifiedStacks: map[string]apimodel.ModifiedStack{
-			"prod": {ModifiedResources: []apimodel.ResourceModification{
-				{Type: "AWS::S3::Bucket", Label: "a", Operation: "update", PatchDocument: json.RawMessage(`{"op":"replace","path":"/Foo","value":"new"}`)},
-			}},
-		},
-	}
-	assert.False(t, sameDrift(a, b), "different patch bytes should not be equal")
+	require.NoError(t, validateDecisions(r, []pkgmodel.DriftDecision{{ResourceID: "b", Action: "revert"}, {ResourceID: "a", Action: "absorb"}}))
 }
 
-func TestSameDrift_ExtraResource(t *testing.T) {
-	patch := json.RawMessage(`{}`)
-	a := apimodel.FormaReconcileRejectedError{
-		ModifiedStacks: map[string]apimodel.ModifiedStack{
-			"prod": {ModifiedResources: []apimodel.ResourceModification{
-				{Type: "AWS::S3::Bucket", Label: "a", Operation: "update", PatchDocument: patch},
-			}},
-		},
-	}
-	b := apimodel.FormaReconcileRejectedError{
-		ModifiedStacks: map[string]apimodel.ModifiedStack{
-			"prod": {ModifiedResources: []apimodel.ResourceModification{
-				{Type: "AWS::S3::Bucket", Label: "a", Operation: "update", PatchDocument: patch},
-				{Type: "AWS::S3::Bucket", Label: "b", Operation: "update", PatchDocument: patch},
-			}},
-		},
-	}
-	assert.False(t, sameDrift(a, b), "extra resource in b should not be equal")
-}
-
-func TestSameDrift_DifferentStacks(t *testing.T) {
-	patch := json.RawMessage(`{}`)
-	a := apimodel.FormaReconcileRejectedError{
-		ModifiedStacks: map[string]apimodel.ModifiedStack{
-			"prod": {ModifiedResources: []apimodel.ResourceModification{
-				{Type: "AWS::S3::Bucket", Label: "a", Operation: "update", PatchDocument: patch},
-			}},
-		},
-	}
-	b := apimodel.FormaReconcileRejectedError{
-		ModifiedStacks: map[string]apimodel.ModifiedStack{
-			"staging": {ModifiedResources: []apimodel.ResourceModification{
-				{Type: "AWS::S3::Bucket", Label: "a", Operation: "update", PatchDocument: patch},
-			}},
-		},
-	}
-	assert.False(t, sameDrift(a, b), "different stack names should not be equal")
-}
-
-// ---- buildExtractGuidance tests ----
-
-// TestBuildExtractGuidance pins the post-extract next-steps text: it must point
-// at the user's ORIGINAL forma with --force (never at the partial extracted
-// file, and never a plain reconcile), and must tell the user to fold values in
-// first. This is the regression guard for the dangerous old guidance that told
-// users to `apply --mode reconcile` the extracted file.
-func TestBuildExtractGuidance(t *testing.T) {
-	lines := buildExtractGuidance(2, "./out.pkl", "infra.pkl")
-	require.Len(t, lines, 3)
-
-	assert.Contains(t, lines[0], "./out.pkl")
-	assert.Contains(t, lines[1], "Fold the values you want to keep")
-	assert.Equal(t, "  formae apply --mode reconcile --force infra.pkl", lines[2])
-
-	for _, l := range lines {
-		assert.NotContains(t, l, "reconcile the new state", "dangerous old guidance must be gone")
-		assert.NotContains(t, l, "Re-run the original apply")
-		// The command must never point at the partial extracted file.
-		assert.NotContains(t, l, "--force ./out.pkl")
+func TestRecordedResolutionFlow(t *testing.T) {
+	for _, scenario := range []string{"mixed", "pure", "simulate", "cancel", "stale"} {
+		t.Run(scenario, func(t *testing.T) {
+			oldApply, oldChoices, oldPreview, oldWatch, oldDelta := applyFn, chooseDrift, launchSimView, launchWatch, desiredDeltaFn
+			t.Cleanup(func() {
+				applyFn = oldApply
+				chooseDrift = oldChoices
+				launchSimView = oldPreview
+				launchWatch = oldWatch
+				desiredDeltaFn = oldDelta
+			})
+			opts := &ApplyOptions{Mode: pkgmodel.FormaApplyModeReconcile, FormaFile: "source.pkl", Simulate: scenario == "simulate"}
+			choices, previews, reals, watches := 0, 0, 0, 0
+			chooseDrift = func(_ *theme.Theme, r apimodel.FormaReconcileRejectedError) ([]pkgmodel.DriftDecision, error) {
+				choices++
+				if scenario == "cancel" {
+					return nil, errResolutionAborted
+				}
+				return []pkgmodel.DriftDecision{{ResourceID: "a", Action: "absorb"}, {ResourceID: "b", Action: "revert"}}, nil
+			}
+			applyFn = func(_ *app.App, o *ApplyOptions, simulate bool) (*apimodel.SubmitCommandResponse, []string, error) {
+				require.False(t, o.Force)
+				if o.Resolution == nil {
+					require.True(t, simulate)
+					return nil, nil, &apimodel.ErrorResponse[apimodel.FormaReconcileRejectedError]{Data: resolutionRejection("fresh")}
+				}
+				if simulate {
+					require.Empty(t, o.Resolution.ReviewID)
+					return &apimodel.SubmitCommandResponse{Review: &pkgmodel.DriftReview{ObservationID: o.Resolution.ObservationID, ReviewID: "review", Decisions: o.Resolution.Decisions}, Simulation: apimodel.Simulation{ChangesRequired: true, Warnings: []string{"real planner warning"}, Command: apimodel.Command{ResourceUpdates: []apimodel.ResourceUpdate{{Operation: "accept", ResourceLabel: "one"}, {Operation: "create", ResourceLabel: "unrelated addition"}}}}}, nil, nil
+				}
+				reals++
+				require.Equal(t, "review", o.Resolution.ReviewID)
+				require.NotEmpty(t, o.Resolution.IdempotencyKey)
+				if scenario == "stale" && reals == 1 {
+					return nil, nil, &apimodel.ErrorResponse[apimodel.DriftResolutionError]{Data: apimodel.DriftResolutionError{Code: "stale-review"}}
+				}
+				state := "InProgress"
+				if scenario == "pure" {
+					state = "Success"
+				}
+				return &apimodel.SubmitCommandResponse{CommandID: "recorded", Simulation: apimodel.Simulation{Command: apimodel.Command{State: state}}}, nil, nil
+			}
+			launchSimView = func(_ *theme.Theme, sim *apimodel.Simulation, o simview.Options) (simview.Decision, error) {
+				previews++
+				require.Len(t, sim.Command.ResourceUpdates, 2)
+				require.Contains(t, sim.Warnings, "real planner warning")
+				return simview.DecisionConfirmed, nil
+			}
+			launchWatch = func(_ *app.App, id string) (bool, error) {
+				watches++
+				require.Equal(t, "recorded", id)
+				return true, nil
+			}
+			desiredDeltaFn = func(_ *app.App, id string) (*apimodel.CommandDesiredDelta, error) {
+				return &apimodel.CommandDesiredDelta{CommandID: id, State: "Success", Partial: true}, nil
+			}
+			out := captureStdout(t, func() {
+				require.NoError(t, runRecordedDriftFlow(newTestApp(), theme.New("formae"), opts, resolutionRejection("obs")))
+			})
+			switch scenario {
+			case "cancel":
+				require.Zero(t, reals)
+				require.Zero(t, previews)
+			case "simulate":
+				require.Zero(t, reals)
+				require.Equal(t, 1, previews)
+			case "stale":
+				require.Equal(t, 2, choices)
+				require.Equal(t, 2, previews)
+				require.Equal(t, 2, reals)
+			case "pure":
+				require.Zero(t, watches)
+				require.Contains(t, out, "recorded: Success")
+			default:
+				require.Equal(t, 1, watches)
+			}
+		})
 	}
 }
 
-// TestBuildExtractGuidance_EmptyFormaFile falls back to a generic name.
-func TestBuildExtractGuidance_EmptyFormaFile(t *testing.T) {
-	lines := buildExtractGuidance(1, "./out.pkl", "")
-	assert.Contains(t, lines[2], "--force your forma")
+func TestResolutionMessageOwnership(t *testing.T) {
+	r := &pkgmodel.DriftReview{Observations: []pkgmodel.DriftObservation{{Stack: "production"}}, Decisions: []pkgmodel.DriftDecision{{Action: "absorb"}, {Action: "revert"}}}
+	opts := &ApplyOptions{}
+	prepareMessage(opts, r)
+	require.Equal(t, "Resolve production drift: absorb 1, revert 1", opts.Message)
+	opts.Message = ""
+	opts.messageEdited = true
+	prepareMessage(opts, r)
+	require.Empty(t, opts.Message)
+	opts = &ApplyOptions{Message: "", MessageExplicit: true}
+	prepareMessage(opts, r)
+	require.Empty(t, opts.Message)
+	opts = &ApplyOptions{Message: "authored", MessageExplicit: true}
+	prepareMessage(opts, r)
+	require.Equal(t, "authored", opts.Message)
 }
 
-// ---- runDriftFlow tests ----
+func TestResolutionDecisionCancellation(t *testing.T) {
+	old := runDecisionForm
+	t.Cleanup(func() { runDecisionForm = old })
+	runDecisionForm = func(_ *theme.Theme, items []driftChoice) error { return errors.New("cancelled") }
+	decisions, err := defaultChooseDrift(theme.New("formae"), resolutionRejection("obs"))
+	require.Error(t, err)
+	require.Empty(t, decisions)
+	runDecisionForm = func(_ *theme.Theme, items []driftChoice) error { return nil }
+	decisions, err = defaultChooseDrift(theme.New("formae"), resolutionRejection("obs"))
+	require.Error(t, err)
+	require.Empty(t, decisions, "unset choices must never become approvals")
+}
 
-// stubDriftSeams saves originals and restores them on cleanup.
-func stubDriftSeams(t *testing.T) {
-	t.Helper()
-	orig := struct {
-		launchDriftView      func(*theme.Theme, *apimodel.FormaReconcileRejectedError, driftview.Options) (driftview.Decision, error)
-		applyFn              func(*app.App, *ApplyOptions, bool) (*apimodel.SubmitCommandResponse, []string, error)
-		forcedApplyFn        func(*app.App, *ApplyOptions) (*apimodel.SubmitCommandResponse, []string, error)
-		launchWatch          func(*app.App, string) (bool, error)
-		launchSimView        func(*theme.Theme, *apimodel.Simulation, simview.Options) (simview.Decision, error)
-		confirmOverwriteFn   func(*theme.Theme, string) (bool, error)
-		extractResourcesFn   func(*app.App, string) (*pkgmodel.Forma, []string, error)
-		generateSourceCodeFn func(*app.App, *pkgmodel.Forma, string) error
-		isTerminal           func(io.Writer) bool
-	}{
-		launchDriftView:      launchDriftView,
-		applyFn:              applyFn,
-		forcedApplyFn:        forcedApplyFn,
-		launchWatch:          launchWatch,
-		launchSimView:        launchSimView,
-		confirmOverwriteFn:   confirmOverwriteFn,
-		extractResourcesFn:   extractResourcesFn,
-		generateSourceCodeFn: generateSourceCodeFn,
-		isTerminal:           isTerminal,
+func TestResolutionDoesNotPromptWithRedirectedInput(t *testing.T) {
+	oldTerminal, oldApply, oldChoose, oldBanner := isTerminal, applyFn, chooseDrift, printBanner
+	t.Cleanup(func() { isTerminal = oldTerminal; applyFn = oldApply; chooseDrift = oldChoose; printBanner = oldBanner })
+	isTerminal = func(writer io.Writer) bool { return writer == os.Stdout }
+	printBanner = func(_ *app.App) {}
+	applyFn = func(_ *app.App, _ *ApplyOptions, sim bool) (*apimodel.SubmitCommandResponse, []string, error) {
+		require.True(t, sim)
+		return nil, nil, &apimodel.ErrorResponse[apimodel.FormaReconcileRejectedError]{Data: resolutionRejection("obs")}
 	}
+	chooseDrift = func(_ *theme.Theme, _ apimodel.FormaReconcileRejectedError) ([]pkgmodel.DriftDecision, error) {
+		t.Fatal("redirected stdin must not prompt")
+		return nil, errResolutionAborted
+	}
+	require.Error(t, runApplyForHumans(newTestApp(), &ApplyOptions{Mode: pkgmodel.FormaApplyModeReconcile, FormaFile: "source.pkl"}))
+}
+
+func TestFinalMessageFieldPreservesClearedValueAcrossStaleReview(t *testing.T) {
+	oldApply, oldChoices, oldPreview, oldWatch, oldDelta := applyFn, chooseDrift, launchSimView, launchWatch, desiredDeltaFn
 	t.Cleanup(func() {
-		launchDriftView = orig.launchDriftView
-		applyFn = orig.applyFn
-		forcedApplyFn = orig.forcedApplyFn
-		launchWatch = orig.launchWatch
-		launchSimView = orig.launchSimView
-		confirmOverwriteFn = orig.confirmOverwriteFn
-		extractResourcesFn = orig.extractResourcesFn
-		generateSourceCodeFn = orig.generateSourceCodeFn
-		isTerminal = orig.isTerminal
+		applyFn = oldApply
+		chooseDrift = oldChoices
+		launchSimView = oldPreview
+		launchWatch = oldWatch
+		desiredDeltaFn = oldDelta
 	})
-}
-
-func makeRejected() apimodel.FormaReconcileRejectedError {
-	return apimodel.FormaReconcileRejectedError{
-		ModifiedStacks: map[string]apimodel.ModifiedStack{
-			"prod": {ModifiedResources: []apimodel.ResourceModification{
-				{Stack: "prod", Type: "AWS::S3::Bucket", Label: "my-bucket", Operation: "update",
-					PatchDocument: json.RawMessage(`{"op":"replace"}`)},
-			}},
-		},
+	opts := &ApplyOptions{Mode: pkgmodel.FormaApplyModeReconcile, FormaFile: "source.pkl"}
+	chooseDrift = func(_ *theme.Theme, _ apimodel.FormaReconcileRejectedError) ([]pkgmodel.DriftDecision, error) {
+		return []pkgmodel.DriftDecision{{ResourceID: "a", Action: "absorb"}, {ResourceID: "b", Action: "revert"}}, nil
 	}
-}
-
-// TestRunDriftFlow_SimulateNeverCallsForcedApply asserts that when opts.Simulate=true
-// and the user chooses DecisionRevertAll with identical drift, forcedApplyFn is
-// NEVER invoked. This is the core regression guard for the P1 bug where
-// --simulate could trigger a real forced apply through the drift flow.
-func TestRunDriftFlow_SimulateNeverCallsForcedApply(t *testing.T) {
-	stubDriftSeams(t)
-
-	rejected := makeRejected()
-	launchDriftView = func(th *theme.Theme, r *apimodel.FormaReconcileRejectedError, opts driftview.Options) (driftview.Decision, error) {
-		return driftview.DecisionRevertAll{}, nil
-	}
-
-	// Second simulate returns same rejection (identical drift) — the path that
-	// previously called submitForcedApply directly.
-	applyFn = func(a *app.App, opts *ApplyOptions, simulate bool) (*apimodel.SubmitCommandResponse, []string, error) {
-		return nil, nil, &apimodel.ErrorResponse[apimodel.FormaReconcileRejectedError]{
-			ErrorType: apimodel.ReconcileRejected,
-			Data:      rejected,
+	submissions, previews := 0, 0
+	applyFn = func(_ *app.App, o *ApplyOptions, sim bool) (*apimodel.SubmitCommandResponse, []string, error) {
+		if o.Resolution == nil {
+			return nil, nil, &apimodel.ErrorResponse[apimodel.FormaReconcileRejectedError]{Data: resolutionRejection("fresh")}
 		}
-	}
-
-	forcedApplyFn = func(a *app.App, opts *ApplyOptions) (*apimodel.SubmitCommandResponse, []string, error) {
-		t.Fatal("forcedApplyFn MUST NOT be called when opts.Simulate=true")
-		return nil, nil, nil
-	}
-
-	a := newTestApp()
-	opts := &ApplyOptions{
-		OutputConsumer: printer.ConsumerHuman,
-		FormaFile:      "forma.pkl",
-		Mode:           pkgmodel.FormaApplyModeReconcile,
-		Simulate:       true,
-	}
-	th := theme.New("formae")
-	err := runDriftFlow(a, th, opts, rejected)
-	// Must return cleanly (not an error) — simulate just shows what would happen.
-	require.NoError(t, err)
-}
-
-// TestRunDriftFlow_NonSimulateRevertIdenticalDoesForcedApply is the companion
-// regression pin: without --simulate the forced apply IS invoked.
-func TestRunDriftFlow_NonSimulateRevertIdenticalDoesForcedApply(t *testing.T) {
-	stubDriftSeams(t)
-
-	rejected := makeRejected()
-	launchDriftView = func(th *theme.Theme, r *apimodel.FormaReconcileRejectedError, opts driftview.Options) (driftview.Decision, error) {
-		return driftview.DecisionRevertAll{}, nil
-	}
-
-	applyFn = func(a *app.App, opts *ApplyOptions, simulate bool) (*apimodel.SubmitCommandResponse, []string, error) {
-		return nil, nil, &apimodel.ErrorResponse[apimodel.FormaReconcileRejectedError]{
-			ErrorType: apimodel.ReconcileRejected,
-			Data:      rejected,
+		if sim {
+			return &apimodel.SubmitCommandResponse{Review: &pkgmodel.DriftReview{ReviewID: "review", Decisions: o.Resolution.Decisions, Observations: []pkgmodel.DriftObservation{{Stack: "production"}}}, Simulation: apimodel.Simulation{ChangesRequired: true}}, nil, nil
 		}
-	}
-
-	forcedApplyCalled := false
-	forcedApplyFn = func(a *app.App, opts *ApplyOptions) (*apimodel.SubmitCommandResponse, []string, error) {
-		forcedApplyCalled = true
-		return &apimodel.SubmitCommandResponse{CommandID: "force-123"}, nil, nil
-	}
-
-	launchWatch = func(a *app.App, commandID string) (bool, error) { return true, nil }
-
-	a := newTestApp()
-	opts := &ApplyOptions{
-		OutputConsumer: printer.ConsumerHuman,
-		FormaFile:      "forma.pkl",
-		Mode:           pkgmodel.FormaApplyModeReconcile,
-		Simulate:       false, // NOT simulating — forced apply must fire
-	}
-	th := theme.New("formae")
-	err := runDriftFlow(a, th, opts, rejected)
-	require.NoError(t, err)
-	assert.True(t, forcedApplyCalled, "forcedApplyFn must be called when Simulate=false on identical drift revert")
-}
-
-func TestRunDriftFlow_Abort(t *testing.T) {
-	stubDriftSeams(t)
-
-	rejected := makeRejected()
-	launchDriftView = func(th *theme.Theme, r *apimodel.FormaReconcileRejectedError, opts driftview.Options) (driftview.Decision, error) {
-		return driftview.DecisionAbort{}, nil
-	}
-
-	a := newTestApp()
-	opts := &ApplyOptions{
-		OutputConsumer: printer.ConsumerHuman,
-		FormaFile:      "forma.pkl",
-		Mode:           pkgmodel.FormaApplyModeReconcile,
-	}
-	th := theme.New("formae")
-	err := runDriftFlow(a, th, opts, rejected)
-	// Abort no longer dumps the verbose rejection as an error — the user
-	// reviewed the drift in the TUI; a concise "Apply aborted." is printed and
-	// the flow returns cleanly.
-	require.NoError(t, err)
-}
-
-func TestRunDriftFlow_Extract(t *testing.T) {
-	stubDriftSeams(t)
-
-	rejected := makeRejected()
-	launchDriftView = func(th *theme.Theme, r *apimodel.FormaReconcileRejectedError, opts driftview.Options) (driftview.Decision, error) {
-		return driftview.DecisionExtract{
-			Path: "./out.pkl",
-			Selected: []driftview.ResourceRef{
-				{Stack: "prod", Type: "AWS::S3::Bucket", Label: "bucket-a", Operation: "update"},
-				{Stack: "prod", Type: "AWS::S3::Bucket", Label: "bucket-b", Operation: "create"},
-			},
-		}, nil
-	}
-
-	var capturedQueries []string
-	extractResourcesFn = func(a *app.App, query string) (*pkgmodel.Forma, []string, error) {
-		capturedQueries = append(capturedQueries, query)
-		return &pkgmodel.Forma{
-			Resources: []pkgmodel.Resource{{Type: "AWS::S3::Bucket", Label: query}},
-		}, nil, nil
-	}
-
-	generateSourceCodeFnCalled := false
-	generateSourceCodeFn = func(a *app.App, forma *pkgmodel.Forma, path string) error {
-		generateSourceCodeFnCalled = true
-		assert.Equal(t, "./out.pkl", path)
-		assert.Len(t, forma.Resources, 2)
-		return nil
-	}
-
-	// No file overwrite needed (file doesn't exist at ./out.pkl in test env — skip stat check)
-	confirmOverwriteFn = func(th *theme.Theme, path string) (bool, error) {
-		return true, nil // not called since file doesn't exist
-	}
-
-	applyFn = func(a *app.App, opts *ApplyOptions, simulate bool) (*apimodel.SubmitCommandResponse, []string, error) {
-		t.Fatal("applyFn must NOT be called on extract path")
-		return nil, nil, nil
-	}
-
-	a := newTestApp()
-	opts := &ApplyOptions{
-		OutputConsumer: printer.ConsumerHuman,
-		FormaFile:      "forma.pkl",
-		Mode:           pkgmodel.FormaApplyModeReconcile,
-	}
-	th := theme.New("formae")
-	err := runDriftFlow(a, th, opts, rejected)
-	require.NoError(t, err)
-
-	require.Len(t, capturedQueries, 2)
-	assert.Equal(t, "stack:prod type:AWS::S3::Bucket label:bucket-a", capturedQueries[0])
-	assert.Equal(t, "stack:prod type:AWS::S3::Bucket label:bucket-b", capturedQueries[1])
-	assert.True(t, generateSourceCodeFnCalled, "GenerateSourceCode must be called once")
-}
-
-// TestRunDriftFlow_Extract_CarriesStacksAndTargets guards against a regression
-// where handleExtract built its merged Forma without copying Stacks (and
-// Targets). Because Forma.Stacks is `omitempty`, an empty slice is dropped from
-// the serialized JSON entirely, and the PKL generator then fails with
-// "Cannot find property `Stacks`". The unit path stubs the generator, so this
-// asserts the merged Forma directly.
-func TestRunDriftFlow_Extract_CarriesStacksAndTargets(t *testing.T) {
-	stubDriftSeams(t)
-
-	rejected := makeRejected()
-	launchDriftView = func(th *theme.Theme, r *apimodel.FormaReconcileRejectedError, opts driftview.Options) (driftview.Decision, error) {
-		return driftview.DecisionExtract{
-			Path: "./out.pkl",
-			Selected: []driftview.ResourceRef{
-				{Stack: "prod", Type: "AWS::S3::Bucket", Label: "bucket-a", Operation: "update"},
-				{Stack: "prod", Type: "AWS::S3::Bucket", Label: "bucket-b", Operation: "update"},
-			},
-		}, nil
-	}
-
-	// Every extracted resource comes back with its stack and target, mirroring a
-	// real App.ExtractResources response.
-	extractResourcesFn = func(a *app.App, query string) (*pkgmodel.Forma, []string, error) {
-		return &pkgmodel.Forma{
-			Stacks:    []pkgmodel.Stack{{Label: "prod"}},
-			Targets:   []pkgmodel.Target{{Label: "aws"}},
-			Resources: []pkgmodel.Resource{{Type: "AWS::S3::Bucket", Label: query}},
-		}, nil, nil
-	}
-
-	var captured *pkgmodel.Forma
-	generateSourceCodeFn = func(a *app.App, forma *pkgmodel.Forma, path string) error {
-		captured = forma
-		return nil
-	}
-	confirmOverwriteFn = func(th *theme.Theme, path string) (bool, error) { return true, nil }
-	applyFn = func(a *app.App, opts *ApplyOptions, simulate bool) (*apimodel.SubmitCommandResponse, []string, error) {
-		t.Fatal("applyFn must NOT be called on extract path")
-		return nil, nil, nil
-	}
-
-	a := newTestApp()
-	opts := &ApplyOptions{
-		OutputConsumer: printer.ConsumerHuman,
-		FormaFile:      "forma.pkl",
-		Mode:           pkgmodel.FormaApplyModeReconcile,
-	}
-	err := runDriftFlow(a, theme.New("formae"), opts, rejected)
-	require.NoError(t, err)
-
-	require.NotNil(t, captured)
-	require.Len(t, captured.Resources, 2)
-	// Stacks and targets must be present (and deduped) or PKL generation fails.
-	require.Len(t, captured.Stacks, 1, "merged Forma must carry the stack")
-	assert.Equal(t, "prod", captured.Stacks[0].Label)
-	require.Len(t, captured.Targets, 1, "merged Forma must carry the target (deduped)")
-	assert.Equal(t, "aws", captured.Targets[0].Label)
-}
-
-func TestRunDriftFlow_RevertIdentical(t *testing.T) {
-	stubDriftSeams(t)
-
-	rejected := makeRejected()
-	launchDriftView = func(th *theme.Theme, r *apimodel.FormaReconcileRejectedError, opts driftview.Options) (driftview.Decision, error) {
-		return driftview.DecisionRevertAll{}, nil
-	}
-
-	// Second simulate returns the same rejection (identical drift).
-	applyFn = func(a *app.App, opts *ApplyOptions, simulate bool) (*apimodel.SubmitCommandResponse, []string, error) {
-		return nil, nil, &apimodel.ErrorResponse[apimodel.FormaReconcileRejectedError]{
-			ErrorType: apimodel.ReconcileRejected,
-			Data:      rejected,
+		submissions++
+		require.Empty(t, o.Message)
+		if submissions == 1 {
+			return nil, nil, &apimodel.ErrorResponse[apimodel.DriftResolutionError]{Data: apimodel.DriftResolutionError{Code: "stale-review"}}
 		}
+		return &apimodel.SubmitCommandResponse{CommandID: "recorded", Simulation: apimodel.Simulation{Command: apimodel.Command{State: "Success"}}}, nil, nil
 	}
-
-	forcedApplyCalled := false
-	forcedApplyFn = func(a *app.App, opts *ApplyOptions) (*apimodel.SubmitCommandResponse, []string, error) {
-		forcedApplyCalled = true
-		return &apimodel.SubmitCommandResponse{CommandID: "force-cmd-123"}, nil, nil
-	}
-
-	watchedCmdID := ""
-	launchWatch = func(a *app.App, commandID string) (bool, error) {
-		watchedCmdID = commandID
-		return true, nil
-	}
-
-	a := newTestApp()
-	opts := &ApplyOptions{
-		OutputConsumer: printer.ConsumerHuman,
-		FormaFile:      "forma.pkl",
-		Mode:           pkgmodel.FormaApplyModeReconcile,
-	}
-	th := theme.New("formae")
-	err := runDriftFlow(a, th, opts, rejected)
-	require.NoError(t, err)
-
-	assert.True(t, forcedApplyCalled, "forcedApplyFn must be called on identical drift revert")
-	assert.Equal(t, "force-cmd-123", watchedCmdID, "launchWatch must receive the force command ID")
-}
-
-func TestRunDriftFlow_RevertChanged(t *testing.T) {
-	stubDriftSeams(t)
-
-	rejected := makeRejected()
-
-	differentRejected := apimodel.FormaReconcileRejectedError{
-		ModifiedStacks: map[string]apimodel.ModifiedStack{
-			"prod": {ModifiedResources: []apimodel.ResourceModification{
-				{Stack: "prod", Type: "AWS::S3::Bucket", Label: "different-bucket", Operation: "update",
-					PatchDocument: json.RawMessage(`{"op":"replace","path":"/Bar"}`)},
-			}},
-		},
-	}
-
-	driftViewCallCount := 0
-	var capturedNotices []string
-	launchDriftView = func(th *theme.Theme, r *apimodel.FormaReconcileRejectedError, opts driftview.Options) (driftview.Decision, error) {
-		driftViewCallCount++
-		capturedNotices = append(capturedNotices, opts.Notice)
-		if driftViewCallCount == 1 {
-			return driftview.DecisionRevertAll{}, nil
+	launchSimView = func(_ *theme.Theme, _ *apimodel.Simulation, o simview.Options) (simview.Decision, error) {
+		previews++
+		require.NotNil(t, o.Message)
+		if previews == 1 {
+			require.Contains(t, *o.Message, "Resolve production drift")
+			*o.Message = ""
+		} else {
+			require.Empty(t, *o.Message)
 		}
-		// Second launch — user aborts.
-		return driftview.DecisionAbort{}, nil
-	}
-
-	applyFn = func(a *app.App, opts *ApplyOptions, simulate bool) (*apimodel.SubmitCommandResponse, []string, error) {
-		return nil, nil, &apimodel.ErrorResponse[apimodel.FormaReconcileRejectedError]{
-			ErrorType: apimodel.ReconcileRejected,
-			Data:      differentRejected,
-		}
-	}
-
-	a := newTestApp()
-	opts := &ApplyOptions{
-		OutputConsumer: printer.ConsumerHuman,
-		FormaFile:      "forma.pkl",
-		Mode:           pkgmodel.FormaApplyModeReconcile,
-	}
-	th := theme.New("formae")
-	err := runDriftFlow(a, th, opts, rejected)
-	// Abort returns cleanly now (concise "Apply aborted." printed instead of a
-	// verbose error dump); the point of this test is the relaunch behavior.
-	require.NoError(t, err)
-
-	assert.Equal(t, 2, driftViewCallCount, "driftview must be relaunched on changed drift")
-	// First call: no notice; second call: non-empty notice.
-	assert.Equal(t, "", capturedNotices[0])
-	assert.True(t, len(capturedNotices[1]) > 0, "second launch must have a non-empty Notice")
-	assert.True(t, strings.Contains(capturedNotices[1], "Drift changed"), "notice must mention drift changed")
-}
-
-func TestRunDriftFlow_RevertResolved(t *testing.T) {
-	stubDriftSeams(t)
-
-	rejected := makeRejected()
-	launchDriftView = func(th *theme.Theme, r *apimodel.FormaReconcileRejectedError, opts driftview.Options) (driftview.Decision, error) {
-		return driftview.DecisionRevertAll{}, nil
-	}
-
-	// Second simulate succeeds (drift self-resolved).
-	applyFn = func(a *app.App, opts *ApplyOptions, simulate bool) (*apimodel.SubmitCommandResponse, []string, error) {
-		return &apimodel.SubmitCommandResponse{
-			Simulation: apimodel.Simulation{
-				ChangesRequired: true,
-				Command: apimodel.Command{
-					CommandID:       "resolved-sim",
-					ResourceUpdates: []apimodel.ResourceUpdate{{Operation: "create", ResourceLabel: "bucket"}},
-				},
-			},
-		}, nil, nil
-	}
-
-	simViewCalled := false
-	launchSimView = func(th *theme.Theme, sim *apimodel.Simulation, opts simview.Options) (simview.Decision, error) {
-		simViewCalled = true
-		return simview.DecisionAborted, nil // user aborts the simview
-	}
-
-	a := newTestApp()
-	opts := &ApplyOptions{
-		OutputConsumer: printer.ConsumerHuman,
-		FormaFile:      "forma.pkl",
-		Mode:           pkgmodel.FormaApplyModeReconcile,
-	}
-	th := theme.New("formae")
-	err := runDriftFlow(a, th, opts, rejected)
-	require.NoError(t, err)
-
-	assert.True(t, simViewCalled, "launchSimView must be called on the self-resolved path")
-}
-
-// ---- submitForcedApply / handleSelfResolvedDrift async-notice gate tests ----
-//
-// These pin the `if !finished { printAsyncNotice(...) }` gate at both drift
-// call sites. A mutation that makes either site print unconditionally must
-// fail the corresponding "Finished" test below.
-
-// TestRunDriftFlow_ForcedApply_Finished_NoAsyncNotice drives submitForcedApply
-// via the identical-drift RevertAll path (same as TestRunDriftFlow_RevertIdentical)
-// and asserts that when launchWatch reports the command finished, no async
-// notice is printed.
-func TestRunDriftFlow_ForcedApply_Finished_NoAsyncNotice(t *testing.T) {
-	stubDriftSeams(t)
-
-	rejected := makeRejected()
-	launchDriftView = func(th *theme.Theme, r *apimodel.FormaReconcileRejectedError, opts driftview.Options) (driftview.Decision, error) {
-		return driftview.DecisionRevertAll{}, nil
-	}
-
-	// Second simulate returns the same rejection (identical drift) — the path
-	// that leads into submitForcedApply.
-	applyFn = func(a *app.App, opts *ApplyOptions, simulate bool) (*apimodel.SubmitCommandResponse, []string, error) {
-		return nil, nil, &apimodel.ErrorResponse[apimodel.FormaReconcileRejectedError]{
-			ErrorType: apimodel.ReconcileRejected,
-			Data:      rejected,
-		}
-	}
-
-	forcedApplyFn = func(a *app.App, opts *ApplyOptions) (*apimodel.SubmitCommandResponse, []string, error) {
-		return &apimodel.SubmitCommandResponse{CommandID: "force-finished-1"}, nil, nil
-	}
-
-	launchWatch = func(a *app.App, commandID string) (bool, error) { return true, nil }
-
-	a := newTestApp()
-	opts := &ApplyOptions{
-		OutputConsumer: printer.ConsumerHuman,
-		FormaFile:      "forma.pkl",
-		Mode:           pkgmodel.FormaApplyModeReconcile,
-	}
-	th := theme.New("formae")
-
-	out := captureStdout(t, func() {
-		err := runDriftFlow(a, th, opts, rejected)
-		require.NoError(t, err)
-	})
-
-	assert.NotContains(t, out, "Still running asynchronously", "no async notice when the forced apply finished before the TUI closed")
-	assert.NotContains(t, out, "force-finished-1", "no scrollback record naming the command once it finished")
-}
-
-// TestRunDriftFlow_ForcedApply_Detached_PrintsAsyncNotice is the companion to
-// the above: when launchWatch reports the user detached (finished=false), the
-// async notice with the command ID and status invocation must be printed.
-func TestRunDriftFlow_ForcedApply_Detached_PrintsAsyncNotice(t *testing.T) {
-	stubDriftSeams(t)
-
-	rejected := makeRejected()
-	launchDriftView = func(th *theme.Theme, r *apimodel.FormaReconcileRejectedError, opts driftview.Options) (driftview.Decision, error) {
-		return driftview.DecisionRevertAll{}, nil
-	}
-
-	applyFn = func(a *app.App, opts *ApplyOptions, simulate bool) (*apimodel.SubmitCommandResponse, []string, error) {
-		return nil, nil, &apimodel.ErrorResponse[apimodel.FormaReconcileRejectedError]{
-			ErrorType: apimodel.ReconcileRejected,
-			Data:      rejected,
-		}
-	}
-
-	forcedApplyFn = func(a *app.App, opts *ApplyOptions) (*apimodel.SubmitCommandResponse, []string, error) {
-		return &apimodel.SubmitCommandResponse{CommandID: "force-detached-1"}, nil, nil
-	}
-
-	launchWatch = func(a *app.App, commandID string) (bool, error) { return false, nil }
-
-	a := newTestApp()
-	opts := &ApplyOptions{
-		OutputConsumer: printer.ConsumerHuman,
-		FormaFile:      "forma.pkl",
-		Mode:           pkgmodel.FormaApplyModeReconcile,
-	}
-	th := theme.New("formae")
-
-	out := captureStdout(t, func() {
-		err := runDriftFlow(a, th, opts, rejected)
-		require.NoError(t, err)
-	})
-
-	assert.Contains(t, out, "Still running asynchronously on the agent. Check its status with:")
-	assert.Contains(t, out, "formae command status force-detached-1")
-}
-
-// TestRunDriftFlow_SelfResolved_Finished_NoAsyncNotice drives
-// handleSelfResolvedDrift via the self-resolved RevertAll path (same as
-// TestRunDriftFlow_RevertResolved, but the user confirms the simview instead
-// of aborting, so the real apply + watch fire) and asserts that when
-// launchWatch reports the command finished, no async notice is printed.
-func TestRunDriftFlow_SelfResolved_Finished_NoAsyncNotice(t *testing.T) {
-	stubDriftSeams(t)
-
-	rejected := makeRejected()
-	launchDriftView = func(th *theme.Theme, r *apimodel.FormaReconcileRejectedError, opts driftview.Options) (driftview.Decision, error) {
-		return driftview.DecisionRevertAll{}, nil
-	}
-
-	applyFn = func(a *app.App, opts *ApplyOptions, simulate bool) (*apimodel.SubmitCommandResponse, []string, error) {
-		if simulate {
-			// Second simulate succeeds (drift self-resolved).
-			return &apimodel.SubmitCommandResponse{
-				Simulation: apimodel.Simulation{
-					ChangesRequired: true,
-					Command: apimodel.Command{
-						CommandID:       "resolved-sim",
-						ResourceUpdates: []apimodel.ResourceUpdate{{Operation: "create", ResourceLabel: "bucket"}},
-					},
-				},
-			}, nil, nil
-		}
-		// Real apply after the user confirms the simview.
-		return &apimodel.SubmitCommandResponse{CommandID: "self-resolved-finished-1"}, nil, nil
-	}
-
-	launchSimView = func(th *theme.Theme, sim *apimodel.Simulation, opts simview.Options) (simview.Decision, error) {
 		return simview.DecisionConfirmed, nil
 	}
-
-	launchWatch = func(a *app.App, commandID string) (bool, error) { return true, nil }
-
-	a := newTestApp()
-	opts := &ApplyOptions{
-		OutputConsumer: printer.ConsumerHuman,
-		FormaFile:      "forma.pkl",
-		Mode:           pkgmodel.FormaApplyModeReconcile,
+	desiredDeltaFn = func(_ *app.App, id string) (*apimodel.CommandDesiredDelta, error) {
+		return &apimodel.CommandDesiredDelta{CommandID: id, State: "Success", Partial: true}, nil
 	}
-	th := theme.New("formae")
-
-	out := captureStdout(t, func() {
-		err := runDriftFlow(a, th, opts, rejected)
-		require.NoError(t, err)
+	captureStdout(t, func() {
+		require.NoError(t, runRecordedDriftFlow(newTestApp(), theme.New("formae"), opts, resolutionRejection("obs")))
 	})
-
-	assert.NotContains(t, out, "Still running asynchronously", "no async notice when the self-resolved apply finished before the TUI closed")
-	assert.NotContains(t, out, "self-resolved-finished-1", "no scrollback record naming the command once it finished")
+	require.Equal(t, 2, previews)
+	require.Equal(t, 2, submissions)
 }
 
-// TestRunDriftFlow_SelfResolved_Detached_PrintsAsyncNotice is the companion to
-// the above: when launchWatch reports the user detached (finished=false), the
-// async notice with the command ID and status invocation must be printed.
-func TestRunDriftFlow_SelfResolved_Detached_PrintsAsyncNotice(t *testing.T) {
-	stubDriftSeams(t)
-
-	rejected := makeRejected()
-	launchDriftView = func(th *theme.Theme, r *apimodel.FormaReconcileRejectedError, opts driftview.Options) (driftview.Decision, error) {
-		return driftview.DecisionRevertAll{}, nil
-	}
-
-	applyFn = func(a *app.App, opts *ApplyOptions, simulate bool) (*apimodel.SubmitCommandResponse, []string, error) {
-		if simulate {
-			return &apimodel.SubmitCommandResponse{
-				Simulation: apimodel.Simulation{
-					ChangesRequired: true,
-					Command: apimodel.Command{
-						CommandID:       "resolved-sim",
-						ResourceUpdates: []apimodel.ResourceUpdate{{Operation: "create", ResourceLabel: "bucket"}},
-					},
-				},
-			}, nil, nil
+func TestAcceptanceOnlyLegacyReportsRecordedSuccess(t *testing.T) {
+	oldApply, oldInteractive := applyFn, isInteractive
+	t.Cleanup(func() { applyFn = oldApply; isInteractive = oldInteractive })
+	isInteractive = func() bool { return false }
+	applyFn = func(_ *app.App, _ *ApplyOptions, sim bool) (*apimodel.SubmitCommandResponse, []string, error) {
+		res := &apimodel.SubmitCommandResponse{CommandID: "accepted", Simulation: apimodel.Simulation{ChangesRequired: true, Command: apimodel.Command{ResourceUpdates: []apimodel.ResourceUpdate{{Operation: "accept"}}}}}
+		if !sim {
+			res.Simulation.Command.State = "Success"
 		}
-		return &apimodel.SubmitCommandResponse{CommandID: "self-resolved-detached-1"}, nil, nil
+		return res, nil, nil
 	}
+	out := captureStdout(t, func() { require.NoError(t, runApplyLegacy(newTestApp(), &ApplyOptions{Yes: true})) })
+	require.Contains(t, out, "Command accepted: Success")
+	require.NotContains(t, out, "asynchronous")
+}
 
-	launchSimView = func(th *theme.Theme, sim *apimodel.Simulation, opts simview.Options) (simview.Decision, error) {
-		return simview.DecisionConfirmed, nil
-	}
-
-	launchWatch = func(a *app.App, commandID string) (bool, error) { return false, nil }
-
-	a := newTestApp()
-	opts := &ApplyOptions{
-		OutputConsumer: printer.ConsumerHuman,
-		FormaFile:      "forma.pkl",
-		Mode:           pkgmodel.FormaApplyModeReconcile,
-	}
-	th := theme.New("formae")
-
-	out := captureStdout(t, func() {
-		err := runDriftFlow(a, th, opts, rejected)
-		require.NoError(t, err)
+func TestLegacyMixedResolutionPrintsRecordedGuidance(t *testing.T) {
+	oldApply, oldInteractive, oldWatch, oldDelta := applyFn, isInteractive, launchWatch, desiredDeltaFn
+	t.Cleanup(func() {
+		applyFn = oldApply
+		isInteractive = oldInteractive
+		launchWatch = oldWatch
+		desiredDeltaFn = oldDelta
 	})
-
-	assert.Contains(t, out, "Still running asynchronously on the agent. Check its status with:")
-	assert.Contains(t, out, "formae command status self-resolved-detached-1")
+	isInteractive = func() bool { return true }
+	applyFn = func(_ *app.App, _ *ApplyOptions, sim bool) (*apimodel.SubmitCommandResponse, []string, error) {
+		return &apimodel.SubmitCommandResponse{CommandID: "mixed", Review: &pkgmodel.DriftReview{ReviewID: "review"}, Simulation: apimodel.Simulation{ChangesRequired: true}}, nil, nil
+	}
+	launchWatch = func(_ *app.App, id string) (bool, error) { require.Equal(t, "mixed", id); return true, nil }
+	desiredDeltaFn = func(_ *app.App, id string) (*apimodel.CommandDesiredDelta, error) {
+		return &apimodel.CommandDesiredDelta{CommandID: id, State: "Success", Partial: true}, nil
+	}
+	out := captureStdout(t, func() {
+		require.NoError(t, runApplyLegacy(newTestApp(), &ApplyOptions{Yes: true, Resolution: &pkgmodel.DriftResolution{ObservationID: "observation", Decisions: []pkgmodel.DriftDecision{{ResourceID: "a", Action: "absorb"}}}}))
+	})
+	require.Contains(t, out, "formae extract --command 'mixed'")
 }
 
-// ---- E2E drift tests ----
-
-func TestDrift_E2E_ExtractFlow(t *testing.T) {
-	// This is a unit-level E2E: real seam stubs but no live HTTP server.
-	// The brief's "extract HTTP calls per selection" is satisfied by the
-	// extractResourcesFn seam going through a real client — validated in
-	// TestRunDriftFlow_Extract which checks the exact query strings.
-	// A full HTTP round-trip is covered in TestApplyTUI_EndToEnd pattern.
-
-	stubDriftSeams(t)
-
-	rejected := makeRejected()
-
-	isTerminal = func(w io.Writer) bool { return true }
-
-	// Simulate → reconcile rejection.
-	applyFn = func(a *app.App, opts *ApplyOptions, simulate bool) (*apimodel.SubmitCommandResponse, []string, error) {
-		if simulate {
-			return nil, nil, &apimodel.ErrorResponse[apimodel.FormaReconcileRejectedError]{
-				ErrorType: apimodel.ReconcileRejected,
-				Data:      rejected,
-			}
-		}
-		t.Fatal("real apply must NOT be submitted on extract path")
-		return nil, nil, nil
-	}
-
-	launchDriftView = func(th *theme.Theme, r *apimodel.FormaReconcileRejectedError, opts driftview.Options) (driftview.Decision, error) {
-		return driftview.DecisionExtract{
-			Path: "./test-extract.pkl",
-			Selected: []driftview.ResourceRef{
-				{Stack: "prod", Type: "AWS::S3::Bucket", Label: "my-bucket", Operation: "update"},
-			},
-		}, nil
-	}
-
-	var extractedQueries []string
-	extractResourcesFn = func(a *app.App, query string) (*pkgmodel.Forma, []string, error) {
-		extractedQueries = append(extractedQueries, query)
-		return &pkgmodel.Forma{
-			Resources: []pkgmodel.Resource{{Type: "AWS::S3::Bucket", Label: "my-bucket"}},
-		}, nil, nil
-	}
-
-	generateSourceCodeFn = func(a *app.App, forma *pkgmodel.Forma, path string) error {
-		return nil
-	}
-
-	a := newTestApp()
-	opts := &ApplyOptions{
-		OutputConsumer: printer.ConsumerHuman,
-		FormaFile:      "forma.pkl",
-		Mode:           pkgmodel.FormaApplyModeReconcile,
-	}
-
-	err := runApplyForHumans(a, opts)
-	require.NoError(t, err)
-
-	require.Len(t, extractedQueries, 1, "one extract call per selected ref")
-	assert.Equal(t, "stack:prod type:AWS::S3::Bucket label:my-bucket", extractedQueries[0])
-}
-
-func TestDrift_E2E_RevertFlow(t *testing.T) {
-	stubDriftSeams(t)
-
-	rejected := makeRejected()
-
-	isTerminal = func(w io.Writer) bool { return true }
-
-	var callOrder []string
-
-	// simulate1 → rejection; simulate2 (same drift) → same rejection; force submit → success.
-	applyCallCount := 0
-	applyFn = func(a *app.App, opts *ApplyOptions, simulate bool) (*apimodel.SubmitCommandResponse, []string, error) {
-		applyCallCount++
-		if simulate {
-			callOrder = append(callOrder, "simulate")
-			return nil, nil, &apimodel.ErrorResponse[apimodel.FormaReconcileRejectedError]{
-				ErrorType: apimodel.ReconcileRejected,
-				Data:      rejected,
-			}
-		}
-		t.Fatal("real apply via applyFn must NOT be called on revert path")
-		return nil, nil, nil
-	}
-
-	launchDriftView = func(th *theme.Theme, r *apimodel.FormaReconcileRejectedError, opts driftview.Options) (driftview.Decision, error) {
-		return driftview.DecisionRevertAll{}, nil
-	}
-
-	forcedApplyFn = func(a *app.App, opts *ApplyOptions) (*apimodel.SubmitCommandResponse, []string, error) {
-		callOrder = append(callOrder, "force-apply")
-		return &apimodel.SubmitCommandResponse{CommandID: "e2e-force-cmd"}, nil, nil
-	}
-
-	launchWatch = func(a *app.App, commandID string) (bool, error) {
-		callOrder = append(callOrder, "watch:"+commandID)
-		return true, nil
-	}
-
-	a := newTestApp()
-	opts := &ApplyOptions{
-		OutputConsumer: printer.ConsumerHuman,
-		FormaFile:      "forma.pkl",
-		Mode:           pkgmodel.FormaApplyModeReconcile,
-	}
-
-	err := runApplyForHumans(a, opts)
-	require.NoError(t, err)
-
-	// Assert request order: simulate POST → force POST → watch
-	// (D7: force submit only after fresh simulate)
-	require.GreaterOrEqual(t, len(callOrder), 3, "expected simulate, force-apply, watch in order")
-	assert.Equal(t, "simulate", callOrder[0], "first call must be simulate")
-	assert.Equal(t, "simulate", callOrder[1], "second call must be the re-validate simulate")
-	assert.Equal(t, "force-apply", callOrder[2], "force apply must follow the re-validate simulate")
-	assert.Equal(t, "watch:e2e-force-cmd", callOrder[3], "watch must follow force apply")
+func TestDriftDisplayIdentityEscapesControls(t *testing.T) {
+	require.Equal(t, "production", driftDisplayIdentity("production"))
+	require.Equal(t, `"prod\n\x1b[31m"`, driftDisplayIdentity("prod\n\x1b[31m"))
 }

@@ -123,3 +123,8 @@ func TestFilterUnabsorbedModifications_AliasMatchRequiresTypeMatch(t *testing.T)
 	got := FilterUnabsorbedModifications(mods, forma, fa)
 	assert.Len(t, got, 1, "alias match must require matching Type")
 }
+
+func TestStackLabelsFromFormaIncludesExplicitEmptyStacks(t *testing.T) {
+	forma := &pkgmodel.Forma{Stacks: []pkgmodel.Stack{{Label: "empty"}, {Label: "prod"}}, Resources: []pkgmodel.Resource{{Stack: "prod"}, {Stack: "indirect"}}}
+	assert.ElementsMatch(t, []string{"empty", "prod", "indirect"}, StackLabelsFromForma(forma))
+}

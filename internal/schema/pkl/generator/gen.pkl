@@ -646,6 +646,7 @@ class FakeValue extends formae.Value {
 /// that property's type — a port is an Int, a flag a Boolean. It is only ever
 /// rendered into a trailing comment, so it is carried untyped.
 class FakeResolvable extends formae.Resolvable {
+  FakeVisibility: String? = null
   FakeLabel: String? = label
   FakeStack: String? = stack
   FakeType: String?
@@ -659,6 +660,12 @@ class FakeResolvable extends formae.Resolvable {
 /// Carrier for a pre-processed $embed field.
 /// FakeParts is a List whose elements are alternately String (literal segment)
 /// and Map (decoded $res envelope — same shape FakeResolvable already handles).
+class FakeUnresolved {
+  Visibility: String?
+  Selector: String?
+  Message: String
+}
+
 class FakeEmbed {
   FakeParts: List
 }
@@ -676,6 +683,7 @@ class FakeEmbed {
 /// the carrier has no way to build from a stack label.
 class FakeGeneratorOutput {
   FakeGeneratorLabel: String
+  FakeLocalName: String?
   FakeOutput: String
 }
 
@@ -882,6 +890,7 @@ local function applyDynamicOrMapping(type: reflect.Class, value: Dynamic|Mapping
                 FakeType = typeName
                 FakeProperty = if (selector != null) secretValuePath(property) else mappedProperty
                 FakeJSON = selector
+                FakeVisibility = valueAsMap.getOrNull("$visibility") as String?
             })
 
             r
@@ -902,6 +911,7 @@ local function applyDynamicOrMapping(type: reflect.Class, value: Dynamic|Mapping
         else
             new FakeGeneratorOutput {
                 FakeGeneratorLabel = l
+                FakeLocalName = valueAsMap.getOrNull("$localName")
                 FakeOutput = o
             }
     else if (marker == "$value")
@@ -946,6 +956,10 @@ local function applyTypedProperties(type: reflect.Class, valueAsMap: Map): Typed
             // For other classes, use empty mapping - will fall back to direct property name matching
             Map().toMapping()
     )
+    let (unsupportedKeys = unknownDesiredKeys(valueAsMap, getAllProperties(type), reverseMapping.toMap()))
+    if (strictDesired && !unsupportedKeys.isEmpty)
+        Fail("Unsupported desired declaration fields: \(unsupportedKeys)")
+    else
     let (converted = getAllProperties(type)
         .fold(Map(), (acc: Map|GenerationFailure, name: String, prop: reflect.Property) ->
             if (acc is GenerationFailure)
@@ -980,6 +994,9 @@ local function getAllProperties(clazz: reflect.Class?): Map<String, reflect.Prop
   else getAllProperties(clazz.superclass!!) + clazz.properties //Double check what !!
 
 local function applyType(type: reflect.Type, value: Any): Any|GenerationFailure =
+  if (strictDesired && value is Dynamic|Mapping && value.toMap().getOrNull("$unresolved") is String)
+    new FakeUnresolved { Message = value.toMap()["$unresolved"]; Visibility = value.toMap().getOrNull("$visibility"); Selector = value.toMap().getOrNull("$json") }
+  else
   let (clazz = type.getClass())
   if (reflectTypeHandlers.containsKey(clazz))
     reflectTypeHandlers[clazz].apply(type, value)
@@ -1021,13 +1038,23 @@ function isResourceClass(clazz: reflect.Class): Boolean =
 /// names are ambiguous
 /// (a provider's `Secret` and `formae.Secret` share one) — and never
 /// interpolates the reflected class itself, which renders its whole graph.
+// Complete desired authoring must never silently omit a declaration key.
+local strictDesired: Boolean = (read?("prop:StrictDesired") ?? "false") == "true"
+local function unknownDesiredKeys(values: Map, properties: Map, mapping: Map): Set =
+    values.keys.filter((key) ->
+        !properties.containsKey(key) && !mapping.containsKey(key))
+
 function applyResource(res: Class, value: Dynamic, context: String) : Map =
     let (clazz = reflect.Class(res))
     let (valueAsMap = value.toMap())
     if (isResourceClass(clazz))
         let (clazzProperties = getAllProperties(clazz))
         let (reverseMapping = formae.fq.reverseFieldMapping(clazz))
-        clazzProperties.fold(Map(), (acc: Map|GenerationFailure, name: String, prop: reflect.Property) ->
+        let (writable = clazzProperties.filter((name, prop) -> !shouldSkipProperty(prop)))
+        let (unsupportedKeys = unknownDesiredKeys(valueAsMap, writable, reverseMapping.toMap()))
+        if (strictDesired && !unsupportedKeys.isEmpty)
+            throw("\(context): unsupported desired declaration fields: \(unsupportedKeys)")
+        else clazzProperties.fold(Map(), (acc: Map|GenerationFailure, name: String, prop: reflect.Property) ->
             // Skip internal properties
             if (shouldSkipProperty(prop))
                 acc
@@ -1051,7 +1078,7 @@ local function getTypeName(value: Typed): String =
   value.getClass().simpleName
 
 function shouldSkipProperty(prop: Any): Boolean =
-  (prop.annotations.filterIsInstance(formae.FieldHint).isEmpty && prop.name != "label" )
+  (prop.annotations.filterIsInstance(formae.FieldHint).isEmpty && prop.name != "label" && !(strictDesired && (prop.name == "group" || prop.name == "alias")) )
 
 function shouldSkipPropertyName(propertyName: String): Boolean =
   propertyName.startsWith("__") ||
@@ -1091,7 +1118,9 @@ local function parseValueEnhanced(value: Any): Any =
     let (typeName = getTypeName(value))
     // FakeEmbed: preserve parts as-is (each part is either a String literal
     // or a Dynamic/$res map — formatValueWithTypes handles the rendering).
-    if (typeName == "FakeEmbed")
+    if (typeName == "FakeUnresolved")
+      Map("__type__", "FakeUnresolved", "Message", (value as FakeUnresolved).Message, "Visibility", (value as FakeUnresolved).Visibility, "Selector", (value as FakeUnresolved).Selector)
+    else if (typeName == "FakeEmbed")
       Map("__type__", "FakeEmbed", "FakeParts", (value as FakeEmbed).FakeParts)
     // FakeGeneratorOutput: the carrier is declared in this module rather than a
     // schema package, so there is no import to look up for it.
@@ -1099,6 +1128,7 @@ local function parseValueEnhanced(value: Any): Any =
       let (g = value as FakeGeneratorOutput)
         Map("__type__", "FakeGeneratorOutput",
             "FakeGeneratorLabel", g.FakeGeneratorLabel,
+            "FakeLocalName", g.FakeLocalName,
             "FakeOutput", g.FakeOutput)
     else
     let (importInfo = getImportInfoForType(value.getClass(), typeName, value))
@@ -1233,7 +1263,15 @@ local function localNameOf(input: String): String =
 ///
 /// The split the agent's extract pre-processing performs is envelope-agnostic,
 /// so a part is whichever envelope the template framed at that offset.
+local function renderUnresolved(message: String, selector: String?, visibility: String?): String =
+  "(throw(\"\(escapeString(message))\"))"
+    + (if (selector != null) ".json(\"\(escapeString(selector))\")" else "")
+    + (if (visibility == "Opaque") ".opaque" else "")
+
 local function renderEmbedEnvelopePart(envelope: Map<String, Any>, indent: String): String =
+  if (strictDesired && envelope.getOrNull("$unresolved") is String)
+    "\\(\(renderUnresolved(envelope["$unresolved"], envelope.getOrNull("$json"), envelope.getOrNull("$visibility"))))"
+  else
   if (envelope.getOrNull("$gen") == true)
     renderEmbedGenPart(envelope)
   else
@@ -1254,7 +1292,7 @@ local function renderEmbedGenPart(envelope: Map<String, Any>): String =
     throw("Cannot render a generator reference embedded in a string: the reference "
       + "carries no generator label, or names no output of it.")
   else
-    "\\(\(localNameOf(l)).gen.\(o))"
+    "\\(\(envelope.getOrNull("$localName") as String? ?? localNameOf(l)).gen.\(o))"
 
 local function renderEmbedRefPart(resMap: Map<String, Any>, indent: String): String =
   let (s = resMap.getOrNull("$stack") as String?)
@@ -1285,12 +1323,10 @@ local function renderEmbedRefPart(resMap: Map<String, Any>, indent: String): Str
     // Single-line interpolation so the enclosing single-line embed string stays
     // valid. The class must be parenthesized — `(X) { .. }` — because an amends
     // expression in expression context (inside \(…)) requires it. The stack is
-    // emitted already in its localized String form (<stackLocal>.res.label) so
-    // the post-processing localization (which would otherwise rewrite a bare
-    // `stack = ".."` to a StackResolvable, mismatching Resolvable.stack: String?)
-    // leaves it alone; this is the same value the //resolvable marker yields on
-    // the whole-value path.
-    "\\((\(resInfo.importName).\(resInfo.clazz.simpleName)) { stack = \(localNameOf(s ?? "")).res.label; label = \"\(l)\" }.\(renderResolvableProperty(mappedProperty)))"
+    // a parenthesized literal in desired extraction, so an external owner
+    // never requires a managed stack declaration. The parentheses protect it
+    // from resource-stack localization. Actual extraction retains its local.
+    "\\((\(resInfo.importName).\(resInfo.clazz.simpleName)) { stack = \(if (strictDesired) "(\"\(escapeString(s ?? ""))\")" else localNameOf(s ?? "") + ".res.label"); label = \"\(escapeString(l ?? ""))\" }.\(renderResolvableProperty(mappedProperty))\(if (strictDesired && resMap.getOrNull("$visibility") == "Opaque") ".opaque" else ""))"
 
 local function formatValueWithTypes(value: Any, indent: String): String =
   if (value is Dynamic)
@@ -1315,7 +1351,9 @@ local function formatValueWithTypes(value: Any, indent: String): String =
         else
           "new " + typeName
       )
-        if (typeName.contains("FakeResolvable"))
+        if (typeName == "FakeUnresolved")
+          renderUnresolved(value["Message"], value.getOrNull("Selector"), value.getOrNull("Visibility"))
+        else if (typeName.contains("FakeResolvable"))
           // Special handling for FakeResolvable - only show Stack and Label, comment RealValue
           let (stack = value.getOrNull("FakeStack"))
           let (label = value.getOrNull("FakeLabel"))
@@ -1334,7 +1372,8 @@ local function formatValueWithTypes(value: Any, indent: String): String =
               (if (label != null) indent + "  label = \"\(label)\"\n" else "") +
               indent + "}." + renderResolvableProperty(property) +
               (let (selector = value.getOrNull("FakeJSON"))
-                if (selector is String) ".json(\"\(escapeString(selector))\")" else "")
+                if (selector is String) ".json(\"\(escapeString(selector))\")" else "") +
+              (if (strictDesired && value.getOrNull("FakeVisibility") == "Opaque") ".opaque" else "")
         else if (typeName == "FakeValue")
           // Special handling for FakeValue - render using fluent API
           let (fakeValue = value.getOrNull("FakeValue"))
@@ -1360,7 +1399,7 @@ local function formatValueWithTypes(value: Any, indent: String): String =
           // yields, and is not the author's to write.
           let (label = value.getOrNull("FakeGeneratorLabel") as String)
           let (output = value.getOrNull("FakeOutput") as String)
-            "\(localNameOf(label)).gen.\(output)"
+            "\(value.getOrNull("FakeLocalName") as String? ?? localNameOf(label)).gen.\(output)"
         else if (typeName == "FakeEmbed")
           // Render as formae.embed("""...\(<resolvable-ref>)...""").
           // FakeParts is a List alternating String literals and $res maps.
@@ -1624,3 +1663,36 @@ function genMapToPklStringWithTypes(
     \(formatNestedContentWithTypes(mapWithType, "    "))
       }
     """.replaceAll(importPlaceholder, replacePlaceholder)
+
+
+// Strict target configs have no plugin resource class. Reuse reference/value
+// carriers while rendering plain JSON containers without dropping null or keys.
+// Entries and delimiters need separate lines: a hashed value carries a line comment.
+function renderDesiredConfigValue(value: Any): String =
+  if (value is Dynamic)
+    let (fields = value.toMap())
+    if (strictDesired && fields.getOrNull("$unresolved") is String)
+      renderUnresolved(fields["$unresolved"], fields.getOrNull("$json"), fields.getOrNull("$visibility"))
+    else if (envelopeMarkerOf(fields) != null)
+      let (converted = applyDynamicOrMapping(reflect.Class(formae.Resolvable), value))
+      if (converted is GenerationFailure) throw("Unsupported desired target reference: " + failureMessage(converted))
+      else formatValueWithTypes(parseValueEnhanced(converted), "        ")
+    else
+      "new Mapping {\n" + fields.fold(List(), (acc, key, child) ->
+        acc.add("[\"" + escapeString(key) + "\"] = " + renderDesiredConfigValue(child))
+      ).join("\n") + "\n}"
+  else if (value is Listing)
+    "new Listing {\n" + value.toList().map((child) -> renderDesiredConfigValue(child)).join("\n") + "\n}"
+  else
+    formatValueWithTypes(value, "        ")
+
+function desiredConfigImports(value: Any): List<String> =
+  if (value is Dynamic)
+    let (fields = value.toMap())
+    let (own = if (fields.getOrNull("$res") == true)
+      List(requireResolvableInfo(fields.getOrNull("$type"), "in desired target config").moduleName)
+      else List())
+    fields.fold(own, (acc, key, child) -> acc + desiredConfigImports(child))
+  else if (value is Listing)
+    value.toList().flatMap((child) -> desiredConfigImports(child))
+  else List()

@@ -8,6 +8,8 @@ package workflow_tests_local
 
 import (
 	"encoding/json"
+	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -27,10 +29,17 @@ import (
 // through extract), but the new forma already reflects the current state of that resource,
 // the modification should not block a subsequent reconcile that adds new resources to the stack.
 func TestApplyForma_SoftReconcile_AbsorbedDriftDoesNotBlockNewResources(t *testing.T) {
+	for _, pure := range []bool{false, true} {
+		t.Run(fmt.Sprintf("pure=%v", pure), func(t *testing.T) { testLegacyAbsorption(t, pure) })
+	}
+}
+func testLegacyAbsorption(t *testing.T, pure bool) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		resource1Reads := 0
+		var providerCalls atomic.Int64
 		overrides := &plugin.ResourcePluginOverrides{
 			Create: func(request *resource.CreateRequest) (*resource.CreateResult, error) {
+				providerCalls.Add(1)
 				return &resource.CreateResult{
 					ProgressResult: &resource.ProgressResult{
 						Operation:          resource.OperationCreate,
@@ -41,6 +50,7 @@ func TestApplyForma_SoftReconcile_AbsorbedDriftDoesNotBlockNewResources(t *testi
 				}, nil
 			},
 			Read: func(request *resource.ReadRequest) (*resource.ReadResult, error) {
+				providerCalls.Add(1)
 				if request.NativeID == "test-resource1" {
 					var properties string
 					switch resource1Reads {
@@ -70,6 +80,7 @@ func TestApplyForma_SoftReconcile_AbsorbedDriftDoesNotBlockNewResources(t *testi
 				}, nil
 			},
 			Update: func(request *resource.UpdateRequest) (*resource.UpdateResult, error) {
+				providerCalls.Add(1)
 				return &resource.UpdateResult{
 					ProgressResult: &resource.ProgressResult{
 						Operation:          resource.OperationUpdate,
@@ -210,6 +221,13 @@ func TestApplyForma_SoftReconcile_AbsorbedDriftDoesNotBlockNewResources(t *testi
 			},
 		}
 
+		if pure {
+			reconcileWithNewResource.Resources = reconcileWithNewResource.Resources[:2]
+		}
+		callsBefore := providerCalls.Load()
+		versionsBefore, err := m.Datastore.LoadAllResourceVersions()
+		require.NoError(t, err)
+
 		// This should NOT return a FormaReconcileRejectedError because the drift
 		// from the patch is already absorbed in the forma.
 		_, err = m.ApplyForma(
@@ -223,5 +241,32 @@ func TestApplyForma_SoftReconcile_AbsorbedDriftDoesNotBlockNewResources(t *testi
 			assert.NoError(t, err)
 			return len(commands) == 3 && allCommandsSuccessful(commands)
 		}, 5*time.Second, 100*time.Millisecond, "reconcile with new resource should complete")
+
+		baseline, err := m.Datastore.GetResourcesAtLastReconcile("test-stack1")
+		require.NoError(t, err)
+		if pure {
+			require.Len(t, baseline, 2)
+			require.Equal(t, callsBefore, providerCalls.Load(), "pure absorption must perform no provider work")
+			versionsAfter, err := m.Datastore.LoadAllResourceVersions()
+			require.NoError(t, err)
+			require.Equal(t, versionsBefore, versionsAfter, "acceptance must not copy or rewrite inventory")
+		} else {
+			require.Len(t, baseline, 3)
+		}
+		var acceptanceCount int
+		for _, command := range commands {
+			for _, update := range command.ResourceUpdates {
+				if update.IsAcceptance() {
+					acceptanceCount++
+				}
+			}
+		}
+		require.Equal(t, 1, acceptanceCount, "unchanged resources must not receive contributions")
+		for _, snapshot := range baseline {
+			if snapshot.Label == "test-resource1" {
+				require.JSONEq(t, `{"foo":"baz"}`, string(snapshot.Properties), "source-edited absorption must persist the new desired baseline")
+			}
+		}
+
 	})
 }

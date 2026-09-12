@@ -7,6 +7,7 @@
 package metastructure
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -16,6 +17,18 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/generator_update"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
+
+func TestTranslateToAPICommand_RecordedInputsAreIndependent(t *testing.T) {
+	fa := &forma_command.FormaCommand{
+		ID: "command", Message: "Keep capacity",
+		InputProperties: json.RawMessage(`{"replicas":{"value":0}}`),
+	}
+	api := translateToAPICommand(fa)
+	assert.Equal(t, "Keep capacity", api.Message)
+	assert.JSONEq(t, string(fa.InputProperties), string(api.InputProperties))
+	api.InputProperties[0] = '!'
+	assert.Equal(t, byte('{'), fa.InputProperties[0], "presentation must not mutate stored inputs")
+}
 
 func TestTranslateToAPICommand_IncludesMode(t *testing.T) {
 	fa := &forma_command.FormaCommand{

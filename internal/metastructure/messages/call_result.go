@@ -35,6 +35,11 @@ func UnwrapCall(result any, err error) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	if r, ok := result.(interface{ CallFailure() error }); ok {
+		if failure := r.CallFailure(); failure != nil {
+			return nil, failure
+		}
+	}
 	if r, ok := result.(interface{ CallError() string }); ok && r.CallError() != "" {
 		return nil, errors.New(r.CallError())
 	}

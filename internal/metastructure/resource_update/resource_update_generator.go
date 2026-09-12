@@ -346,6 +346,7 @@ func validateAliasUsage(forma *pkgmodel.Forma, ds ResourceDataLookup) error {
 			}
 		}
 		if !found {
+			resolver.ObservePlanningStack(ds, constants.UnmanagedStack)
 			for _, ex := range allResources[constants.UnmanagedStack] {
 				if ex.Type == r.Type && ex.Label == r.Alias {
 					found = true
@@ -462,6 +463,9 @@ func generateResourceUpdatesForDestroy(
 	// Generate deletes for remaining managed resources in deleted targets.
 	// Resources already covered by explicit or cascade deletes are skipped.
 	if len(deletedTargets) > 0 {
+		for target := range deletedTargets {
+			resolver.ObservePlanningTargetInventory(ds, target)
+		}
 		allResourcesByStack, err := ds.LoadAllResourcesByStack()
 		if err != nil {
 			return nil, fmt.Errorf("failed to load resources for target cascade delete: %w", err)
@@ -778,9 +782,16 @@ func generateResourceUpdatesForReconcile(
 	var resourceReplaces []ResourceUpdate
 	var implicitDeleteResources []ResourceUpdate
 
+	for target := range replacedTargets {
+		resolver.ObservePlanningTargetInventory(ds, target)
+	}
 	allResourcesByStack, err := ds.LoadAllResourcesByStack()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load existing stacks: %w", err)
+	}
+	allResourcesByStack, err = acceptedOwnershipView(ds, forma, allResourcesByStack)
+	if err != nil {
+		return nil, err
 	}
 
 	// Pre-flight portability check for target replace. Every managed resource
@@ -834,7 +845,7 @@ func generateResourceUpdatesForReconcile(
 	// This allows forward references to new resources in the same command.
 	resolvableLookup := resourcesForResolvables(forma, allResourcesByStack)
 
-	effectiveDesired, err := ComputeEffectiveDesired(forma, allResourcesByStack)
+	effectiveDesired, err := ComputeEffectiveDesired(forma, allResourcesByStack, resolver.PlanningResourceObserver(ds))
 	if err != nil {
 		return nil, fmt.Errorf("failed to compute effective desired state: %w", err)
 	}
@@ -844,12 +855,29 @@ func generateResourceUpdatesForReconcile(
 		return nil, fmt.Errorf("failed to resolve generator generations: %w", err)
 	}
 
-	for _, stack := range forma.SplitByStack() {
+	// Explicit empty stacks still declare a complete reconciliation boundary:
+	// omitting their final resource must schedule its ordinary deletion.
+	reconcileStacks := forma.SplitByStack()
+	includedStacks := make(map[string]bool, len(reconcileStacks))
+	for _, stack := range reconcileStacks {
+		includedStacks[stack.SingleStackLabel()] = true
+	}
+	for _, stack := range forma.Stacks {
+		if !includedStacks[stack.Label] {
+			reconcileStacks = append(reconcileStacks, pkgmodel.Forma{Stacks: []pkgmodel.Stack{stack}})
+			includedStacks[stack.Label] = true
+		}
+	}
+	for _, stack := range reconcileStacks {
 		existingResources, err := ds.LoadResourcesByStack(stack.SingleStackLabel())
 		if err != nil {
-			slog.Error("Failed to load stack", "error", err)
-			continue
+			return nil, fmt.Errorf("failed to load reconcile stack: %w", err)
 		}
+		ownedView, e := acceptedOwnershipView(ds, &stack, map[string][]*pkgmodel.Resource{stack.SingleStackLabel(): existingResources})
+		if e != nil {
+			return nil, e
+		}
+		existingResources = ownedView[stack.SingleStackLabel()]
 
 		// Existing stack not found which means that all resources will be created.
 		if len(existingResources) == 0 {
@@ -857,8 +885,8 @@ func generateResourceUpdatesForReconcile(
 				if skipResurrectionForReapedTarget(source, existingTargetMap[newResource.Target]) {
 					continue
 				}
-				if existingUnmanaged, ok := findUnmanagedResource(newResource, allResourcesByStack); ok {
-					readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, resolvableLookup, effectiveDesired, generatorGenerationLookup)
+				if existingUnmanaged, ok := findUnmanagedResource(newResource, allResourcesByStack, ds); ok {
+					readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, resolvableLookup, effectiveDesired, generatorGenerationLookup, resolver.PlanningResourceObserver(ds))
 					if err != nil {
 						return nil, fmt.Errorf("failed to load resolvable properties: %w", err)
 					}
@@ -914,7 +942,7 @@ func generateResourceUpdatesForReconcile(
 
 					found = true
 
-					readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, resolvableLookup, effectiveDesired, generatorGenerationLookup)
+					readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, resolvableLookup, effectiveDesired, generatorGenerationLookup, resolver.PlanningResourceObserver(ds))
 
 					if err != nil {
 						return nil, fmt.Errorf("failed to load resolvable properties: %w", err)
@@ -994,8 +1022,8 @@ func generateResourceUpdatesForReconcile(
 					continue
 				}
 				// Check if this resource exists as an unmanaged resource
-				if existingUnmanaged, ok := findUnmanagedResource(newResource, allResourcesByStack); ok {
-					readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, resolvableLookup, effectiveDesired, generatorGenerationLookup)
+				if existingUnmanaged, ok := findUnmanagedResource(newResource, allResourcesByStack, ds); ok {
+					readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, resolvableLookup, effectiveDesired, generatorGenerationLookup, resolver.PlanningResourceObserver(ds))
 					if err != nil {
 						return nil, fmt.Errorf("failed to load resolvable properties: %w", err)
 					}
@@ -1118,7 +1146,7 @@ func generateResourceUpdatesForReconcile(
 			replacedKsuids[ru.DesiredState.Ksuid] = true
 		}
 	}
-	dependencyDeletes, cascadeUpdates := findDependencyUpdates(allDeleteUpdates, replacedKsuids, allResourcesByStack, existingTargetMap, source, forma)
+	dependencyDeletes, cascadeUpdates := findDependencyUpdates(allDeleteUpdates, replacedKsuids, allResourcesByStack, existingTargetMap, source, forma, resolver.PlanningResourceObserver(ds))
 
 	// Convert updates to replacements if they have dependency deletes
 
@@ -1239,7 +1267,10 @@ func mergeJSONPatchDocuments(base, addition json.RawMessage) (json.RawMessage, e
 	return json.Marshal(merged)
 }
 
-func findUnmanagedResource(resource pkgmodel.Resource, allResources map[string][]*pkgmodel.Resource) (pkgmodel.Resource, bool) {
+func findUnmanagedResource(resource pkgmodel.Resource, allResources map[string][]*pkgmodel.Resource, lookups ...any) (pkgmodel.Resource, bool) {
+	for _, ds := range lookups {
+		resolver.ObservePlanningStack(ds, constants.UnmanagedStack)
+	}
 	unmanagedResources, exists := allResources[constants.UnmanagedStack]
 	if !exists {
 		return pkgmodel.Resource{}, false
@@ -1281,6 +1312,9 @@ func generateResourceUpdatesForPatch(
 	var resourceUpdates []ResourceUpdate
 	var resourceReplaces []ResourceUpdate
 
+	for target := range replacedTargets {
+		resolver.ObservePlanningTargetInventory(ds, target)
+	}
 	allResourcesByStack, err := ds.LoadAllResourcesByStack()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load existing stacks: %w", err)
@@ -1319,7 +1353,7 @@ func generateResourceUpdatesForPatch(
 	// This allows forward references to new resources in the same command.
 	resolvableLookup := resourcesForResolvables(forma, allResourcesByStack)
 
-	effectiveDesired, err := ComputeEffectiveDesired(forma, allResourcesByStack)
+	effectiveDesired, err := ComputeEffectiveDesired(forma, allResourcesByStack, resolver.PlanningResourceObserver(ds))
 	if err != nil {
 		return nil, fmt.Errorf("failed to compute effective desired state: %w", err)
 	}
@@ -1355,6 +1389,7 @@ func generateResourceUpdatesForPatch(
 		// Process new resources in the stack - include unmanaged resources
 		existingResources := make([]*pkgmodel.Resource, 0, len(stackResources))
 		existingResources = append(existingResources, stackResources...)
+		resolver.ObservePlanningStack(ds, constants.UnmanagedStack)
 		if unmanagedResources, ok := allResourcesByStack[constants.UnmanagedStack]; ok {
 			existingResources = append(existingResources, unmanagedResources...)
 		}
@@ -1364,7 +1399,7 @@ func generateResourceUpdatesForPatch(
 
 			if matched != nil {
 				// Use NewResourceUpdateForExisting to handle all the logic
-				readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, resolvableLookup, effectiveDesired, generatorGenerationLookup)
+				readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(newResource, resolvableLookup, effectiveDesired, generatorGenerationLookup, resolver.PlanningResourceObserver(ds))
 				if err != nil {
 					return nil, fmt.Errorf("failed to load resolvable properties: %w", err)
 				}
@@ -1482,14 +1517,14 @@ func generateResourceUpdatesForPatch(
 			replacedKsuids[ru.DesiredState.Ksuid] = true
 		}
 	}
-	dependencyDeletes, cascadeUpdates := findDependencyUpdates(resourceReplaces, replacedKsuids, allResourcesByStack, existingTargetMap, source, forma)
+	dependencyDeletes, cascadeUpdates := findDependencyUpdates(resourceReplaces, replacedKsuids, allResourcesByStack, existingTargetMap, source, forma, resolver.PlanningResourceObserver(ds))
 	finalResourceUpdates := convertUpdatesToReplacementsForDependencies(allUpdates, dependencyDeletes, source)
 	finalResourceUpdates = appendCascadeUpdatesIfAbsent(finalResourceUpdates, cascadeUpdates)
 	return finalResourceUpdates, nil
 }
 
 // findResourcesThatDependOn finds all resources that have dependencies on the given resource
-func findResourcesThatDependOn(targetResource pkgmodel.Resource, allResources map[string][]*pkgmodel.Resource) ([]pkgmodel.Resource, error) {
+func findResourcesThatDependOn(targetResource pkgmodel.Resource, allResources map[string][]*pkgmodel.Resource, observers ...resolver.ResourceObserver) ([]pkgmodel.Resource, error) {
 	var dependentResources []pkgmodel.Resource
 	targetURI := targetResource.URI()
 
@@ -1506,6 +1541,7 @@ func findResourcesThatDependOn(targetResource pkgmodel.Resource, allResources ma
 			uris := resolver.ExtractResolvableURIs(*resource)
 			for _, uri := range uris {
 				if uri.Stripped() == targetURI.Stripped() {
+					resolver.ObservePlanningResource(observers, resource.Ksuid, resource)
 					dependentResources = append(dependentResources, *resource)
 					break
 				}
@@ -1529,7 +1565,7 @@ func findResourcesThatDependOn(targetResource pkgmodel.Resource, allResources ma
 // versioned TaskDefinition (Service.taskDefinition is mutable; UpdateService
 // accepts a new TaskDefinitionArn — no tear-down needed when a new TD
 // revision is created).
-func findDependencyUpdates(allDeleteUpdates []ResourceUpdate, replacedKsuids map[string]bool, allResources map[string][]*pkgmodel.Resource, existingTargetMap map[string]*pkgmodel.Target, source FormaCommandSource, forma *pkgmodel.Forma) ([]ResourceUpdate, []ResourceUpdate) {
+func findDependencyUpdates(allDeleteUpdates []ResourceUpdate, replacedKsuids map[string]bool, allResources map[string][]*pkgmodel.Resource, existingTargetMap map[string]*pkgmodel.Target, source FormaCommandSource, forma *pkgmodel.Forma, observers ...resolver.ResourceObserver) ([]ResourceUpdate, []ResourceUpdate) {
 	// Collect ksuids of resources being deleted so dependents can decide
 	// whether their refs land on a deletion target. Also build a label
 	// lookup so cascade-update synthesis can name the source resource for
@@ -1561,7 +1597,7 @@ func findDependencyUpdates(allDeleteUpdates []ResourceUpdate, replacedKsuids map
 			continue
 		}
 		// Find all resources that depend on this resource being deleted
-		dependentResources, err := findResourcesThatDependOn(deleteUpdate.DesiredState, allResources)
+		dependentResources, err := findResourcesThatDependOn(deleteUpdate.DesiredState, allResources, observers...)
 		if err != nil {
 			slog.Warn("Failed to find dependent resources",
 				"resource", deleteUpdate.DesiredState.Label,

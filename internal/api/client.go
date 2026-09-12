@@ -152,7 +152,29 @@ func (c *Client) WaitOnAvailable() bool {
 	}
 }
 
-func (c *Client) ApplyForma(forma *pkgmodel.Forma, mode pkgmodel.FormaApplyMode, simulate bool, clientID string, force bool) (*apimodel.SubmitCommandResponse, error) {
+func (c *Client) ApplyForma(forma *pkgmodel.Forma, mode pkgmodel.FormaApplyMode, simulate bool, clientID string, force bool, messages ...string) (*apimodel.SubmitCommandResponse, error) {
+	return c.applyForma(forma, mode, simulate, clientID, force, nil, messages...)
+}
+
+// ApplyFormaWithResolution checks the connected agent before sending controls
+// that an older server would otherwise silently ignore.
+func (c *Client) ApplyFormaWithResolution(forma *pkgmodel.Forma, mode pkgmodel.FormaApplyMode, simulate bool, clientID string, resolution pkgmodel.DriftResolution, messages ...string) (*apimodel.SubmitCommandResponse, error) {
+	stats, err := c.Stats()
+	if err != nil {
+		return nil, err
+	}
+	supported := false
+	for _, capability := range stats.Capabilities {
+		if capability == "shared-drift-resolution" {
+			supported = true
+		}
+	}
+	if !supported {
+		return nil, fmt.Errorf("connected agent does not support shared drift resolution; upgrade the agent")
+	}
+	return c.applyForma(forma, mode, simulate, clientID, false, &resolution, messages...)
+}
+func (c *Client) applyForma(forma *pkgmodel.Forma, mode pkgmodel.FormaApplyMode, simulate bool, clientID string, force bool, resolution *pkgmodel.DriftResolution, messages ...string) (*apimodel.SubmitCommandResponse, error) {
 	var status apimodel.SubmitCommandResponse
 
 	formaJSON, err := json.Marshal(&forma)
@@ -163,16 +185,46 @@ func (c *Client) ApplyForma(forma *pkgmodel.Forma, mode pkgmodel.FormaApplyMode,
 
 	const formFieldName = "file"
 	const clientFileName = "forma.json"
+	message := ""
+	if len(messages) > 0 {
+		message = messages[0]
+		if message != "" {
+			stats, err := c.Stats()
+			if err != nil {
+				return nil, err
+			}
+			supported := false
+			for _, capability := range stats.Capabilities {
+				if capability == "command-metadata" {
+					supported = true
+				}
+			}
+			if !supported {
+				return nil, fmt.Errorf("connected agent does not support command messages; upgrade the agent before applying with --message")
+			}
+		}
+	}
+
+	controls := ""
+	if resolution != nil {
+		raw, err := json.Marshal(resolution)
+		if err != nil {
+			return nil, err
+		}
+		controls = string(raw)
+	}
 
 	resp, err := c.resty.R().
 		SetResult(&status).
 		SetContentType("multipart/form-data").
 		SetHeader("Client-ID", clientID).
 		SetFormData(map[string]string{
-			"command":  "apply",
-			"mode":     string(mode),
-			"simulate": fmt.Sprintf("%t", simulate),
-			"force":    fmt.Sprintf("%t", force),
+			"resolution": controls,
+			"command":    "apply",
+			"message":    message,
+			"mode":       string(mode),
+			"simulate":   fmt.Sprintf("%t", simulate),
+			"force":      fmt.Sprintf("%t", force),
 		}).
 		SetFileReader(formFieldName, clientFileName, formaBuffer).
 		Post(c.endpoint + "/api/v1/commands")
@@ -314,6 +366,12 @@ func (c *Client) parseSubmitCommandErrorResponse(body io.ReadCloser) (*apimodel.
 	}
 
 	switch baseError.Error {
+	case apimodel.DriftResolutionRejected:
+		var errResp apimodel.ErrorResponse[apimodel.DriftResolutionError]
+		if err := json.Unmarshal(bodyBytes, &errResp); err != nil {
+			return nil, err
+		}
+		return nil, &errResp
 	case apimodel.ConflictingCommands:
 		var errResp apimodel.ErrorResponse[apimodel.FormaConflictingCommandsError]
 		if err := json.Unmarshal(bodyBytes, &errResp); err != nil {
@@ -474,6 +532,12 @@ func (c *Client) parseListCommandStatusErrorResponse(body io.ReadCloser) (*apimo
 	}
 
 	switch baseError.Error {
+	case apimodel.DriftResolutionRejected:
+		var errResp apimodel.ErrorResponse[apimodel.DriftResolutionError]
+		if err := json.Unmarshal(bodyBytes, &errResp); err != nil {
+			return nil, err
+		}
+		return nil, &errResp
 	case apimodel.InvalidQuery:
 		var errResp apimodel.ErrorResponse[apimodel.InvalidQueryError]
 		if err := json.Unmarshal(bodyBytes, &errResp); err != nil {
@@ -501,6 +565,12 @@ func (c *Client) parseListResourcesErrorResponse(body io.ReadCloser) (*pkgmodel.
 	}
 
 	switch baseError.Error {
+	case apimodel.DriftResolutionRejected:
+		var errResp apimodel.ErrorResponse[apimodel.DriftResolutionError]
+		if err := json.Unmarshal(bodyBytes, &errResp); err != nil {
+			return nil, err
+		}
+		return nil, &errResp
 	case apimodel.InvalidQuery:
 		var errResp apimodel.ErrorResponse[apimodel.InvalidQueryError]
 		if err := json.Unmarshal(bodyBytes, &errResp); err != nil {
@@ -528,6 +598,12 @@ func (c *Client) parseCancelCommandsErrorResponse(body io.ReadCloser) (*apimodel
 	}
 
 	switch baseError.Error {
+	case apimodel.DriftResolutionRejected:
+		var errResp apimodel.ErrorResponse[apimodel.DriftResolutionError]
+		if err := json.Unmarshal(bodyBytes, &errResp); err != nil {
+			return nil, err
+		}
+		return nil, &errResp
 	case apimodel.InvalidQuery:
 		var errResp apimodel.ErrorResponse[apimodel.InvalidQueryError]
 		if err := json.Unmarshal(bodyBytes, &errResp); err != nil {
@@ -670,6 +746,12 @@ func (c *Client) parseListResourceSummariesErrorResponse(body io.ReadCloser) ([]
 	}
 
 	switch baseError.Error {
+	case apimodel.DriftResolutionRejected:
+		var errResp apimodel.ErrorResponse[apimodel.DriftResolutionError]
+		if err := json.Unmarshal(bodyBytes, &errResp); err != nil {
+			return nil, err
+		}
+		return nil, &errResp
 	case apimodel.InvalidQuery:
 		var errResp apimodel.ErrorResponse[apimodel.InvalidQueryError]
 		if err := json.Unmarshal(bodyBytes, &errResp); err != nil {
@@ -982,6 +1064,71 @@ func (c *Client) UpdatePlugins(req apimodel.UpdatePluginsRequest) (*apimodel.Upd
 	var result apimodel.UpdatePluginsResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+	return &result, nil
+}
+
+// ExtractDesiredStacks requires the connected server's capability because an
+// older server may silently ignore the additive state query parameter.
+func (c *Client) ExtractDesiredStacks(query string) (*pkgmodel.Forma, error) {
+	stats, err := c.Stats()
+	if err != nil {
+		return nil, err
+	}
+	supported := false
+	for _, capability := range stats.Capabilities {
+		if capability == "desired-stack-extraction" {
+			supported = true
+		}
+	}
+	if !supported {
+		return nil, fmt.Errorf("connected agent does not support complete desired stack extraction")
+	}
+	resp, err := c.resty.R().SetQueryParam("query", query).SetQueryParam("state", "desired").Get(c.endpoint + "/api/v1/resources")
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode() == http.StatusBadRequest {
+		return c.parseListResourcesErrorResponse(resp.Body)
+	}
+	if resp.StatusCode() != http.StatusOK {
+		return nil, fmt.Errorf("desired stack extraction failed: HTTP %d - %s", resp.StatusCode(), resp.String())
+	}
+	var forma pkgmodel.Forma
+	if err := json.NewDecoder(resp.Body).Decode(&forma); err != nil {
+		return nil, err
+	}
+	if forma.Extraction == nil || len(forma.Extraction.CompleteStacks) == 0 {
+		return nil, fmt.Errorf("agent returned no complete desired stack scope")
+	}
+	return &forma, nil
+}
+
+// ExtractCommandDesiredDelta returns partial, command-derived source guidance.
+func (c *Client) ExtractCommandDesiredDelta(commandID, clientID string) (*apimodel.CommandDesiredDelta, error) {
+	stats, err := c.Stats()
+	if err != nil {
+		return nil, err
+	}
+	supported := false
+	for _, capability := range stats.Capabilities {
+		if capability == "shared-drift-resolution" {
+			supported = true
+		}
+	}
+	if !supported {
+		return nil, fmt.Errorf("connected agent does not support shared drift resolution")
+	}
+	var result apimodel.CommandDesiredDelta
+	response, err := c.resty.R().SetHeader("Client-ID", clientID).SetResult(&result).Get(c.endpoint + strings.Replace(CommandDesiredDeltaRoute, ":id", url.PathEscape(commandID), 1))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode() != http.StatusOK {
+		_, err = c.parseSubmitCommandErrorResponse(response.Body)
+		return nil, err
 	}
 	return &result, nil
 }

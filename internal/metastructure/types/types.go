@@ -32,6 +32,11 @@ const (
 	OperationUpdate OperationType = "update"
 	OperationDelete OperationType = "delete"
 	OperationRead   OperationType = "read"
+	// Acceptance operations record desired intent without invoking a provider.
+	OperationAccept       OperationType = "accept"
+	OperationAcceptDelete OperationType = "accept_delete"
+	// Withdraw removes desired intent without asserting anything about cloud state.
+	OperationWithdraw OperationType = "withdraw"
 
 	// OperationReaped tombstones a resource whose target was reaped. It is
 	// distinct from OperationDelete: a reap records that the provider was never

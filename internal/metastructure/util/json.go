@@ -5,8 +5,12 @@
 package util
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
+	"math/big"
 	"reflect"
+	"strings"
 )
 
 func JsonEqual(s1, s2 string) bool {
@@ -62,20 +66,35 @@ func JsonEqualIgnoreArrayOrder(a, b json.RawMessage) (bool, error) {
 // non-empty value (the preserveEmptyValues field hint). Arrays stay
 // order-agnostic in both modes.
 func JsonEqualIgnoreArrayOrderStrictRoots(a, b json.RawMessage, strictRoots map[string]bool) (bool, error) {
+	return jsonEqualIgnoreArrayOrderStrictRoots(a, b, strictRoots, false)
+}
+
+// JsonEqualIgnoreArrayOrderStrictRootsExactNumbers preserves exact decimal
+// values instead of converting numbers to float64. Equivalent decimal spellings
+// (including exponent notation) remain equal; array and empty rules are shared.
+func JsonEqualIgnoreArrayOrderStrictRootsExactNumbers(a, b json.RawMessage, strictRoots map[string]bool) (bool, error) {
+	return jsonEqualIgnoreArrayOrderStrictRoots(a, b, strictRoots, true)
+}
+
+func jsonEqualIgnoreArrayOrderStrictRoots(a, b json.RawMessage, strictRoots map[string]bool, exactNumbers bool) (bool, error) {
 	aEmpty := len(a) == 0
 	bEmpty := len(b) == 0
 	if aEmpty && bEmpty {
 		return true, nil
 	}
 
+	decode := json.Unmarshal
+	if exactNumbers {
+		decode = decodeExactComparisonJSON
+	}
 	var objA, objB any
 	if !aEmpty {
-		if err := json.Unmarshal(a, &objA); err != nil {
+		if err := decode(a, &objA); err != nil {
 			return false, err
 		}
 	}
 	if !bEmpty {
-		if err := json.Unmarshal(b, &objB); err != nil {
+		if err := decode(b, &objB); err != nil {
 			return false, err
 		}
 	}
@@ -108,6 +127,9 @@ func JsonEqualIgnoreArrayOrderStrictRoots(a, b json.RawMessage, strictRoots map[
 // of its value.
 func deepEqualArraysAsSets(a, b any) bool {
 	switch valA := a.(type) {
+	case json.Number:
+		valB, ok := b.(json.Number)
+		return ok && canonicalDecimal(valA.String()) == canonicalDecimal(valB.String())
 	case map[string]any:
 		valB, ok := b.(map[string]any)
 		if !ok || len(valA) != len(valB) {
@@ -167,6 +189,9 @@ func deepEqualIgnoreArrayOrder(a, b any) bool {
 	}
 
 	switch valA := a.(type) {
+	case json.Number:
+		valB, ok := b.(json.Number)
+		return ok && canonicalDecimal(valA.String()) == canonicalDecimal(valB.String())
 	case map[string]any:
 		valB, ok := b.(map[string]any)
 		if !ok {
@@ -273,4 +298,87 @@ func MergeJSON(jsons ...json.RawMessage) (json.RawMessage, error) {
 	}
 
 	return result, nil
+}
+
+// canonicalDecimal never expands an exponent into a huge decimal string.
+// Inputs are number tokens validated by the JSON decoder.
+func canonicalDecimal(number string) string {
+	sign := ""
+	if strings.HasPrefix(number, "-") {
+		sign = "-"
+		number = number[1:]
+	}
+	exponent := new(big.Int)
+	if i := strings.IndexAny(number, "eE"); i >= 0 {
+		exponent.SetString(number[i+1:], 10)
+		number = number[:i]
+	}
+	if i := strings.IndexByte(number, '.'); i >= 0 {
+		exponent.Sub(exponent, big.NewInt(int64(len(number)-i-1)))
+		number = number[:i] + number[i+1:]
+	}
+	number = strings.TrimLeft(number, "0")
+	if number == "" {
+		return "0"
+	}
+	trimmed := strings.TrimRight(number, "0")
+	exponent.Add(exponent, big.NewInt(int64(len(number)-len(trimmed))))
+	return sign + trimmed + "e" + exponent.String()
+}
+
+func decodeExactComparisonJSON(raw []byte, dest any) error {
+	if !json.Valid(raw) {
+		return fmt.Errorf("invalid comparison JSON")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	return decoder.Decode(dest)
+}
+
+// JsonEqualExactNumbers compares exact JSON structure, with numeric spelling
+// equivalence only. Array order, absent members, null and empty collections
+// remain distinct; object member order is immaterial. This is suitable before
+// transformations whose semantics may depend on array order or emptiness.
+func JsonEqualExactNumbers(a, b json.RawMessage) (bool, error) {
+	var before, after any
+	if err := decodeExactComparisonJSON(a, &before); err != nil {
+		return false, err
+	}
+	if err := decodeExactComparisonJSON(b, &after); err != nil {
+		return false, err
+	}
+	return deepEqualExactNumbers(before, after), nil
+}
+
+func deepEqualExactNumbers(a, b any) bool {
+	switch left := a.(type) {
+	case json.Number:
+		right, ok := b.(json.Number)
+		return ok && canonicalDecimal(left.String()) == canonicalDecimal(right.String())
+	case map[string]any:
+		right, ok := b.(map[string]any)
+		if !ok || len(left) != len(right) {
+			return false
+		}
+		for key, value := range left {
+			other, present := right[key]
+			if !present || !deepEqualExactNumbers(value, other) {
+				return false
+			}
+		}
+		return true
+	case []any:
+		right, ok := b.([]any)
+		if !ok || len(left) != len(right) {
+			return false
+		}
+		for i, value := range left {
+			if !deepEqualExactNumbers(value, right[i]) {
+				return false
+			}
+		}
+		return true
+	default:
+		return reflect.DeepEqual(a, b)
+	}
 }

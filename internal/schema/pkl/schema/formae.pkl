@@ -876,6 +876,9 @@ typealias ValueSource =
 
 open class Prop {
     hidden flag: String?
+    /// Marks whether this input's effective value must be redacted in command
+    /// history. Null preserves the safe behavior for older declarations.
+    hidden sensitive: Boolean? = null
     hidden default: (String|Boolean|Int|Float)?
     hidden type: Class = default?.getClass() ?? String
     hidden value: (String|Boolean|Int|Float)? =
@@ -902,6 +905,7 @@ open class Prop {
 
     // Output
     fixed Flag: String? = flag
+    fixed Sensitive: Boolean? = sensitive
     fixed Default: (String|Boolean|Int|Float)? = default
     fixed Type: Class = type
     fixed Value: (String|Boolean|Int|Float)? = value
@@ -917,9 +921,20 @@ open class Flag extends Annotation {
     name: String
 }
 
+/// Classifies a typed input for command history. Annotation presence defaults
+/// to sensitive; authors must opt public scalar inputs out explicitly.
+open class Sensitive extends Annotation {
+    value: Boolean = true
+}
+
 /// flagName: the member's `@Flag` override if present, else the member name.
 function flagName(p): String =
     p.annotations.filterIsInstance(Flag).firstOrNull?.name ?? p.name
+
+/// sensitivity: null for older/unclassified declarations, otherwise the
+/// explicit classification carried by @Sensitive.
+function sensitivity(p): Boolean? =
+    p.annotations.filterIsInstance(Sensitive).firstOrNull?.value
 
 /// Resolve a reflected type to its simple name, unwrapping nullables.
 function typeName(t): String =
@@ -963,6 +978,7 @@ function renderProperties(opts: Any?): Any? =
             for (name, p in reflect.Class(opts.getClass()).properties) {
                 [name] = new Prop {
                     flag = flagName(p)
+                    sensitive = sensitivity(p)
                     default = p.defaultValue as (String|Boolean|Int|Float)?
                     value = inst[name] as (String|Boolean|Int|Float)?
                 }

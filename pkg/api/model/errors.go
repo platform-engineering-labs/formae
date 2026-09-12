@@ -14,6 +14,7 @@ import (
 type APIError string
 
 const (
+	DriftResolutionRejected          APIError = "DriftResolutionRejected"
 	ConflictingCommands              APIError = "ConflictingCommands"
 	PatchRejected                    APIError = "PatchRejected"
 	ReconcileRejected                APIError = "ReconcileRejected"
@@ -61,6 +62,7 @@ func (e FormaConflictingCommandsError) Error() string {
 }
 
 type FormaReconcileRejectedError struct {
+	ObservationID  string                   `json:"ObservationID,omitempty"`
 	ModifiedStacks map[string]ModifiedStack `json:"ModifiedStacks"`
 }
 
@@ -69,13 +71,23 @@ func (e FormaReconcileRejectedError) Error() string {
 }
 
 type ResourceModification struct {
-	Stack         string          `json:"Stack"`
-	Type          string          `json:"Type"`
-	Label         string          `json:"Label"`
-	Operation     string          `json:"Operation"`
-	PatchDocument json.RawMessage `json:"PatchDocument,omitempty"` // JSON-patch diff between OldProperties and Properties — update ops only
-	Properties    json.RawMessage `json:"Properties,omitempty"`    // current (cloud) properties — update ops only
-	OldProperties json.RawMessage `json:"OldProperties,omitempty"` // properties at last reconcile — update ops only
+	// ExternalChangesOnly proves all physical versions after the desired
+	// baseline came from synchronization. Absence/false is not proof of a patch.
+	ExternalChangesOnly bool                    `json:"ExternalChangesOnly,omitempty"`
+	ObservedCommandID   string                  `json:"ObservedCommandID,omitempty"`
+	ObservedCommand     pkgmodel.Command        `json:"ObservedCommand,omitempty"`
+	ObservedMode        pkgmodel.FormaApplyMode `json:"ObservedMode,omitempty"`
+	ObservedSource      string                  `json:"ObservedSource,omitempty"`
+	ResourceID          string                  `json:"ResourceID,omitempty"`
+	ObservedVersion     string                  `json:"ObservedVersion,omitempty"`
+	StackID             string                  `json:"StackID,omitempty"`
+	Stack               string                  `json:"Stack"`
+	Type                string                  `json:"Type"`
+	Label               string                  `json:"Label"`
+	Operation           string                  `json:"Operation"`
+	PatchDocument       json.RawMessage         `json:"PatchDocument,omitempty"` // JSON-patch diff between OldProperties and Properties — update ops only
+	Properties          json.RawMessage         `json:"Properties,omitempty"`    // current (cloud) properties — update ops only
+	OldProperties       json.RawMessage         `json:"OldProperties,omitempty"` // properties at last reconcile — update ops only
 }
 
 type ModifiedStack struct {
@@ -409,3 +421,13 @@ type PluginDependencyConflictError struct {
 func (e PluginDependencyConflictError) Error() string {
 	return fmt.Sprintf("plugin dependency conflict: %s", e.Message)
 }
+
+// DriftResolutionError is a machine-readable, fail-closed resolution diagnostic.
+type DriftResolutionError struct {
+	Code       string `json:"Code"`
+	Reason     string `json:"Reason"`
+	ResourceID string `json:"ResourceID,omitempty"`
+	CommandID  string `json:"CommandId,omitempty"`
+}
+
+func (e DriftResolutionError) Error() string { return e.Code + ": " + e.Reason }

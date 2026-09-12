@@ -273,25 +273,39 @@ func (a *App) IsSupportedOutputSchema(contentType string) bool {
 	return schemaPlugin.SupportsExtract()
 }
 
-func (a *App) Apply(path string, props map[string]string, mode pkgmodel.FormaApplyMode, simulate bool, force bool) (*apimodel.SubmitCommandResponse, []string, error) {
-	compatible, _, nags, err := a.runBeforeCommand(true)
-	if !compatible {
-		return nil, nil, err
-	}
+func (a *App) EvaluateApply(path string, props map[string]string, mode pkgmodel.FormaApplyMode) (*pkgmodel.Forma, error) {
 	contentType := filepath.Ext(path)
 	schemaPlugin, err := schema.DefaultRegistry.GetByFileExtension(contentType)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	forma, err := schemaPlugin.Evaluate(path, pkgmodel.CommandApply, mode, props)
 	if err != nil {
-		return nil, nil, fmt.Errorf("%w\n%s %s\n%s %s",
+		return nil, fmt.Errorf("%w\n%s %s\n%s %s",
 			err,
 			docLabelStyle().Render("Pkl documentation:"),
 			"https://pkl-lang.org/main/current/language-reference/index.html",
 			docLabelStyle().Render("Pkl primer:"),
 			"https://pkl.platform.engineering",
 		)
+	}
+	return forma, nil
+}
+
+func (a *App) Apply(path string, props map[string]string, mode pkgmodel.FormaApplyMode, simulate bool, force bool, messages ...string) (*apimodel.SubmitCommandResponse, []string, error) {
+	forma, err := a.EvaluateApply(path, props, mode)
+	if err != nil {
+		return nil, nil, err
+	}
+	return a.ApplyEvaluated(forma, mode, simulate, force, nil, messages...)
+}
+
+// ApplyEvaluated reuses the exact evaluated declaration across observation,
+// review and submission, including auth retries. It never reopens source files.
+func (a *App) ApplyEvaluated(forma *pkgmodel.Forma, mode pkgmodel.FormaApplyMode, simulate, force bool, resolution *pkgmodel.DriftResolution, messages ...string) (*apimodel.SubmitCommandResponse, []string, error) {
+	compatible, _, nags, err := a.runBeforeCommand(true)
+	if !compatible {
+		return nil, nil, err
 	}
 	clientID, err := config.Config.ClientID()
 	if err != nil {
@@ -306,7 +320,13 @@ func (a *App) Apply(path string, props map[string]string, mode pkgmodel.FormaApp
 	var resp *apimodel.SubmitCommandResponse
 	err = a.withAuthRetry(func(authHeader http.Header, net *http.Client) error {
 		client := a.apiClient(authHeader, net)
-		r, err := client.ApplyForma(forma, mode, simulate, clientID, force)
+		var r *apimodel.SubmitCommandResponse
+		var err error
+		if resolution != nil {
+			r, err = client.ApplyFormaWithResolution(forma, mode, simulate, clientID, *resolution, messages...)
+		} else {
+			r, err = client.ApplyForma(forma, mode, simulate, clientID, force, messages...)
+		}
 		if err != nil {
 			return err
 		}
@@ -1126,22 +1146,26 @@ func (a *App) buildDependencyStrings(forma *pkgmodel.Forma, location schema.Sche
 		return nil, fmt.Errorf("listing installed plugins: %w", err)
 	}
 
+	return BuildDependencyStrings(forma, plugins, location)
+}
+
+// BuildDependencyStrings uses supplied plugin metadata only. It never resolves
+// connection profiles or queries an agent, so routed callers can render offline.
+func BuildDependencyStrings(forma *pkgmodel.Forma, plugins map[string]PluginInfo, location schema.SchemaLocation) ([]string, error) {
 	var deps []string
 	if formae.Version != "0.0.0" {
 		deps = append(deps, "pkl.formae@"+formae.Version)
 	}
 
-	seen := make(map[string]bool)
-	for _, r := range forma.Resources {
-		ns := strings.ToLower(r.Namespace())
-		if ns == "" || seen[ns] {
-			continue
-		}
-		seen[ns] = true
+	namespaces, err := renderNamespaces(forma)
+	if err != nil {
+		return nil, err
+	}
+	for _, ns := range namespaces {
 
 		info, ok := plugins[ns]
 		if !ok || info.Version == "" {
-			return nil, fmt.Errorf("resource type %q requires plugin namespace %q, but the agent does not report it installed. Install it with `formae plugin install %s` and retry", r.Type, ns, ns)
+			return nil, fmt.Errorf("resource type %q requires plugin namespace %q, but the agent does not report it installed. Install it with `formae plugin install %s` and retry", ns, ns, ns)
 		}
 
 		if location == schema.SchemaLocationLocal {
@@ -1453,4 +1477,27 @@ func (p *Projects) Properties(path string) (map[string]pkgmodel.Prop, error) {
 	}
 
 	return schemaPlugin.ProjectProperties(path)
+}
+
+func (a *App) ExtractDesiredStacks(query string) (*pkgmodel.Forma, error) {
+	var result *pkgmodel.Forma
+	err := a.withAuthRetry(func(headers http.Header, net *http.Client) error {
+		var err error
+		result, err = a.apiClient(headers, net).ExtractDesiredStacks(query)
+		return err
+	})
+	return result, err
+}
+func (a *App) ExtractCommandDesiredDelta(id string) (*apimodel.CommandDesiredDelta, error) {
+	clientID, err := config.Config.ClientID()
+	if err != nil {
+		return nil, err
+	}
+	var result *apimodel.CommandDesiredDelta
+	err = a.withAuthRetry(func(headers http.Header, net *http.Client) error {
+		var err error
+		result, err = a.apiClient(headers, net).ExtractCommandDesiredDelta(id, clientID)
+		return err
+	})
+	return result, err
 }

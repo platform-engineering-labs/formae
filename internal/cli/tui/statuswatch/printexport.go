@@ -57,6 +57,9 @@ func RenderDetailTable(th *theme.Theme, c apimodel.Command, width int, now time.
 	dm = dm.SetCommand(c, r, th.Spinner.StaticFrame, now, nil)
 
 	var sb strings.Builder
+	if summary := components.AcceptanceSummary(&c); summary != "" {
+		sb.WriteString(summary + "\n")
+	}
 	for _, g := range dm.groups {
 		labelW, typeW, stackW := groupLayout(g.kind, width)
 		sb.WriteString("\n  ")

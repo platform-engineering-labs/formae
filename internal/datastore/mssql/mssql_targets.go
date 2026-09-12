@@ -125,6 +125,7 @@ func (d *DatastoreMSSQL) CreateTarget(target *pkgmodel.Target) (string, error) {
 		return "", err
 	}
 
+	target.ExecutionIncarnation = incarnationID
 	return fmt.Sprintf("%s_1", target.Label), nil
 }
 
@@ -264,6 +265,7 @@ func (d *DatastoreMSSQL) UpdateTarget(target *pkgmodel.Target) (string, error) {
 	}
 	committed = true
 
+	target.ExecutionIncarnation = newIncarnationID
 	return fmt.Sprintf("%s_%d", target.Label, newVersion), nil
 }
 

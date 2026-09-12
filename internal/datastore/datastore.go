@@ -221,13 +221,18 @@ type PersistTargetReapRequest struct {
 
 // ResourceSnapshot contains resource state at a point in time.
 type ResourceSnapshot struct {
-	KSUID      string
-	Type       string
-	Label      string
-	Target     string
-	Properties json.RawMessage
-	NativeID   string
-	Schema     pkgmodel.Schema
+	// Declaration is the complete eligible desired contribution, privately decoded
+	// from resource_updates, never enriched with live inventory properties.
+	Declaration *pkgmodel.Resource
+	CommandID   string
+	StackID     string
+	KSUID       string
+	Type        string
+	Label       string
+	Target      string
+	Properties  json.RawMessage
+	NativeID    string
+	Schema      pkgmodel.Schema
 }
 
 // GeneratorIdentity is controller state for one generator: its stable KSUID

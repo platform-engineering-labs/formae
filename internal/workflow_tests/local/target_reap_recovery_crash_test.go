@@ -15,6 +15,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/platform-engineering-labs/formae/internal/datastore"
 	dssqlite "github.com/platform-engineering-labs/formae/internal/datastore/sqlite"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/testutil"
@@ -96,7 +97,7 @@ func TestApplyForma_RecoveryReAdoptSurvivesCrash(t *testing.T) {
 		f := &pkgmodel.Forma{
 			Stacks: []pkgmodel.Stack{{Label: "crash-stack"}},
 			Resources: []pkgmodel.Resource{
-				{Label: "res1", Type: "FakeAWS::Resource", Properties: v1, Schema: schema, Stack: "crash-stack", Target: "crash-target"},
+				{Label: "res1", Managed: true, Type: "FakeAWS::Resource", Properties: v1, Schema: schema, Stack: "crash-stack", Target: "crash-target"},
 			},
 			Targets: []pkgmodel.Target{{Label: "crash-target"}},
 		}
@@ -108,6 +109,14 @@ func TestApplyForma_RecoveryReAdoptSurvivesCrash(t *testing.T) {
 			return err == nil && len(resources) == 1
 		}, 15*time.Second, 200*time.Millisecond, "initial apply should create the resource")
 
+		initialResources, err := db.LoadResourcesByStack("crash-stack")
+		r.NoError(err)
+		r.Len(initialResources, 1)
+		r.Empty(f.Resources[0].Ksuid, "ApplyForma must not mutate the original declaration")
+		requestJSON, err := json.Marshal(f)
+		r.NoError(err)
+		f = &pkgmodel.Forma{}
+		r.NoError(json.Unmarshal(requestJSON, f)) // A fresh client request, with no runtime-assigned identity.
 		before, err := db.LoadTarget("crash-target")
 		r.NoError(err)
 		oldIncarnation := before.Health.IncarnationID
@@ -193,6 +202,17 @@ func TestApplyForma_RecoveryReAdoptSurvivesCrash(t *testing.T) {
 			incomplete, err := db2.LoadIncompleteFormaCommands()
 			return err == nil && len(incomplete) == 0
 		}, 20*time.Second, 200*time.Millisecond, "resume must persist the re-adopt and finish the command")
+		finalResources, err := db2.LoadResourcesByStack("crash-stack")
+		r.NoError(err)
+		r.Len(finalResources, 1)
+		r.Equal(initialResources[0].Ksuid, finalResources[0].Ksuid)
+		finalTarget, err := db2.LoadTarget("crash-target")
+		r.NoError(err)
+		observation, err := any(db2).(datastore.ResourceObservationReader).GetResourceObservation(finalResources[0].Ksuid)
+		r.NoError(err)
+		r.NotEmpty(observation.TargetIncarnationID)
+		r.Equal(finalTarget.Health.IncarnationID, observation.TargetIncarnationID, "resumed write must preserve exact target execution identity")
+		r.Empty(f.Resources[0].Ksuid)
 
 		reaped, err := db2.LoadReapedResources()
 		r.NoError(err)

@@ -497,6 +497,7 @@ func (p PKL) Evaluate(path string, cmd pkgmodel.Command, mode pkgmodel.FormaAppl
 		return nil, err
 	}
 
+	pkgmodel.RecordInputPropertySources(forma.Properties, props)
 	return forma, nil
 }
 

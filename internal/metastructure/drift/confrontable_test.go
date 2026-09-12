@@ -39,7 +39,7 @@ func TestRetainConfrontable_DropsToleratedCoOwnedMovement(t *testing.T) {
 	}
 	records := map[string]pkgmodel.OwnedMembers{"k1": {"labels": {Rule: "Mapping", Members: []string{"app"}}}}
 
-	got := RetainConfrontable([]datastore.ResourceModification{mod}, records, forma)
+	got := RetainConfrontable([]datastore.ResourceModification{mod}, records, nil, forma)
 	assert.Empty(t, got, "tolerated co-owned movement must not survive as unabsorbed drift")
 }
 
@@ -58,7 +58,7 @@ func TestRetainConfrontable_KeepsDeclaredMemberDrift(t *testing.T) {
 	}
 	records := map[string]pkgmodel.OwnedMembers{"k1": {"labels": {Rule: "Mapping", Members: []string{"app"}}}}
 
-	got := RetainConfrontable([]datastore.ResourceModification{mod}, records, forma)
+	got := RetainConfrontable([]datastore.ResourceModification{mod}, records, nil, forma)
 	assert.Len(t, got, 1, "a declared member's drift must remain confrontable")
 }
 
@@ -75,7 +75,7 @@ func TestRetainConfrontable_KeepsNotInFormaModification(t *testing.T) {
 	}
 	records := map[string]pkgmodel.OwnedMembers{"k1": {"labels": {Rule: "Mapping", Members: []string{"app"}}}}
 
-	got := RetainConfrontable([]datastore.ResourceModification{mod}, records, forma)
+	got := RetainConfrontable([]datastore.ResourceModification{mod}, records, nil, forma)
 	assert.Len(t, got, 1, "a modification with no matching declaration is kept")
 }
 
@@ -92,6 +92,26 @@ func TestRetainConfrontable_KeepsWitnessedProviderDefaultMove(t *testing.T) {
 		OldProperties: json.RawMessage(`{"Name":"n","EnableKeyRotation":false}`),
 		Properties:    json.RawMessage(`{"Name":"n","EnableKeyRotation":true}`),
 	}
-	got := RetainConfrontable([]datastore.ResourceModification{mod}, nil, forma)
+	got := RetainConfrontable([]datastore.ResourceModification{mod}, nil, nil, forma)
 	assert.Len(t, got, 1, "a provider-default move on a declared resource stays confrontable")
+}
+
+// Azure may return encryption defaults only during a later sync. Adding
+// metadata must not turn that initial population into an out-of-band decision.
+func TestRetainConfrontable_DropsLateProviderDefaultsDuringUnrelatedEdit(t *testing.T) {
+	forma := &pkgmodel.Forma{Resources: []pkgmodel.Resource{{
+		Stack: "azure-storage", Type: "AZURE::Storage::BlobContainer", Label: "container",
+		Properties: json.RawMessage(`{"name":"container","metadata":{"app":"demo"}}`),
+		Schema: pkgmodel.Schema{Hints: map[string]pkgmodel.FieldHint{
+			"defaultEncryptionScope":      {HasProviderDefault: true},
+			"denyEncryptionScopeOverride": {HasProviderDefault: true},
+		}},
+	}}}
+	mod := datastore.ResourceModification{
+		Stack: "azure-storage", Type: "AZURE::Storage::BlobContainer", Label: "container", Operation: "update", Ksuid: "container-id",
+		OldProperties: json.RawMessage(`{"name":"container"}`),
+		Properties:    json.RawMessage(`{"name":"container","defaultEncryptionScope":"$account-encryption-key","denyEncryptionScopeOverride":false}`),
+	}
+	assert.Empty(t, RetainConfrontable([]datastore.ResourceModification{mod}, nil, nil, forma),
+		"first population of provider defaults must not block an unrelated metadata update")
 }

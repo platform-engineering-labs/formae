@@ -363,3 +363,10 @@ func TestStripOpaqueRefValues_PreservesResolvedFrom(t *testing.T) {
 	assert.False(t, hasValue)
 	assert.Equal(t, digest, m["url"]["$resolvedFrom"])
 }
+
+func TestStripOpaqueRefValuesPreservesExactNumbers(t *testing.T) {
+	out, err := StripOpaqueRefValues(json.RawMessage(`{"nested":[9007199254740993],"ref":{"$ref":"formae://source#/value","$visibility":"Opaque","$value":"secret"}}`))
+	assert.NoError(t, err)
+	assert.Contains(t, string(out), "9007199254740993")
+	assert.NotContains(t, string(out), "secret")
+}

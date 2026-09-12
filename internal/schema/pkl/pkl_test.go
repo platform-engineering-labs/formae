@@ -35,6 +35,15 @@ func TestPkl_Evaluate(t *testing.T) {
 	assert.Equal(t, "A", gjson.Get(jsonString, "Resources.1.Properties.Type").String())
 }
 
+func TestPkl_EvaluateWithoutPropertiesProducesKnownEmptyInputManifest(t *testing.T) {
+	p := PKL{}
+	forma, err := p.Evaluate("./testdata/forma/bcrypt_test.pkl", model.CommandApply, model.FormaApplyModeReconcile, nil)
+	require.NoError(t, err)
+	require.NotNil(t, forma.Properties, "the current evaluator observed that no inputs are declared")
+	assert.Empty(t, forma.Properties)
+	assert.JSONEq(t, `{}`, string(model.SnapshotInputProperties(forma.Properties)))
+}
+
 // TestPkl_Evaluate_AutoResolvesUnresolvedProject verifies that applying a forma
 // whose directory has a PklProject but no resolved PklProject.deps.json succeeds:
 // Evaluate auto-resolves via pklrun instead of failing with a NoSuchFileException
@@ -563,7 +572,46 @@ func TestPkl_TypedPropsFlagAnnotation(t *testing.T) {
 	// Manifest: member key stays `certArn`, flag carries the override.
 	assert.Equal(t, "cert-arn", gjson.Get(jsonString, "Properties.certArn.Flag").String())
 	assert.Equal(t, arn, gjson.Get(jsonString, "Properties.certArn.Value").String())
+	assert.False(t, gjson.Get(jsonString, "Properties.certArn.Sensitive").Bool())
+	assert.True(t, gjson.Get(jsonString, "Properties.certArn.Sensitive").Exists())
+	assert.True(t, gjson.Get(jsonString, "Properties.token.Sensitive").Bool())
+	assert.False(t, gjson.Get(jsonString, "Properties.unclassified.Sensitive").Exists())
+
+	snapshot := string(model.SnapshotInputProperties(forma.Properties))
+	var inputs map[string]map[string]any
+	require.NoError(t, json.Unmarshal([]byte(snapshot), &inputs))
+	assert.Equal(t, arn, inputs["certArn"]["value"])
+	assert.Equal(t, "supplied", inputs["certArn"]["source"])
+	assert.Equal(t, true, inputs["token"]["redacted"])
+	assert.Equal(t, true, inputs["unclassified"]["unavailable"])
+	assert.NotContains(t, snapshot, "typed-secret-default")
+	assert.NotContains(t, snapshot, "older-default")
 
 	// Injected value carried into the resource via typed access.
 	assert.Equal(t, "pel-8080-"+arn+"-queue", gjson.Get(jsonString, "Resources.0.Properties.QueueName").String())
+}
+
+func TestPkl_LegacyPropSensitivity(t *testing.T) {
+	p := PKL{}
+	forma, err := p.Evaluate("./testdata/forma/test.pkl", model.CommandApply, model.FormaApplyModeReconcile,
+		map[string]string{"name": "public.example", "password": "supplied-secret"})
+	require.NoError(t, err)
+
+	jsonString := forma.ToJSON()
+	assert.False(t, gjson.Get(jsonString, "Properties.name.Sensitive").Bool())
+	assert.True(t, gjson.Get(jsonString, "Properties.name.Sensitive").Exists())
+	assert.True(t, gjson.Get(jsonString, "Properties.password.Sensitive").Bool())
+	assert.False(t, gjson.Get(jsonString, "Properties.test.Sensitive").Exists())
+
+	snapshot := string(model.SnapshotInputProperties(forma.Properties))
+	var inputs map[string]map[string]any
+	require.NoError(t, json.Unmarshal([]byte(snapshot), &inputs))
+	assert.Equal(t, map[string]any{
+		"source": "supplied",
+		"type":   "String",
+		"flag":   "name",
+		"value":  "public.example",
+	}, inputs["name"])
+	assert.NotContains(t, snapshot, "supplied-secret")
+	assert.NotContains(t, snapshot, "legacy-secret-default")
 }

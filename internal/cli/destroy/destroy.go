@@ -138,7 +138,7 @@ func DestroyCmd() *cobra.Command {
 			opts.Yes, _ = command.Flags().GetBool("yes")
 			onDependents, _ := command.Flags().GetString("on-dependents")
 			opts.OnDependents = OnDependents(onDependents)
-			opts.Properties = cmd.PropertiesFromCmd(command)
+			opts.Properties = cmd.ExplicitPropertiesFromCmd(command)
 
 			configFile, _ := command.Flags().GetString("config")
 			app, err := cmd.AppFromContext(command.Context(), configFile, "", command)

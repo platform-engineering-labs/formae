@@ -24,14 +24,12 @@ func confrontMappingSchema() pkgmodel.Schema {
 	}
 }
 
-// confront keeps a witness parameter in its signature for call-site
-// readability, but the predicate no longer consults a witness: provider-default
-// tolerance for resources the forma does not edit lives in the earlier drift
-// stages, so this predicate confronts any non-co-owned change.
+// The helper retains the witness argument for compatibility with the
+// surrounding fixtures. Classification uses the baseline and declaration;
+// established default values stay protected.
 func confront(t *testing.T, old, new, desired, witness string, prior pkgmodel.OwnedMembers, schema pkgmodel.Schema) bool {
 	t.Helper()
-	_ = witness
-	got, err := ModificationConfrontable(json.RawMessage(old), json.RawMessage(new), json.RawMessage(desired), prior, schema)
+	got, err := ModificationConfrontable(json.RawMessage(old), json.RawMessage(new), json.RawMessage(desired), json.RawMessage(witness), prior, schema)
 	require.NoError(t, err)
 	return got
 }
@@ -107,22 +105,12 @@ func TestModificationConfrontable_WitnessedProviderDefault_Confront(t *testing.T
 	assert.True(t, got, "a witnessed provider-default move must confront")
 }
 
-// A provider-default field moving out of band confronts at this predicate.
-// Tolerating first-time, unwitnessed provider-default population is the
-// earlier drift stages' job (a resource the forma does not edit never reaches
-// this predicate); here, everything that is not a never-owned co-owned member
-// stays and confronts.
-func TestModificationConfrontable_ProviderDefaultMove_Confront(t *testing.T) {
-	schema := pkgmodel.Schema{
-		Fields: []string{"Name", "EnableKeyRotation"},
-		Hints:  map[string]pkgmodel.FieldHint{"EnableKeyRotation": {HasProviderDefault: true}},
-	}
-	got := confront(t,
-		`{"Name":"n"}`,
-		`{"Name":"n","EnableKeyRotation":true}`,
-		`{"Name":"n"}`,
-		"", nil, schema)
-	assert.True(t, got, "a provider-default field's out-of-band move confronts at the predicate level")
+// First-time provider population is tolerated even when an unrelated edit
+// makes this resource enter the confrontation predicate.
+func TestModificationConfrontable_InitialProviderDefault_Tolerated(t *testing.T) {
+	schema := pkgmodel.Schema{Hints: map[string]pkgmodel.FieldHint{"EnableKeyRotation": {HasProviderDefault: true}}}
+	got := confront(t, `{"Name":"n"}`, `{"Name":"n","EnableKeyRotation":true}`, `{"Name":"n"}`, "", nil, schema)
+	assert.False(t, got, "initial provider defaults do not require a drift decision")
 }
 
 func TestModificationConfrontable_NoChange_Tolerated(t *testing.T) {
@@ -308,4 +296,53 @@ func TestModificationConfrontable_LargeIntMemberValue_Confront(t *testing.T) {
 		`{"labels":{"serial":9007199254740992}}`,
 		"", prior, confrontMappingSchema())
 	assert.True(t, got, "a declared member's large-integer drift must confront, not collapse via float64")
+}
+
+func TestModificationConfrontable_InitialDefaultsPreserveExplicitIntent(t *testing.T) {
+	for _, tc := range []struct {
+		name, old, observed, desired string
+		drift                        bool
+	}{
+		{"null-default", `{"enabled":null}`, `{"enabled":false}`, `{}`, false},
+		{"explicit-false", `{}`, `{"enabled":true}`, `{"enabled":false}`, true},
+		{"explicit-empty", `{}`, `{"enabled":["provider"]}`, `{"enabled":[]}`, true},
+		{"existing-value", `{"enabled":false}`, `{"enabled":true}`, `{}`, true},
+		{"nested-first-population", `{}`, `{"settings":{"enabled":false}}`, `{}`, false},
+		{"nested-empty-parent", `{"settings":{}}`, `{"settings":{"enabled":false}}`, `{}`, false},
+		{"number-preservation", `{"number":9007199254740993}`, `{"number":9007199254740992,"enabled":false}`, `{}`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := "enabled"
+			if tc.name == "nested-first-population" || tc.name == "nested-empty-parent" {
+				path = "settings.enabled"
+			}
+			schema := pkgmodel.Schema{Hints: map[string]pkgmodel.FieldHint{path: {HasProviderDefault: true}}}
+			assert.Equal(t, tc.drift, confront(t, tc.old, tc.observed, tc.desired, "", nil, schema))
+		})
+	}
+}
+
+func TestModificationConfrontable_PatchWrittenDefaultAfterBaseline_Confront(t *testing.T) {
+	schema := pkgmodel.Schema{Hints: map[string]pkgmodel.FieldHint{"enabled": {HasProviderDefault: true}}}
+	assert.True(t, confront(t, `{}`, `{"enabled":false}`, `{}`, `{"enabled":true}`, nil, schema),
+		"a value written after the reconcile baseline is not initial provider population")
+}
+
+func TestModificationConfrontable_InitialDefaultShapes(t *testing.T) {
+	for _, tc := range []struct{ name, path, old, observed, desired string }{
+		{"empty-list", "targets", `{"targets":[]}`, `{"targets":["provider"]}`, `{}`},
+		{"empty-map", "options", `{"options":{}}`, `{"options":{"provider":true}}`, `{}`},
+		{"deep-parent", "a.b.enabled", `{}`, `{"a":{"b":{"enabled":false}}}`, `{}`},
+		{"array-leaf", "items.enabled", `{"items":[{"name":"a"}]}`, `{"items":[{"name":"a","enabled":false}]}`, `{"items":[{"name":"a"}]}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			schema := pkgmodel.Schema{Hints: map[string]pkgmodel.FieldHint{tc.path: {HasProviderDefault: true}}}
+			assert.False(t, confront(t, tc.old, tc.observed, tc.desired, "", nil, schema))
+		})
+	}
+}
+
+func TestModificationConfrontable_DefaultDoesNotHideAncestorTypeChange(t *testing.T) {
+	schema := pkgmodel.Schema{Hints: map[string]pkgmodel.FieldHint{"settings.enabled": {HasProviderDefault: true}}}
+	assert.True(t, confront(t, `{"settings":"explicit"}`, `{"settings":{"enabled":false}}`, `{}`, "", nil, schema))
 }

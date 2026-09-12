@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/testutil"
 	"github.com/platform-engineering-labs/formae/internal/workflow_tests/test_helpers"
@@ -72,9 +73,12 @@ func TestMetastructure_ApplyFormaHashesOpaqueValues(t *testing.T) {
 		}, "test-client-id", "", "")
 		require.NoError(t, err)
 
-		assert.Eventually(t, func() bool {
+		// Desired secrets remain resumable until command finalization atomically
+		// persists the terminal state and hashed resource updates.
+		require.Eventually(t, func() bool {
 			fas, err := m.Datastore.LoadFormaCommands()
-			return err == nil && len(fas) == 1 && len(fas[0].ResourceUpdates) == 1 &&
+			return err == nil && len(fas) == 1 && fas[0].State == forma_command.CommandStateSuccess &&
+				len(fas[0].ResourceUpdates) == 1 &&
 				fas[0].ResourceUpdates[0].State == resource_update.ResourceUpdateStateSuccess
 		}, 3*time.Second, 100*time.Millisecond)
 

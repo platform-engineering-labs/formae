@@ -1,309 +1,332 @@
-// © 2025 Platform Engineering Labs Inc.
-//
+// © 2026 Platform Engineering Labs Inc.
 // SPDX-License-Identifier: FSL-1.1-ALv2
-
 package apply
 
 import (
+	"errors"
 	"fmt"
-	"os"
+	"sort"
+	"strings"
+	"unicode"
 
-	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/huh"
 	"github.com/platform-engineering-labs/formae/internal/cli/app"
-	"github.com/platform-engineering-labs/formae/internal/cli/nag"
-	"github.com/platform-engineering-labs/formae/internal/cli/tui"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
-	"github.com/platform-engineering-labs/formae/internal/cli/tui/driftview"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/errfmt"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/simview"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
-	"github.com/platform-engineering-labs/formae/internal/schema"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
 
-// launchDriftView is a package-level var so tests can stub it.
-var launchDriftView = func(th *theme.Theme, rejected *apimodel.FormaReconcileRejectedError, opts driftview.Options) (driftview.Decision, error) {
-	model := driftview.New(th, rejected, opts)
-	final, err := tui.Run(model, tui.DefaultRunOptions())
-	if err != nil {
-		return driftview.DecisionAbort{}, err
-	}
-	return final.(driftview.Model).Decision(), nil
+var errResolutionAborted = errors.New("drift resolution aborted")
+var chooseDrift = defaultChooseDrift
+var desiredDeltaFn = func(a *app.App, id string) (*apimodel.CommandDesiredDelta, error) {
+	return a.ExtractCommandDesiredDelta(id)
 }
 
-// confirmOverwriteFn is seamed so tests can bypass the interactive prompt.
-var confirmOverwriteFn = func(th *theme.Theme, path string) (bool, error) {
-	return components.RunConfirm(th, fmt.Sprintf("File '%s' already exists. Overwrite?", path), "")
+type driftChoice struct {
+	modification apimodel.ResourceModification
+	action       string
 }
 
-// forcedApplyFn submits a real apply with force=true, ignoring opts.Force.
-var forcedApplyFn = func(a *app.App, opts *ApplyOptions) (*apimodel.SubmitCommandResponse, []string, error) {
-	return a.Apply(opts.FormaFile, opts.Properties, opts.Mode, false, true)
-}
-
-// extractResourcesFn is seamed so tests and E2E can stub or intercept it.
-var extractResourcesFn = func(a *app.App, query string) (*pkgmodel.Forma, []string, error) {
-	return a.ExtractResources(query, false)
-}
-
-// generateSourceCodeFn is seamed so tests can bypass file generation.
-var generateSourceCodeFn = func(a *app.App, forma *pkgmodel.Forma, path string) error {
-	_, err := a.GenerateSourceCode(forma, path, "pkl", schema.SchemaLocationRemote)
-	return err
-}
-
-// runDriftFlow drives the reconcile-rejected loop; returns nil when handled
-// (extracted or self-resolved) and submits+watches on a validated revert.
-func runDriftFlow(a *app.App, th *theme.Theme, opts *ApplyOptions, rejected apimodel.FormaReconcileRejectedError) error {
-	driftOpts := driftview.Options{SimulateOnly: opts.Simulate, FormaFile: opts.FormaFile}
-	for {
-		decision, err := launchDriftView(th, &rejected, driftOpts)
+// Each radio selector starts on an invalid placeholder. Neither an untouched
+// selector nor quitting the form can authorize a decision.
+var runDecisionForm = func(th *theme.Theme, items []driftChoice) error {
+	groups := make([]*huh.Group, 0, len(items))
+	for i := range items {
+		item := &items[i]
+		mod := item.modification
+		lines, err := components.RenderChangeLinesFromPatch(th, mod.PatchDocument, mod.Properties, mod.OldProperties, nil)
 		if err != nil {
 			return err
 		}
-
-		switch d := decision.(type) {
-		case driftview.DecisionAbort:
-			// The user already reviewed the drift in the TUI — don't dump the
-			// verbose rejection to the scrollback on the way out. A concise
-			// acknowledgement (matching the simview abort) is enough.
-			fmt.Print(lipgloss.NewStyle().Foreground(th.Palette.TextSubtle).Render("Apply aborted.") + "\n")
+		description := fmt.Sprintf("%s drift. All changed fields on this resource are resolved together.\n%s", mod.Operation, strings.Join(lines, "\n"))
+		description = "Origin: " + driftOrigin(mod) + "\n" + description
+		groups = append(groups, huh.NewGroup(huh.NewSelect[string]().Title(fmt.Sprintf("%s / %s / %s", driftDisplayIdentity(mod.Stack), driftDisplayIdentity(mod.Type), driftDisplayIdentity(mod.Label))).Description(description).Options(huh.NewOption("Choose a resolution…", ""), huh.NewOption("Absorb: keep the observed state as desired intent", "absorb"), huh.NewOption("Revert: restore the previous desired intent", "revert")).Value(&item.action).Validate(func(value string) error {
+			if value != "absorb" && value != "revert" {
+				return fmt.Errorf("choose absorb or revert")
+			}
 			return nil
-
-		case driftview.DecisionExtract:
-			return handleExtract(a, th, d, opts.FormaFile)
-
-		case driftview.DecisionRevertAll:
-			// Hard guard: under --simulate, never perform a real cloud mutation.
-			// The UI already hides the revert action (SimulateOnly on driftOpts),
-			// but defend in depth here in case the model is bypassed.
-			if opts.Simulate {
-				fmt.Print(lipgloss.NewStyle().Foreground(a.Theme().Palette.TextSubtle).Render("Command will not continue — simulation only") + "\n")
-				return nil
-			}
-			newRes, _, simErr := applyFn(a, opts, true)
-			if simErr != nil {
-				if reconcileErr, ok := simErr.(*apimodel.ErrorResponse[apimodel.FormaReconcileRejectedError]); ok {
-					newRejected := reconcileErr.Data
-					if sameDrift(rejected, newRejected) {
-						return submitForcedApply(a, th, opts)
-					}
-					rejected = newRejected
-					driftOpts = driftview.Options{
-						Notice:       "Drift changed while you were reviewing — re-confirm against the current changes.",
-						SimulateOnly: opts.Simulate,
-						FormaFile:    opts.FormaFile,
-					}
-					continue
-				}
-				msg, renderErr := errfmt.Render(simErr)
-				if renderErr != nil {
-					return fmt.Errorf("error rendering error message: %v", renderErr)
-				}
-				return fmt.Errorf("%s", msg)
-			}
-			fmt.Println("Out-of-band changes were absorbed or reverted since rejection — continuing with a normal apply.")
-			return handleSelfResolvedDrift(a, th, opts, newRes)
-		}
+		})))
 	}
+	return components.NewThemedForm(th, groups...).Run()
 }
 
-// handleExtract implements the Extract decision: extract each selected resource,
-// merge Formas, generate source code, confirm overwrite if needed, and print the
-// next-steps guidance. formaFile is the user's original forma, named in the
-// re-apply command.
-func handleExtract(a *app.App, th *theme.Theme, d driftview.DecisionExtract, formaFile string) error {
-	merged := &pkgmodel.Forma{
-		Stacks:    []pkgmodel.Stack{},
-		Targets:   []pkgmodel.Target{},
-		Resources: []pkgmodel.Resource{},
-	}
-	seenStacks := map[string]bool{}
-	seenTargets := map[string]bool{}
-
-	for _, ref := range d.Selected {
-		query := fmt.Sprintf("stack:%s type:%s label:%s", ref.Stack, ref.Type, ref.Label)
-		forma, _, err := extractResourcesFn(a, query)
-		if err != nil {
-			return fmt.Errorf("error extracting resource %s/%s/%s: %v", ref.Stack, ref.Type, ref.Label, err)
+func driftItems(rejected apimodel.FormaReconcileRejectedError) []driftChoice {
+	var items []driftChoice
+	for stack, group := range rejected.ModifiedStacks {
+		for _, mod := range group.ModifiedResources {
+			if mod.Operation == "create" || mod.Operation == "update" || mod.Operation == "delete" {
+				mod.Stack = stack
+				items = append(items, driftChoice{modification: mod})
+			}
 		}
-		if forma == nil {
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].modification.ResourceID < items[j].modification.ResourceID })
+	return items
+}
+func validateDecisions(rejected apimodel.FormaReconcileRejectedError, decisions []pkgmodel.DriftDecision) error {
+	if rejected.ObservationID == "" {
+		return fmt.Errorf("agent did not provide a shared drift observation; upgrade the agent to resolve drift")
+	}
+	items := driftItems(rejected)
+	expected := map[string]bool{}
+	for _, item := range items {
+		id := item.modification.ResourceID
+		if id == "" || expected[id] {
+			return fmt.Errorf("drift has missing or duplicate resource identity")
+		}
+		expected[id] = true
+	}
+	if len(expected) == 0 || len(decisions) != len(expected) {
+		return fmt.Errorf("choose exactly one absorb or revert action for every drifted resource")
+	}
+	for _, d := range decisions {
+		if !expected[d.ResourceID] || (d.Action != "absorb" && d.Action != "revert") {
+			return fmt.Errorf("invalid or duplicate drift decision for %q", d.ResourceID)
+		}
+		delete(expected, d.ResourceID)
+	}
+	return nil
+}
+func defaultChooseDrift(th *theme.Theme, rejected apimodel.FormaReconcileRejectedError) ([]pkgmodel.DriftDecision, error) {
+	if rejected.ObservationID == "" {
+		return nil, fmt.Errorf("agent does not provide shared drift resolution observations; upgrade the agent")
+	}
+	items := driftItems(rejected)
+	if len(items) == 0 {
+		return nil, fmt.Errorf("no actionable drift observations")
+	}
+	if err := runDecisionForm(th, items); err != nil {
+		if errors.Is(err, huh.ErrUserAborted) {
+			return nil, errResolutionAborted
+		}
+		return nil, err
+	}
+	decisions := make([]pkgmodel.DriftDecision, 0, len(items))
+	for _, item := range items {
+		decisions = append(decisions, pkgmodel.DriftDecision{ResourceID: item.modification.ResourceID, Action: item.action})
+	}
+	if err := validateDecisions(rejected, decisions); err != nil {
+		return nil, err
+	}
+	return decisions, nil
+}
+
+func resolutionStale(err error) bool {
+	var e *apimodel.ErrorResponse[apimodel.DriftResolutionError]
+	return errors.As(err, &e) && e.Data.Code == "stale-review"
+}
+func humanApplyError(err error) error {
+	message, renderErr := errfmt.Render(err)
+	if renderErr != nil {
+		return renderErr
+	}
+	return errors.New(message)
+}
+
+func runRecordedDriftFlow(a *app.App, th *theme.Theme, opts *ApplyOptions, rejected apimodel.FormaReconcileRejectedError) error {
+	for {
+		decisions, err := chooseDrift(th, rejected)
+		if errors.Is(err, errResolutionAborted) {
+			fmt.Println("Apply aborted.")
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if err := validateDecisions(rejected, decisions); err != nil {
+			return err
+		}
+		opts.Resolution = &pkgmodel.DriftResolution{ObservationID: rejected.ObservationID, Decisions: decisions}
+		res, _, err := applyFn(a, opts, true)
+		if err == nil {
+			err = confirmAndSubmitResolution(a, th, opts, res)
+		}
+		if !resolutionStale(err) {
+			if err != nil {
+				return humanApplyError(err)
+			}
+			return nil
+		}
+		fmt.Println("Drift or the final plan changed. Review fresh observations and confirm a new plan.")
+		opts.Resolution = nil
+		fresh, _, freshErr := applyFn(a, opts, true)
+		var rejection *apimodel.ErrorResponse[apimodel.FormaReconcileRejectedError]
+		if errors.As(freshErr, &rejection) {
+			rejected = rejection.Data
 			continue
 		}
-		merged.Resources = append(merged.Resources, forma.Resources...)
-		// Carry over stacks and targets. The PKL generator requires the Stacks
-		// property to be present; omitting it makes serialization fail with
-		// "Cannot find property `Stacks`".
-		for _, s := range forma.Stacks {
-			if !seenStacks[s.Label] {
-				seenStacks[s.Label] = true
-				merged.Stacks = append(merged.Stacks, s)
+		if freshErr != nil {
+			return humanApplyError(freshErr)
+		}
+		return confirmAndSubmitResolution(a, th, opts, fresh)
+	}
+}
+
+func prepareMessage(opts *ApplyOptions, review *pkgmodel.DriftReview) {
+	if opts.MessageExplicit || opts.messageEdited || (opts.Message != "" && opts.Message != opts.suggestedMessage) {
+		return
+	}
+	suggestion := "Apply " + string(opts.Mode) + " changes"
+	if review != nil {
+		absorb, revert := 0, 0
+		stacks := map[string]bool{}
+		for _, d := range review.Decisions {
+			if d.Action == "absorb" {
+				absorb++
+			} else if d.Action == "revert" {
+				revert++
 			}
 		}
-		for _, t := range forma.Targets {
-			if !seenTargets[t.Label] {
-				seenTargets[t.Label] = true
-				merged.Targets = append(merged.Targets, t)
-			}
+		for _, o := range review.Observations {
+			stacks[o.Stack] = true
+		}
+		labels := make([]string, 0, len(stacks))
+		for s := range stacks {
+			labels = append(labels, s)
+		}
+		sort.Strings(labels)
+		suggestion = fmt.Sprintf("Resolve %s drift: absorb %d, revert %d", strings.Join(labels, ", "), absorb, revert)
+	}
+	opts.Message = suggestion
+	opts.suggestedMessage = suggestion
+}
+
+func previewOptions(opts *ApplyOptions, res *apimodel.SubmitCommandResponse) simview.Options {
+	options := simview.Options{Kind: simview.KindApply, Mode: string(opts.Mode), Source: opts.FormaFile, SimulateOnly: opts.Simulate, Description: res.Description}
+	if !opts.Simulate {
+		prepareMessage(opts, res.Review)
+		if !opts.MessageExplicit {
+			options.Message = &opts.Message
 		}
 	}
+	return options
+}
 
-	if len(merged.Resources) == 0 {
-		fmt.Println("No resources extracted.")
+func confirmAndSubmitResolution(a *app.App, th *theme.Theme, opts *ApplyOptions, res *apimodel.SubmitCommandResponse) error {
+	if opts.Resolution != nil && (res.Review == nil || res.Review.ReviewID == "") {
+		return fmt.Errorf("agent returned no final resolution review; command was not submitted")
+	}
+	if !res.Simulation.ChangesRequired {
+		fmt.Println("No changes needed.")
 		return nil
 	}
-
-	if _, err := os.Stat(d.Path); err == nil {
-		ok, promptErr := confirmOverwriteFn(th, d.Path)
-		if promptErr != nil {
-			fmt.Println("Extract cancelled.")
-			return nil
-		}
-		if !ok {
-			fmt.Println("Extract cancelled — file not overwritten. Re-run to choose a different path.")
-			return nil
-		}
-	}
-
-	if err := generateSourceCodeFn(a, merged, d.Path); err != nil {
-		return fmt.Errorf("error generating source code: %v", err)
-	}
-
-	for _, ln := range buildExtractGuidance(len(merged.Resources), d.Path, formaFile) {
-		fmt.Println(ln)
-	}
-
-	return nil
-}
-
-// buildExtractGuidance returns the plain post-extract next-steps lines. The
-// extracted file only captures the selected resources' current state; applying
-// it directly would reconcile a partial stack and destroy everything else.
-// The correct workflow is to fold the wanted values into the original forma and
-// re-apply the whole stack with --force — which absorbs the kept changes as
-// no-ops and overwrites the rest back to the code.
-func buildExtractGuidance(count int, path, formaFile string) []string {
-	if formaFile == "" {
-		formaFile = "your forma"
-	}
-	return []string{
-		fmt.Sprintf("Extracted %d resource(s) to %s", count, path),
-		"Fold the values you want to keep into your forma, then re-apply with --force:",
-		fmt.Sprintf("  formae apply --mode reconcile --force %s", formaFile),
-	}
-}
-
-// submitForcedApply submits a force apply after re-validated identical drift.
-func submitForcedApply(a *app.App, th *theme.Theme, opts *ApplyOptions) error {
-	realRes, nags, err := forcedApplyFn(a, opts)
-	if err != nil {
-		msg, renderErr := errfmt.Render(err)
-		if renderErr != nil {
-			return fmt.Errorf("error rendering error message: %v", renderErr)
-		}
-		return fmt.Errorf("%s", msg)
-	}
-
-	finished, err := launchWatch(a, realRes.CommandID)
+	decision, err := launchSimView(th, &res.Simulation, previewOptions(opts, res))
 	if err != nil {
 		return err
 	}
-	if !finished {
-		printAsyncNotice(realRes.CommandID)
+	if opts.Message != opts.suggestedMessage {
+		opts.messageEdited = true
 	}
-	nag.MaybePrintNags(th, nags)
-
-	return nil
-}
-
-// handleSelfResolvedDrift falls through to the normal simview preview flow
-// when a re-simulate after RevertAll succeeds (drift self-resolved).
-func handleSelfResolvedDrift(a *app.App, th *theme.Theme, opts *ApplyOptions, res *apimodel.SubmitCommandResponse) error {
-	if res == nil || !res.Simulation.ChangesRequired {
-		panel := components.Panel(th, th.Palette.Border, "formae apply", []string{
-			"No changes needed",
-			"",
-			"The specified forma resources are up to date.",
-		}, 80)
-		fmt.Println(panel)
-		return nil
-	}
-
-	decision, err := launchSimView(th, &res.Simulation, simview.Options{
-		Kind:         simview.KindApply,
-		Mode:         string(opts.Mode),
-		Source:       opts.FormaFile,
-		SimulateOnly: opts.Simulate,
-		Description:  res.Description,
-	})
-	if err != nil {
-		return err
-	}
-
 	if opts.Simulate {
 		return nil
 	}
-
-	if decision == simview.DecisionAborted {
-		fmt.Print(lipgloss.NewStyle().Foreground(a.Theme().Palette.TextSubtle).Render("Apply aborted.") + "\n")
+	if decision != simview.DecisionConfirmed {
+		fmt.Println("Apply aborted.")
 		return nil
 	}
-
-	realRes, nags, err := applyFn(a, opts, false)
-	if err != nil {
-		msg, renderErr := errfmt.Render(err)
-		if renderErr != nil {
-			return fmt.Errorf("error rendering error message: %v", renderErr)
+	if opts.Resolution != nil {
+		opts.Resolution.ReviewID = res.Review.ReviewID
+		if opts.Resolution.IdempotencyKey == "" {
+			opts.Resolution.IdempotencyKey = util.NewID()
 		}
-		return fmt.Errorf("%s", msg)
 	}
-
-	finished, err := launchWatch(a, realRes.CommandID)
+	real, _, err := applyFn(a, opts, false)
 	if err != nil {
-		return err
+		if resolutionStale(err) {
+			return err
+		}
+		return humanApplyError(err)
 	}
-	if !finished {
-		printAsyncNotice(realRes.CommandID)
+	if real.Simulation.Command.State == "Success" || real.Simulation.Command.State == "Failed" {
+		fmt.Printf("Command %s: %s\n", real.CommandID, real.Simulation.Command.State)
+	} else {
+		finished, err := launchWatch(a, real.CommandID)
+		if err != nil {
+			return err
+		}
+		if !finished {
+			printAsyncNotice(real.CommandID)
+			return nil
+		}
 	}
-	nag.MaybePrintNags(th, nags)
-
+	if opts.Resolution != nil {
+		printRecordedGuidance(a, real.CommandID)
+	}
 	return nil
 }
 
-// sameDrift reports whether two reconcile-rejected payloads describe exactly
-// the same drift. Per stack, the set of (Type, Label, Operation,
-// string(PatchDocument)) tuples must be equal.
-func sameDrift(a, b apimodel.FormaReconcileRejectedError) bool {
-	if len(a.ModifiedStacks) != len(b.ModifiedStacks) {
-		return false
+// Source catch-up is read-only and pinned to command contributions, never a
+// fresh inventory snapshot. Extraction is explicit and never edits user files.
+func printRecordedGuidance(a *app.App, commandID string) {
+	delta, err := desiredDeltaFn(a, commandID)
+	if err != nil {
+		fmt.Printf("Command %s is recorded. Source guidance unavailable: %v\n", commandID, err)
+		return
 	}
-	for stackName, stackA := range a.ModifiedStacks {
-		stackB, ok := b.ModifiedStacks[stackName]
-		if !ok {
-			return false
-		}
-		if !sameModifications(stackA.ModifiedResources, stackB.ModifiedResources) {
-			return false
+	fmt.Printf("Source catch-up for command %s (%s):\n", commandID, delta.State)
+	if delta.Forma != nil {
+		for _, r := range delta.Forma.Resources {
+			fmt.Printf("  Recorded resource: %s\n", resourceQuery(r.Stack, r.Type, r.Label, r.Ksuid))
 		}
 	}
-	return true
+	for _, r := range delta.DeletedResources {
+		fmt.Printf("  Remove this declaration from your code: stack=%q type=%q label=%q\n", r.Stack, r.Type, r.Label)
+	}
+	fmt.Printf("  formae extract --command %s ./accepted-delta.pkl\n", shellQuote(commandID))
+	fmt.Println("This is a partial source-edit snippet. Merge its values and removals into your complete stack declaration; do not apply the snippet as a full reconcile.")
 }
 
-type driftTuple struct{ typ, label, op, patch string }
-
-func sameModifications(a, b []apimodel.ResourceModification) bool {
-	if len(a) != len(b) {
-		return false
+// The ordinary resource query translator accepts escaped terms, not quoted
+// phrase nodes. Wildcard stars cannot be made literal by that query grammar.
+func queryLiteral(value string) string {
+	var escaped strings.Builder
+	for _, r := range value {
+		if strings.ContainsRune(`+-=&|><!(){}[]^"~*?:\/ `, r) {
+			escaped.WriteRune('\\')
+		}
+		escaped.WriteRune(r)
 	}
-	setA := make(map[driftTuple]bool, len(a))
-	for _, m := range a {
-		setA[driftTuple{m.Type, m.Label, m.Operation, string(m.PatchDocument)}] = true
-	}
-	for _, m := range b {
-		if !setA[driftTuple{m.Type, m.Label, m.Operation, string(m.PatchDocument)}] {
-			return false
+	return escaped.String()
+}
+func resourceQuery(stack, typ, label, id string) string {
+	unsafe := false
+	for _, r := range stack + typ + label {
+		if r == '*' || unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			unsafe = true
 		}
 	}
-	return true
+	if unsafe {
+		return fmt.Sprintf("resource=%q stack=%q type=%q label=%q (exact query unavailable)", id, stack, typ, label)
+	}
+
+	return "stack:" + queryLiteral(stack) + " type:" + queryLiteral(typ) + " label:" + queryLiteral(label)
+}
+
+func shellQuote(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'" }
+
+func driftOrigin(mod apimodel.ResourceModification) string {
+	if mod.ObservedSource == "synchronizer" {
+		return "synchronizer"
+	}
+	if mod.ObservedCommand == pkgmodel.CommandApply && mod.ObservedMode == pkgmodel.FormaApplyModePatch {
+		return "patch"
+	}
+	if mod.ObservedCommand != "" {
+		return strings.TrimSpace(string(mod.ObservedCommand) + " " + string(mod.ObservedMode) + " " + mod.ObservedSource)
+	}
+	return "unavailable"
+}
+
+// Keep ordinary labels readable while preventing terminal control sequences.
+func driftDisplayIdentity(value string) string {
+	for _, r := range value {
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return fmt.Sprintf("%q", value)
+		}
+	}
+	return value
 }
