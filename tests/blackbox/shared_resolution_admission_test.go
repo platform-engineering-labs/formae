@@ -37,6 +37,7 @@ func reviewAbsorbAll(t *testing.T, h *TestHarness, f *pkgmodel.Forma) (pkgmodel.
 	resolution := pkgmodel.DriftResolution{ObservationID: rejected.Data.ObservationID}
 	for _, stack := range rejected.Data.ModifiedStacks {
 		for _, r := range stack.ModifiedResources {
+			require.True(t, r.ExternalChangesOnly, "real synchronizer history must qualify as external-only")
 			resolution.Decisions = append(resolution.Decisions, pkgmodel.DriftDecision{ResourceID: r.ResourceID, Action: "absorb"})
 		}
 	}
@@ -101,10 +102,7 @@ func TestSharedResolutionLargeReceiptRestart(t *testing.T) {
 		id := h.ApplyForma(f, pkgmodel.FormaApplyModeReconcile)
 		require.Equal(t, "Success", h.WaitForCommandDone(id, 60*time.Second).State)
 		changeResolutionCloud(t, h, "outside")
-		baseline := h.SyncCommandBaseline()
-		require.NoError(t, h.client.ForceSync())
-		_, ok := h.WaitForSyncCommandAfter(baseline, 10*time.Second, 60*time.Second)
-		require.True(t, ok)
+		waitForResolutionCloudSync(t, h, len(f.Resources), "outside")
 		resolution, preview := reviewAbsorbAll(t, h, f)
 		raw, err := json.Marshal(preview.Review)
 		require.NoError(t, err)
@@ -136,6 +134,44 @@ func TestSharedResolutionLargeReceiptRestart(t *testing.T) {
 		}
 		t.Logf("review bytes=%d resources=%d; durable replay retained review, delta, message, outcome and zero repeated writes", len(raw), len(f.Resources))
 	})
+}
+
+// ForceSync queues a best-effort trigger, not a synchronization barrier. A
+// durable apply success can precede the executor releasing its sync exclusions.
+// Establish the receipt test's setup from persisted inventory and sync completion,
+// retrying only while idle, rather than requiring one trigger to create a command.
+func waitForResolutionCloudSync(t *testing.T, h *TestHarness, count int, expected string) {
+	t.Helper()
+	var lastErr error
+	var matched, activeCount int
+	require.Eventually(t, func() bool {
+		active, err := h.commandRowsFromDB("command = ? AND state NOT IN ('Success','Failed','Canceled')", "sync")
+		if err != nil {
+			lastErr = err
+			return false
+		}
+		activeCount = len(active)
+		inventory, err := h.client.ExtractResources("stack:default")
+		if err != nil {
+			lastErr = err
+			return false
+		}
+		matched = 0
+		for _, resource := range inventory.Resources {
+			var properties map[string]any
+			if json.Unmarshal(resource.Properties, &properties) == nil && properties["Value"] == expected {
+				matched++
+			}
+		}
+		if len(inventory.Resources) == count && matched == count && activeCount == 0 {
+			return true
+		}
+		if activeCount == 0 {
+			lastErr = h.client.ForceSync()
+		}
+		return false
+	}, 60*time.Second, 100*time.Millisecond, "all resource drift must be persisted before reviewing the large receipt")
+	t.Logf("sync setup: %d/%d resources, active syncs=%d, last error=%v", matched, count, activeCount, lastErr)
 }
 
 func waitForPeriodicResolutionReads(t *testing.T, h *TestHarness, baseline int, expected string) {

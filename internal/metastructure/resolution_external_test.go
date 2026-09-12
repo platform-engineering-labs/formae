@@ -64,7 +64,9 @@ func TestResolutionExternalOnlyRequiresCompleteHistory(t *testing.T) {
 				_, err := m.Datastore.StoreResource(r, "missing-command")
 				require.NoError(t, err)
 			}
-			write(pkgmodel.CommandSync, forma_command.SourceSynchronizer, "", `{"name":"external"}`)
+			// Synchronizer commands use patch mode internally; a user patch is
+			// distinguished by its apply command and user source, not this mode.
+			write(pkgmodel.CommandSync, forma_command.SourceSynchronizer, pkgmodel.FormaApplyModePatch, `{"name":"external"}`)
 			if kind == "external-delete" {
 				id := util.NewID()
 				c := &forma_command.FormaCommand{ID: id, Command: pkgmodel.CommandSync, Source: forma_command.SourceSynchronizer, State: forma_command.CommandStateSuccess, StartTs: time.Now(), ModifiedTs: time.Now()}

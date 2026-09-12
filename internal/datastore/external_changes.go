@@ -48,7 +48,9 @@ func (s AdmissionStore) HasOnlyExternalChanges(ksuid, baselineCommandID, observe
 	if len(exists) != 1 || exists[0] != "1" {
 		return false, nil
 	}
-	rows, err := tx.Query(`SELECT CAST(COUNT(*) AS VARCHAR(20)),CAST(COALESCE(SUM(CASE WHEN fc.command_id IS NOT NULL AND fc.command='sync' AND fc.source='synchronizer' AND COALESCE(fc.config_mode,'')!='patch' AND r.operation IN ('create','update','delete') THEN 0 ELSE 1 END),0) AS VARCHAR(20)) FROM resources r LEFT JOIN forma_commands fc ON fc.command_id=r.command_id WHERE r.ksuid=? AND r.version`+coll+`>? AND r.version`+coll+`<=?`, ksuid, boundary[0], observedVersion)
+	// Sync commands use patch mode internally. Command type and trusted source
+	// distinguish them from firefighting apply/patch commands.
+	rows, err := tx.Query(`SELECT CAST(COUNT(*) AS VARCHAR(20)),CAST(COALESCE(SUM(CASE WHEN fc.command_id IS NOT NULL AND fc.command='sync' AND fc.source='synchronizer' AND r.operation IN ('create','update','delete') THEN 0 ELSE 1 END),0) AS VARCHAR(20)) FROM resources r LEFT JOIN forma_commands fc ON fc.command_id=r.command_id WHERE r.ksuid=? AND r.version`+coll+`>? AND r.version`+coll+`<=?`, ksuid, boundary[0], observedVersion)
 	if err != nil {
 		return false, err
 	}
