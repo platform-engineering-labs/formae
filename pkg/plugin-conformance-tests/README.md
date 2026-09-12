@@ -119,6 +119,7 @@ exercised.
 | Variable | Purpose |
 | -------- | ------- |
 | `FORMAE_TEST_TYPE` | `crud`, `discovery`, or `all` (default). Skips the suite that doesn't match. |
+| `FORMAE_TEST_UPDATE_MODE` | Apply mode for the Update phase only: `patch` (default) or `reconcile`. Reconcile allows collection removals and requires a complete stack declaration in the update fixture. Create and Replace are unaffected. Invalid values fail before setup. |
 | `FORMAE_TEST_FILTER` | Comma-separated case names or `/regex/` to restrict which test cases run. |
 | `FORMAE_TEST_PARALLEL` | Set truthy (e.g. `true`, `1`) to run cases with `t.Parallel()`. |
 | `FORMAE_TEST_TESTDATA_DIR` | Override the testdata directory. Relative paths resolve against the plugin directory. |
