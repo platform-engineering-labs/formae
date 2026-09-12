@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/platform-engineering-labs/formae/internal/datastore"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
@@ -15,7 +16,7 @@ import (
 )
 
 func TestResolutionExternalOnlyRequiresCompleteHistory(t *testing.T) {
-	for _, kind := range []string{"sync-only", "patch-then-sync", "unknown-then-sync"} {
+	for _, kind := range []string{"sync-only", "patch-then-sync", "unknown-then-sync", "accepted-patch-then-sync"} {
 		t.Run(kind, func(t *testing.T) {
 			m, _, f, _ := scopedFixture(t)
 			r, err := m.Datastore.LoadResourceById("a")
@@ -36,16 +37,28 @@ func TestResolutionExternalOnlyRequiresCompleteHistory(t *testing.T) {
 				_, err := m.Datastore.StoreResource(r, id)
 				require.NoError(t, err)
 			}
-			if kind == "patch-then-sync" {
+			if kind == "patch-then-sync" || kind == "accepted-patch-then-sync" {
 				write(pkgmodel.CommandApply, forma_command.SourceUser, pkgmodel.FormaApplyModePatch, `{"name":"patched"}`)
 			}
+			if kind == "accepted-patch-then-sync" {
+				observed, e := m.Datastore.(datastore.ResourceObservationReader).GetResourceObservation("a")
+				require.NoError(t, e)
+				accepted := *baseline
+				accepted.ID = util.NewID()
+				accepted.StartTs = time.Now()
+				accepted.ModifiedTs = accepted.StartTs
+				accepted.ResourceUpdates = []resource_update.ResourceUpdate{{DesiredState: *r, Version: observed.Version, Source: resource_update.FormaCommandSourceUser, StackLabel: "a", Operation: resource_update.OperationAccept, State: resource_update.ResourceUpdateStateSuccess}}
+				require.NoError(t, m.Datastore.StoreFormaCommand(&accepted, accepted.ID))
+				f.Resources[0].Properties = append([]byte(nil), r.Properties...)
+			}
 			if kind == "unknown-then-sync" {
+				r.Properties = []byte(`{"name":"unknown-origin"}`)
 				_, err := m.Datastore.StoreResource(r, "missing-command")
 				require.NoError(t, err)
 			}
 			write(pkgmodel.CommandSync, forma_command.SourceSynchronizer, "", `{"name":"external"}`)
 			got := observeResolution(t, m, f).ModifiedStacks["a"].ModifiedResources[0]
-			require.Equal(t, kind == "sync-only", got.ExternalChangesOnly)
+			require.Equal(t, kind == "sync-only" || kind == "accepted-patch-then-sync", got.ExternalChangesOnly)
 		})
 	}
 }
