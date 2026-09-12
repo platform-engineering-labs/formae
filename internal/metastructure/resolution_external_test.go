@@ -19,7 +19,7 @@ import (
 )
 
 func TestResolutionExternalOnlyRequiresCompleteHistory(t *testing.T) {
-	for _, kind := range []string{"sync-only", "patch-then-sync", "unknown-then-sync", "accepted-patch-then-sync", "failed-baseline-then-sync", "external-delete"} {
+	for _, kind := range []string{"sync-only", "patch-then-sync", "unknown-then-sync", "accepted-patch-then-sync", "failed-baseline-then-sync", "external-delete", "failed-patch-then-sync", "accepted-failed-patch-then-sync"} {
 		t.Run(kind, func(t *testing.T) {
 			m, _, f, _ := scopedFixture(t)
 			r, err := m.Datastore.LoadResourceById("a")
@@ -48,7 +48,19 @@ func TestResolutionExternalOnlyRequiresCompleteHistory(t *testing.T) {
 			if kind == "patch-then-sync" || kind == "accepted-patch-then-sync" {
 				write(pkgmodel.CommandApply, forma_command.SourceUser, pkgmodel.FormaApplyModePatch, `{"name":"patched"}`)
 			}
-			if kind == "accepted-patch-then-sync" {
+			if kind == "failed-patch-then-sync" || kind == "accepted-failed-patch-then-sync" {
+				id := util.NewID()
+				failed := *baseline
+				failed.ID = id
+				failed.Config.Mode = pkgmodel.FormaApplyModePatch
+				failed.State = forma_command.CommandStateFailed
+				failed.StartTs = time.Now()
+				failed.ModifiedTs = failed.StartTs
+				failed.ResourceUpdates = []resource_update.ResourceUpdate{{DesiredState: *r, Source: resource_update.FormaCommandSourceUser, StackLabel: "a", Operation: resource_update.OperationUpdate, State: resource_update.ResourceUpdateStateFailed}}
+				failed.ResourceUpdates[0].DesiredState.Properties = []byte(`{"name":"firefight"}`)
+				require.NoError(t, m.Datastore.StoreFormaCommand(&failed, id))
+			}
+			if kind == "accepted-patch-then-sync" || kind == "accepted-failed-patch-then-sync" {
 				observed, e := m.Datastore.(datastore.ResourceObservationReader).GetResourceObservation("a")
 				require.NoError(t, e)
 				accepted := *baseline
@@ -75,7 +87,7 @@ func TestResolutionExternalOnlyRequiresCompleteHistory(t *testing.T) {
 				require.NoError(t, err)
 			}
 			got := observeResolution(t, m, f).ModifiedStacks["a"].ModifiedResources[0]
-			require.Equal(t, kind == "sync-only" || kind == "accepted-patch-then-sync" || kind == "external-delete", got.ExternalChangesOnly)
+			require.Equal(t, kind == "sync-only" || kind == "accepted-patch-then-sync" || kind == "external-delete" || kind == "accepted-failed-patch-then-sync", got.ExternalChangesOnly)
 		})
 	}
 }

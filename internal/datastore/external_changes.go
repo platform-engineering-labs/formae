@@ -31,7 +31,7 @@ func (s AdmissionStore) HasOnlyExternalChanges(ksuid, baselineCommandID, observe
 	// against, including acceptance commands which perform no provider write.
 	// Failed intent is still desired intent, not proof that the provider
 	// realized it. Never automatically absorb it away after a later sync.
-	boundary, err := tx.Query("SELECT COALESCE(MAX(version"+coll+"),'') FROM resource_updates WHERE command_id=? AND ksuid=? AND state='Success'", baselineCommandID, ksuid)
+	boundary, err := tx.Query("SELECT COALESCE(MAX(version"+coll+"),'') FROM resource_updates WHERE command_id=? AND ksuid=? AND state='Success' AND EXISTS (SELECT 1 FROM forma_commands WHERE command_id=? AND timestamp IS NOT NULL)", baselineCommandID, ksuid, baselineCommandID)
 	if err != nil {
 		return false, err
 	}
@@ -46,6 +46,18 @@ func (s AdmissionStore) HasOnlyExternalChanges(ksuid, baselineCommandID, observe
 		return false, err
 	}
 	if len(exists) != 1 || exists[0] != "1" {
+		return false, nil
+	}
+	// Failed patches can leave intent without a physical resource version (the
+	// provider may have changed before reporting failure). Such interventions
+	// still require a decision. Acceptance starts a new command boundary even
+	// when it keeps the same physical version. Include timestamp ties rather
+	// than guessing which intervention came first; missing evidence is manual.
+	intent, err := tx.Query(`SELECT CAST(COUNT(*) AS VARCHAR(20)) FROM resource_updates ru LEFT JOIN forma_commands fc ON fc.command_id=ru.command_id WHERE ru.ksuid=? AND ru.command_id<>? AND (fc.command_id IS NULL OR fc.timestamp IS NULL OR (fc.timestamp >= (SELECT timestamp FROM forma_commands WHERE command_id=?) AND (COALESCE(fc.command,'')<>'sync' OR COALESCE(fc.source,'')<>'synchronizer')))`, ksuid, baselineCommandID, baselineCommandID)
+	if err != nil {
+		return false, err
+	}
+	if len(intent) != 1 || intent[0] != "0" {
 		return false, nil
 	}
 	// Sync commands use patch mode internally. Command type and trusted source
