@@ -990,3 +990,31 @@ func TestCorrectModelFromCommandOutcome_FailedDeleteWithoutSnapshotRestoresPrope
 	require.Equal(t, "native-id", model.GetNativeID(0, 0))
 	require.Equal(t, "resource-id", model.GetKsuid(0, 0))
 }
+
+// A later successful update can be folded before the create that made it
+// possible. The optimistic model may still predict that create would fail.
+func TestCorrectModelFromCommandOutcome_UpdateBeforeCreateConfirmsExistence(t *testing.T) {
+	for _, deleted := range []bool{false, true} {
+		t.Run(fmt.Sprintf("authoritativeDelete=%t", deleted), func(t *testing.T) {
+			model := NewStateModel(1, 3)
+			if deleted {
+				model.MarkAuthoritativeSlot(0, 1)
+			}
+			update := apimodel.ResourceUpdate{StackName: "stack-0", ResourceLabel: "res-stack-0-b", Operation: "update", State: "Success", NativeID: "native", ResourceID: "resource", Properties: json.RawMessage(`{"Value":"new"}`)}
+			create := update
+			create.Operation = "create"
+			create.Properties = json.RawMessage(`{"Value":"old"}`)
+			corrected := map[struct{ stackIdx, slotIdx int }]bool{}
+			correctModelFromCommandOutcome(t, &apimodel.Command{CommandID: "newer", State: "Success", ResourceUpdates: []apimodel.ResourceUpdate{update}}, model, nil, nil, corrected, true, nil, nil)
+			correctModelFromCommandOutcome(t, &apimodel.Command{CommandID: "older", State: "Success", ResourceUpdates: []apimodel.ResourceUpdate{create}}, model, nil, nil, corrected, true, nil, nil)
+			if deleted {
+				require.Equal(t, StateNotExist, model.Resource(0, 1).State)
+				require.True(t, model.IsAuthoritativeSlot(0, 1))
+			} else {
+				require.Equal(t, StateExists, model.Resource(0, 1).State)
+				require.JSONEq(t, `{"Value":"new"}`, model.Resource(0, 1).Properties)
+				require.Equal(t, "native", model.GetNativeID(0, 1))
+			}
+		})
+	}
+}

@@ -367,6 +367,10 @@ func getOOBSyncRetriggerBackoff() backoffConfig {
 //   - FORMAE_TEST_TYPE: Select which tests to run (optional).
 //     Values: "all" (default), "crud", "discovery".
 //     When set to "discovery", CRUD tests are skipped.
+//   - FORMAE_TEST_UPDATE_MODE: Apply mode for the Update phase only (optional).
+//     Values: "patch" (default), "reconcile". Reconcile requires a complete
+//     stack declaration in the update fixture and allows collection removals.
+//     Create and Replace phases are unaffected; invalid values fail before setup.
 //   - FORMAE_TEST_TIMEOUT: Timeout in minutes for long-running operations (optional).
 //     Default is 5 minutes. Set to 15 for slow resources like Cloud SQL.
 //   - FORMAE_TEST_OOB_TIMEOUT: Timeout in minutes for a single OOB Create or
@@ -392,6 +396,11 @@ func RunCRUDTests(t *testing.T) {
 	// Skip if test type is discovery-only
 	if getTestType() == TestTypeDiscovery {
 		t.Skip("Skipping CRUD tests: FORMAE_TEST_TYPE=discovery")
+	}
+
+	// Validate before discovering fixtures or starting any cloud-backed work.
+	if _, err := getUpdateMode(); err != nil {
+		t.Fatal(err)
 	}
 
 	// Find plugin directory (where the test is running from)
@@ -1724,8 +1733,8 @@ func runCRUDTest(t *testing.T, tc TestCase, rc *ResultCollector, sweep *provider
 			rc.CRUDFatalf(t, idx, PhaseUpdate, "Update expected resource should have Properties field")
 		}
 
-		// Apply with patch mode
-		updateCmdID, err := harness.ApplyWithMode(tc.UpdateFile, "patch")
+		// Apply with the configured update mode (patch by default).
+		updateCmdID, err := applyUpdate(harness, tc.UpdateFile)
 		if err != nil {
 			rc.CRUDFatalf(t, idx, PhaseUpdate, "Update apply failed: %v", err)
 		}
@@ -2253,4 +2262,26 @@ func extractNamespaceFromEvalOutput(evalOutput string) (namespace string, resour
 	}
 
 	return "", "", fmt.Errorf("no cloud resource found in eval output")
+}
+
+// getUpdateMode keeps existing partial-update fixtures in patch mode. Reconcile
+// is opt-in for complete declarations that intentionally remove collection members.
+func getUpdateMode() (string, error) {
+	mode := os.Getenv("FORMAE_TEST_UPDATE_MODE")
+	switch mode {
+	case "", "patch":
+		return "patch", nil
+	case "reconcile":
+		return mode, nil
+	default:
+		return "", fmt.Errorf("invalid FORMAE_TEST_UPDATE_MODE %q: expected patch or reconcile", mode)
+	}
+}
+
+func applyUpdate(harness *TestHarness, file string) (string, error) {
+	mode, err := getUpdateMode()
+	if err != nil {
+		return "", err
+	}
+	return harness.ApplyWithMode(file, mode)
 }

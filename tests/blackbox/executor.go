@@ -1067,11 +1067,15 @@ func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *
 						),
 					})
 				}
+				// A successful update proves existence even if the optimistic
+				// model predicted an earlier create would fail. Reverse-order
+				// draining will skip that create after folding this update.
+				// Authoritative deletions were excluded above.
+				if res := model.Resource(stackIdx, slotIdx); res != nil {
+					res.State = StateExists
+				}
 				if ru.Properties != nil {
 					props := model.NormalizePropertiesForResource(stackIdx, slotIdx, string(ru.Properties))
-					// Update properties without touching existence state or
-					// authoritative flags. Unlike creates, updates don't
-					// change whether a resource exists.
 					if res := model.Resource(stackIdx, slotIdx); res != nil {
 						res.Properties = props
 					}
@@ -2056,10 +2060,9 @@ func (h *TestHarness) absorbManagedDrift(t *testing.T, model *StateModel, native
 	const maxSyncAttempts = 3
 	for attempt := range maxSyncAttempts {
 		if !h.forceSyncAndAwait(t, model, 10*time.Second) {
-			// The drifted row is in inventory, so a healthy sync must include
-			// it; an unobserved sync command here is a transient miss — retry.
+			// A completed no-op sync can disappear between polls. Its command
+			// is only a hint; inventory convergence remains the success criterion.
 			t.Logf("absorbManagedDrift: no sync command observed (attempt %d)", attempt+1)
-			continue
 		}
 		if h.waitForAbsorbedInventory(t, "managed:true", nativeID, expectedProps, deleted, 10*time.Second) {
 			return
@@ -2077,10 +2080,18 @@ func (h *TestHarness) absorbUnmanagedDrift(t *testing.T, model *StateModel, nati
 	const maxSyncAttempts = 3
 	for attempt := range maxSyncAttempts {
 		if !h.forceSyncAndAwait(t, model, 10*time.Second) {
+			// Check inventory even when the sync left no surviving command.
 			t.Logf("absorbUnmanagedDrift: no sync command observed (attempt %d)", attempt+1)
-			continue
 		}
 		if h.waitForAbsorbedInventory(t, "managed:false", nativeID, expectedProps, deleted, 10*time.Second) {
+			// Convergence proves this row's predicted transition even if its
+			// sync receipt was missed. Do not advance other unobserved rows.
+			if model != nil {
+				if resource := model.UnmanagedResources[nativeID]; resource != nil {
+					resource.PresentInInventory = !deleted
+					resource.InventoryProperties = expectedProps
+				}
+			}
 			return
 		}
 		t.Logf("absorbUnmanagedDrift: %s not absorbed after sync (attempt %d)", nativeID, attempt+1)
