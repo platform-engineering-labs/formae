@@ -329,8 +329,7 @@ run_script_signalled() {
 
   # Bash ignores SIGINT for asynchronous commands. Reset it before exec so
   # this fixture models a foreground CI process, whose SIGINT is catchable.
-  python3 -c 'import os, signal, sys; signal.signal(signal.SIGINT, signal.SIG_DFL); os.execvp(sys.argv[1], sys.argv[1:])' \
-    timeout -k "$RUN_KILL_DELAY" "$RUN_TIMEOUT" setsid --wait bash -c '
+  env --default-signal=INT timeout -k "$RUN_KILL_DELAY" "$RUN_TIMEOUT" setsid --wait bash -c '
     echo "$$" > "$1"
     cd "$2" || exit 1
     exec env -u GITHUB_STEP_SUMMARY GITHUB_BASE_REF=main PATH="$3:$PATH" \
@@ -1032,6 +1031,7 @@ assert_interrupted_by() {
     "SIG$signal: a package that already reported gets no second row"
   assert_output_count '^\| `example/b` \|' 1 \
     "SIG$signal: the interrupted package gets exactly one row"
+  assert_output_count '^in-flight gremlins output$' 1 "SIG$signal: streamed output is not replayed"
   assert_status "$expected_status" "SIG$signal: the script exits 128 plus the signal"
 }
 
@@ -1194,6 +1194,25 @@ exit 9'
   assert_output_count '^live progress marker$' 1 "completed output is not duplicated"
 }
 
+test_completed_empty_file_group_is_not_a_cancelled_run() {
+  local work repo bin
+  work=$(new_workdir); repo="$work/repo"; bin="$work/bin"
+  make_fixture_repo "$repo"; add_changed_package "$repo" pkg
+  stub_gremlins "$bin" 'printf "\nNo results to report.\n"; exit 0'
+  MUTATION_FILE_SHARD_INDEX=0 MUTATION_FILE_SHARD_COUNT=4 run_script "$repo" "$bin"
+  assert_status 0 "gremlins terminal empty result completes the file group"
+  assert_output_matches '\| ok \| no mutants \|' "empty completion is explicit"
+  stub_gremlins "$bin" 'printf "\nNo results to report.\n"; exit 9'
+  run_script "$repo" "$bin"
+  assert_status_nonzero "empty marker cannot hide a failed process"
+  stub_gremlins "$bin" 'echo "test output: No results to report."; exit 0'
+  run_script "$repo" "$bin"
+  assert_status_nonzero "only the exact terminal marker can complete an empty group"
+  stub_gremlins "$bin" 'printf "No results to report.\nShutting down gracefully...\n"; exit 0'
+  run_script "$repo" "$bin"
+  assert_status_nonzero "an earlier marker cannot hide a subsequent cancellation"
+}
+
 # ── 4. Runner ───────────────────────────────────────────────────────────────
 run_test() {
   local test_name="$1"
@@ -1211,6 +1230,7 @@ run_test() {
 }
 
 main() {
+  run_test test_completed_empty_file_group_is_not_a_cancelled_run
   run_test test_progress_is_visible_before_gremlins_finishes
   run_test test_file_shards_cover_all_source_once
   run_test test_invalid_file_shards_fail_before_mutation
