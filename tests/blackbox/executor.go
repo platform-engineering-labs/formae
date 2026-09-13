@@ -2207,6 +2207,14 @@ func (h *TestHarness) absorbUnmanagedDrift(t *testing.T, model *StateModel, nati
 			t.Logf("absorbUnmanagedDrift: no sync command observed (attempt %d)", attempt+1)
 		}
 		if h.waitForAbsorbedInventory(t, "managed:false", nativeID, expectedProps, deleted, 10*time.Second) {
+			// Convergence proves this row's predicted transition even if its
+			// sync receipt was missed. Do not advance other unobserved rows.
+			if model != nil {
+				if resource := model.UnmanagedResources[nativeID]; resource != nil {
+					resource.PresentInInventory = !deleted
+					resource.InventoryProperties = expectedProps
+				}
+			}
 			return
 		}
 		t.Logf("absorbUnmanagedDrift: %s not absorbed after sync (attempt %d)", nativeID, attempt+1)
