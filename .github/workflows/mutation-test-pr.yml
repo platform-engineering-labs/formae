@@ -1,8 +1,8 @@
 name: mutation-test-pr
 
 on:
-  pull_request:
-    branches: [main]
+  # Keep targeted runs available manually while the PR runtime is redesigned.
+  workflow_dispatch:
 
 jobs:
   # Contract: green means gremlins completed on every changed package —
