@@ -326,7 +326,7 @@ func (gg *GeneratorUpdateGenerator) existingGenerators(stackLabel string) ([]pkg
 	return existing, nil
 }
 
-// generatorsEqual compares two generators' generation specs for equality.
+// generatorsEqual compares two generators' configurations, including rotation.
 // Label, Stack/StackID and Alias are identity and relocation fields, not
 // spec, and are deliberately excluded — an update is generated for a rename
 // via the caller's label comparison, not from here.
@@ -335,6 +335,13 @@ func generatorsEqual(a, b pkgmodel.Generator) bool {
 		return a == nil && b == nil
 	}
 	if a.GetType() != b.GetType() {
+		return false
+	}
+	// Rotation changes must be persisted even when the held generation still
+	// satisfies the drawing spec. Whether a new value is needed is decided
+	// separately by the destination planner through GenerationSatisfies.
+	ar, br := a.GetRotation(), b.GetRotation()
+	if (ar == nil) != (br == nil) || (ar != nil && br != nil && *ar != *br) {
 		return false
 	}
 

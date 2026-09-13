@@ -304,7 +304,7 @@ func RunGetGeneratorsWithRotation_RemovedCadenceExcluded(t *testing.T, newDS fun
 }
 
 // RunGetGeneratorsWithRotation_ChangedCadenceReadFromLatest verifies that an
-// edited cadence is the one that comes back.
+// edited cadence is the one that comes back without advancing the last draw.
 func RunGetGeneratorsWithRotation_ChangedCadenceReadFromLatest(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	t.Run("GetGeneratorsWithRotation_ChangedCadenceReadFromLatest", func(t *testing.T) {
 		td := newDS(t)
@@ -317,12 +317,42 @@ func RunGetGeneratorsWithRotation_ChangedCadenceReadFromLatest(t *testing.T, new
 		identity, err := ds.GetGeneratorIdentity("db-password", stack.Label)
 		require.NoError(t, err)
 
-		_, err = ds.UpdateGenerator(rotatingPasswordGenerator("db-password", stack, 86400), "cmd-update")
+		gen := rotatingPasswordGenerator("db-password", stack, 3600)
+		spec, err := json.Marshal(gen)
+		require.NoError(t, err)
+		drawID, drawnAt := drawCommand(t, ds, forma_command.CommandStateSuccess, -2*time.Hour)
+		require.NoError(t, ds.AdvanceGeneration(identity.ID, "generation-1", drawID, spec))
+
+		editID, _ := drawCommand(t, ds, forma_command.CommandStateSuccess, -time.Hour)
+		_, err = ds.UpdateGenerator(rotatingPasswordGenerator("db-password", stack, 86400), editID)
 		require.NoError(t, err)
 
 		infos, err := ds.GetGeneratorsWithRotation()
 		require.NoError(t, err)
 		assert.Equal(t, 86400, rotationInfoFor(t, infos, identity.ID).IntervalSeconds)
+		assert.WithinDuration(t, drawnAt, rotationInfoFor(t, infos, identity.ID).LastRotationAt, 2*time.Second,
+			"a successful schedule edit must not count as a committed draw")
+
+		// A successful edit after a failed draw must not make that draw count
+		// as delivered, even though it copies the failed generation forward.
+		failedID, _ := drawCommand(t, ds, forma_command.CommandStateFailed, -30*time.Minute)
+		require.NoError(t, ds.AdvanceGeneration(identity.ID, "generation-2", failedID, spec))
+		editID, _ = drawCommand(t, ds, forma_command.CommandStateSuccess, -15*time.Minute)
+		_, err = ds.UpdateGenerator(rotatingPasswordGenerator("db-password", stack, 7200), editID)
+		require.NoError(t, err)
+		infos, err = ds.GetGeneratorsWithRotation()
+		require.NoError(t, err)
+		assert.Equal(t, 7200, rotationInfoFor(t, infos, identity.ID).IntervalSeconds)
+		assert.WithinDuration(t, drawnAt, rotationInfoFor(t, infos, identity.ID).LastRotationAt, 2*time.Second,
+			"copying a failed generation into a successful edit must not advance the anchor")
+
+		drawID, drawnAt = drawCommand(t, ds, forma_command.CommandStateSuccess, -5*time.Minute)
+		// Generation IDs are case-sensitive even on a case-insensitive backend.
+		require.NoError(t, ds.AdvanceGeneration(identity.ID, "GENERATION-2", drawID, spec))
+		infos, err = ds.GetGeneratorsWithRotation()
+		require.NoError(t, err)
+		assert.WithinDuration(t, drawnAt, rotationInfoFor(t, infos, identity.ID).LastRotationAt, 2*time.Second,
+			"the next successful draw must still advance the anchor")
 	})
 }
 
