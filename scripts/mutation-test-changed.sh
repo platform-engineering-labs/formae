@@ -286,6 +286,16 @@ on_signal() {
 
 # ── 5. Main ─────────────────────────────────────────────────────────────────
 main() {
+  # Zero-based package shards partition the same sorted selection; unset means
+  # the original complete local run. Reject malformed values before invoking Go.
+  local shard_index="${MUTATION_SHARD_INDEX:-0}" shard_count="${MUTATION_SHARD_COUNT:-1}"
+  if [[ ! "$shard_index" =~ ^(0|[1-9][0-9]{0,2})$ ]] \
+    || [[ ! "$shard_count" =~ ^[1-9][0-9]{0,2}$ ]] \
+    || (( shard_count > 256 || shard_index >= shard_count )); then
+    echo "Invalid mutation shard: index=$shard_index count=$shard_count" >&2
+    exit 2
+  fi
+
   REPO_ROOT=$(git rev-parse --show-toplevel)
   BASE_REF="${GITHUB_BASE_REF:-main}"
 
@@ -311,6 +321,19 @@ main() {
 
   if [[ ${#testable_packages[@]} -eq 0 ]]; then
     echo "Changed packages have no unit-tagged tests — nothing to mutate."
+    exit 0
+  fi
+
+  local -a shard_packages=()
+  local index
+  for index in "${!testable_packages[@]}"; do
+    if (( index % shard_count == shard_index )); then
+      shard_packages+=("${testable_packages[$index]}")
+    fi
+  done
+  testable_packages=("${shard_packages[@]}")
+  if [[ ${#testable_packages[@]} -eq 0 ]]; then
+    echo "No changed packages assigned to shard $shard_index/$shard_count."
     exit 0
   fi
 
