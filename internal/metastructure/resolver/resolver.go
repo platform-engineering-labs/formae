@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 
 	"github.com/tidwall/gjson"
@@ -1122,5 +1123,7 @@ func (pr *propertyResolver) getResolvableURIs() []pkgmodel.FormaeURI {
 	for uri := range pr.refs {
 		uris = append(uris, uri)
 	}
+	// Dependencies are a set. Map iteration must not change the reviewed plan.
+	slices.Sort(uris)
 	return uris
 }

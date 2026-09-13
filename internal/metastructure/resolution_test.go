@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -754,4 +755,149 @@ func TestResolutionUnacceptedCreationChoices(t *testing.T) {
 		require.Len(t, preview.Simulation.Command.ResourceUpdates, 1)
 		require.Equal(t, operation, preview.Simulation.Command.ResourceUpdates[0].Operation)
 	}
+}
+
+func TestResolutionCombinedUpdateReviewSurvivesSubmission(t *testing.T) {
+	m, f := resolutionFixture(t)
+	addition := f.Resources[0]
+	addition.Ksuid = "container"
+	addition.Label = "container"
+	addition.Schema = pkgmodel.Schema{Fields: []string{"name", "parent", "otherParent", "metadata", "defaultEncryptionScope", "denyEncryptionScopeOverride"}, Portable: true, Hints: map[string]pkgmodel.FieldHint{"defaultEncryptionScope": {HasProviderDefault: true}, "denyEncryptionScopeOverride": {HasProviderDefault: true}}}
+	addition.Properties = []byte(`{"name":"container","parent":{"$ref":"formae://b#/name","$value":"before"},"otherParent":{"$ref":"formae://c#/name","$value":"before"}}`)
+	version, err := m.Datastore.StoreResource(&addition, "seed")
+	require.NoError(t, err)
+	addition.Version = version
+	// Use the same reconcile command so both resources remain in the desired stack.
+	commands, err := m.Datastore.LoadFormaCommands()
+	require.NoError(t, err)
+	for _, c := range commands {
+		if c.Config.Mode == pkgmodel.FormaApplyModeReconcile {
+			c.ResourceUpdates = append(c.ResourceUpdates, resource_update.ResourceUpdate{DesiredState: addition, Source: resource_update.FormaCommandSourceUser, Version: version, StackLabel: "a", Operation: resource_update.OperationCreate, State: resource_update.ResourceUpdateStateSuccess})
+			require.NoError(t, m.Datastore.StoreFormaCommand(c, c.ID))
+		}
+	}
+	observed := addition
+	observed.Properties = []byte(`{"name":"container","parent":{"$ref":"formae://b#/name","$value":"before"},"otherParent":{"$ref":"formae://c#/name","$value":"before"},"defaultEncryptionScope":"$account-encryption-key","denyEncryptionScopeOverride":false}`)
+	_, err = m.Datastore.StoreResource(&observed, "late-sync")
+	require.NoError(t, err)
+	addition.Properties = []byte(`{"name":"container","parent":{"$res":true,"$stack":"b","$label":"b","$type":"Test::Resource","$property":"name"},"otherParent":{"$res":true,"$stack":"c","$label":"c","$type":"Test::Resource","$property":"name"},"metadata":{"app":"demo"}}`)
+	f.Resources = append(f.Resources, addition)
+	rejected := observeResolution(t, m, f)
+	require.Len(t, rejected.ModifiedStacks["a"].ModifiedResources, 1)
+	opts := &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: true, Resolution: &pkgmodel.DriftResolution{ObservationID: rejected.ObservationID, Decisions: []pkgmodel.DriftDecision{{ResourceID: "a", Action: "absorb"}}}}
+	preview, err := m.prepareGuardedApply(f, opts, "client", "subject", "")
+	require.NoError(t, err)
+	opts.Simulate = false
+	opts.Resolution.ReviewID = preview.Command.Resolution.ReviewID
+	for range 32 {
+		submitted, err := m.prepareGuardedApply(f, opts, "client", "subject", "")
+		require.NoError(t, err, "unchanged review must be submittable with a combined metadata update")
+		require.Len(t, submitted.Command.ResourceUpdates, 2)
+	}
+	// A genuine dependency change must still invalidate the same review.
+	scopedWrite(t, m.Datastore, "b")
+	_, err = m.prepareGuardedApply(f, opts, "client", "subject", "")
+	require.Error(t, err)
+}
+
+func TestResolutionReferencedUpdateExecutesAfterKeep(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		path := t.TempDir() + "/references.db"
+		ds, err := dssqlite.NewDatastoreSQLite(context.Background(), &pkgmodel.DatastoreConfig{Sqlite: pkgmodel.SqliteConfig{FilePath: path}}, "test")
+		require.NoError(t, err)
+		var updates atomic.Int64
+		var cloudMu sync.Mutex
+		cloud := map[string]json.RawMessage{}
+		overrides := &plugin.ResourcePluginOverrides{
+			Read: func(r *resource.ReadRequest) (*resource.ReadResult, error) {
+				cloudMu.Lock()
+				defer cloudMu.Unlock()
+				return &resource.ReadResult{ResourceType: r.ResourceType, Properties: string(cloud[r.NativeID])}, nil
+			},
+			Create: func(r *resource.CreateRequest) (*resource.CreateResult, error) {
+				cloudMu.Lock()
+				cloud[r.Label] = append(json.RawMessage(nil), r.Properties...)
+				cloudMu.Unlock()
+				return &resource.CreateResult{ProgressResult: &resource.ProgressResult{Operation: resource.OperationCreate, OperationStatus: resource.OperationStatusSuccess, NativeID: r.Label, ResourceProperties: r.Properties}}, nil
+			},
+			Update: func(r *resource.UpdateRequest) (*resource.UpdateResult, error) {
+				require.Equal(t, "container", r.Label, "acceptance must not call the provider")
+				updates.Add(1)
+				cloudMu.Lock()
+				cloud[r.Label] = append(json.RawMessage(nil), r.DesiredProperties...)
+				cloudMu.Unlock()
+				require.Contains(t, string(r.DesiredProperties), `"app":"demo"`)
+				return &resource.UpdateResult{ProgressResult: &resource.ProgressResult{Operation: resource.OperationUpdate, OperationStatus: resource.OperationStatusSuccess, NativeID: r.NativeID, ResourceProperties: r.DesiredProperties}}, nil
+			},
+		}
+		m := startScopedActor(t, ds, path, overrides)
+		f := scopedActorForma()
+		f.Resources = nil
+		for _, label := range []string{"account", "group", "container"} {
+			r := scopedActorForma().Resources[0]
+			r.Label = label
+			r.Schema.Fields = []string{"foo", "parent", "otherParent", "metadata"}
+			if label == "account" {
+				r.Properties = []byte(`{"foo":"bar","metadata":{"version":"0"}}`)
+			}
+			if label == "container" {
+				r.Properties = []byte(`{"foo":"bar","parent":{"$res":true,"$stack":"scope","$label":"account","$type":"FakeAWS::S3::Bucket","$property":"foo"},"otherParent":{"$res":true,"$stack":"scope","$label":"group","$type":"FakeAWS::S3::Bucket","$property":"foo"}}`)
+			}
+			f.Resources = append(f.Resources, r)
+		}
+		wait := func(id string) {
+			require.Eventually(t, func() bool {
+				c, e := ds.GetFormaCommandByCommandID(id)
+				return e == nil && c.State == forma_command.CommandStateSuccess
+			}, 5*time.Second, 10*time.Millisecond)
+		}
+		created, err := m.ApplyForma(f, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "c", "s", "")
+		require.NoError(t, err)
+		wait(created.CommandID)
+		rows, err := ds.LoadResourcesByStack("scope")
+		require.NoError(t, err)
+		sync := &forma_command.FormaCommand{ID: util.NewID(), StartTs: time.Now().UTC(), ModifiedTs: time.Now().UTC(), Command: pkgmodel.CommandSync, Source: forma_command.SourceSynchronizer, State: forma_command.CommandStateSuccess}
+		require.NoError(t, ds.StoreFormaCommand(sync, sync.ID))
+		id := ""
+		for _, r := range rows {
+			if r.Label == "account" {
+				id = r.Ksuid
+				r.Properties = []byte(`{"foo":"bar","metadata":{"version":"1"}}`)
+				cloudMu.Lock()
+				cloud["account"] = append(json.RawMessage(nil), r.Properties...)
+				cloudMu.Unlock()
+				_, err = ds.StoreResource(r, sync.ID)
+				require.NoError(t, err)
+			}
+		}
+		require.NotEmpty(t, id)
+		var props map[string]any
+		require.NoError(t, json.Unmarshal(f.Resources[2].Properties, &props))
+		props["metadata"] = map[string]any{"app": "demo"}
+		f.Resources[2].Properties, err = json.Marshal(props)
+		require.NoError(t, err)
+		observed := observeResolution(t, m, f)
+		opts := &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: true, Resolution: &pkgmodel.DriftResolution{ObservationID: observed.ObservationID, Decisions: []pkgmodel.DriftDecision{{ResourceID: id, Action: "absorb"}}}}
+		preview, err := m.ApplyForma(f, opts, "c", "s", "")
+		require.NoError(t, err)
+		opts.Simulate = false
+		opts.Resolution.ReviewID = preview.Review.ReviewID
+		opts.Resolution.IdempotencyKey = "accept-and-update"
+		opts.Message = "Keep account metadata and add container metadata"
+		applied, err := m.ApplyForma(f, opts, "c", "s", "")
+		require.NoError(t, err)
+		wait(applied.CommandID)
+		require.EqualValues(t, 1, updates.Load())
+		desired, err := ds.GetResourcesAtLastReconcile("scope")
+		require.NoError(t, err)
+		require.Len(t, desired, 3)
+		for _, r := range desired {
+			if r.Declaration.Label == "account" {
+				require.Contains(t, string(r.Properties), `"version":"1"`)
+			}
+			if r.Declaration.Label == "container" {
+				require.Contains(t, string(r.Properties), `"app":"demo"`)
+			}
+		}
+	})
 }

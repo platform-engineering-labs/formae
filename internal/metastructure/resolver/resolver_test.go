@@ -1784,3 +1784,12 @@ func TestGuardNoUnresolvedGenerators_AcceptsPropertiesWithoutAGeneratorReference
 	assert.NoError(t, GuardNoUnresolvedGenerators(out))
 	assert.Equal(t, "plaintext", gjson.GetBytes(out, "SecretString").String())
 }
+
+func TestExtractResolvableURIsStableOrder(t *testing.T) {
+	props := json.RawMessage(`{"first":{"$ref":"formae://z#/name"},"second":{"$ref":"formae://a#/name"},"duplicate":{"$ref":"formae://a#/name"}}`)
+	want := []pkgmodel.FormaeURI{"formae://a#/name", "formae://z#/name"}
+	for range 64 {
+		require.Equal(t, want, ExtractResolvableURIs(pkgmodel.Resource{Properties: props}))
+		require.Equal(t, want, ExtractResolvableURIsFromJSON(props))
+	}
+}
