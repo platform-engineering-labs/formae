@@ -1067,11 +1067,15 @@ func correctModelFromCommandOutcome(t *testing.T, cmd *apimodel.Command, model *
 						),
 					})
 				}
+				// A successful update proves existence even if the optimistic
+				// model predicted an earlier create would fail. Reverse-order
+				// draining will skip that create after folding this update.
+				// Authoritative deletions were excluded above.
+				if res := model.Resource(stackIdx, slotIdx); res != nil {
+					res.State = StateExists
+				}
 				if ru.Properties != nil {
 					props := model.NormalizePropertiesForResource(stackIdx, slotIdx, string(ru.Properties))
-					// Update properties without touching existence state or
-					// authoritative flags. Unlike creates, updates don't
-					// change whether a resource exists.
 					if res := model.Resource(stackIdx, slotIdx); res != nil {
 						res.Properties = props
 					}
