@@ -1091,6 +1091,10 @@ test_invalid_shard_settings_fail_before_mutation() {
   work=$(new_workdir); repo="$work/repo"; bin="$work/bin"
   make_fixture_repo "$repo"; add_changed_package "$repo" a
   stub_gremlins_writing "$bin" 0 "$(mutation_report KILLED)"
+  MUTATION_SHARD_INDEX='' MUTATION_SHARD_COUNT=2 run_script "$repo" "$bin"
+  assert_status_nonzero "empty index cannot silently repeat shard zero"
+  MUTATION_SHARD_INDEX=0 MUTATION_SHARD_COUNT='' run_script "$repo" "$bin"
+  assert_status_nonzero "empty count cannot silently select the whole run"
   for pair in '0 0' '2 2' '-1 2' 'x 2' '0 x'; do
     read -r index count <<< "$pair"
     MUTATION_SHARD_INDEX="$index" MUTATION_SHARD_COUNT="$count" run_script "$repo" "$bin"

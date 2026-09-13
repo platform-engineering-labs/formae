@@ -288,7 +288,7 @@ on_signal() {
 main() {
   # Zero-based package shards partition the same sorted selection; unset means
   # the original complete local run. Reject malformed values before invoking Go.
-  local shard_index="${MUTATION_SHARD_INDEX:-0}" shard_count="${MUTATION_SHARD_COUNT:-1}"
+  local shard_index="${MUTATION_SHARD_INDEX-0}" shard_count="${MUTATION_SHARD_COUNT-1}"
   if [[ ! "$shard_index" =~ ^(0|[1-9][0-9]{0,2})$ ]] \
     || [[ ! "$shard_count" =~ ^[1-9][0-9]{0,2}$ ]] \
     || (( shard_count > 256 || shard_index >= shard_count )); then
