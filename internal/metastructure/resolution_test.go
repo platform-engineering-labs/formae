@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -821,12 +822,16 @@ func TestResolutionReferencedUpdateExecutesAfterKeep(t *testing.T) {
 				return &resource.CreateResult{ProgressResult: &resource.ProgressResult{Operation: resource.OperationCreate, OperationStatus: resource.OperationStatusSuccess, NativeID: r.Label, ResourceProperties: r.Properties}}, nil
 			},
 			Update: func(r *resource.UpdateRequest) (*resource.UpdateResult, error) {
-				require.Equal(t, "container", r.Label, "acceptance must not call the provider")
+				if r.Label != "container" {
+					t.Errorf("acceptance unexpectedly called provider for %s", r.Label)
+				}
 				updates.Add(1)
 				cloudMu.Lock()
 				cloud[r.Label] = append(json.RawMessage(nil), r.DesiredProperties...)
 				cloudMu.Unlock()
-				require.Contains(t, string(r.DesiredProperties), `"app":"demo"`)
+				if !strings.Contains(string(r.DesiredProperties), `"app":"demo"`) {
+					t.Errorf("provider update omitted requested metadata: %s", r.DesiredProperties)
+				}
 				return &resource.UpdateResult{ProgressResult: &resource.ProgressResult{Operation: resource.OperationUpdate, OperationStatus: resource.OperationStatusSuccess, NativeID: r.NativeID, ResourceProperties: r.DesiredProperties}}, nil
 			},
 		}

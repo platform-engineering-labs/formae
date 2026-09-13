@@ -280,6 +280,17 @@ func ExtractResolvableRefs(resource pkgmodel.Resource) []ResolvableRef {
 			})
 		}
 	}
+	// Occurrence order is not dependency order. Cascade plans serialize these
+	// references into patch operations, so both URI and occurrence order must be stable.
+	slices.SortFunc(out, func(a, b ResolvableRef) int {
+		if n := strings.Compare(string(a.URI), string(b.URI)); n != 0 {
+			return n
+		}
+		if n := strings.Compare(a.TargetPath, b.TargetPath); n != 0 {
+			return n
+		}
+		return strings.Compare(a.SourcePropertyName, b.SourcePropertyName)
+	})
 	return out
 }
 

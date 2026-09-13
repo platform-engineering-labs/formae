@@ -1793,3 +1793,13 @@ func TestExtractResolvableURIsStableOrder(t *testing.T) {
 		require.Equal(t, want, ExtractResolvableURIsFromJSON(props))
 	}
 }
+
+func TestExtractResolvableRefsStableOrder(t *testing.T) {
+	r := pkgmodel.Resource{Properties: json.RawMessage(`{"z":{"$ref":"formae://z#/name"},"b":{"$ref":"formae://a#/name"},"a":{"$ref":"formae://a#/name"}}`)}
+	for range 64 {
+		refs := ExtractResolvableRefs(r)
+		require.Len(t, refs, 3)
+		require.Equal(t, []string{"a", "b", "z"}, []string{refs[0].TargetPath, refs[1].TargetPath, refs[2].TargetPath})
+		require.Equal(t, []pkgmodel.FormaeURI{"formae://a", "formae://a", "formae://z"}, []pkgmodel.FormaeURI{refs[0].URI, refs[1].URI, refs[2].URI})
+	}
+}
