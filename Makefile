@@ -312,8 +312,12 @@ stage-oidc-fixtures:
 		$(OIDC_STAGE_DIR_AUTH)/oidc/v0.0.1/formae-plugin.pkl
 
 ## test-property: Run property tests (FullChaos 100 iterations, others 50)
-test-property:
-	go test -C tests/blackbox -tags=property -run 'TestProperty_Sequential|TestProperty_Concurrent|TestProperty_RenameViaApply|TestRenameViaApply_Deterministic' -v -count=1 -rapid.checks=50 -timeout=60m
+test-property: test-property-standard test-property-chaos
+
+test-property-standard:
+	go test -C tests/blackbox -tags=property -run 'TestProperty_Sequential|TestProperty_Concurrent|TestProperty_RenameViaApply|TestRenameViaApply_Deterministic|TestDriftConvergence_RepeatedExternalWrite' -v -count=1 -rapid.checks=50 -timeout=60m
+
+test-property-chaos:
 	go test -C tests/blackbox -tags=property -run TestProperty_FullChaos -v -count=1 -rapid.checks=100 -timeout=60m
 
 ## mutation-test: Run mutation testing across all unit-tested packages and generate report
@@ -387,4 +391,4 @@ add-license:
 
 all: clean build gen-pkl api-docs
 
-.PHONY: stage-oidc-fixtures api-docs clean build install-gremlins build-debug pkg-bin bundle-examples verify-examples-opkg publish-bin version-semver gen-pkl pkg-pkl publish-pkl run tidy-all test-build test-all test-scripts test-unit test-unit-postgres test-unit-auroradataapi test-unit-summary test-integration test-e2e test-property mutation-test test-descriptors-pkl verify-schema-fakeaws version full-e2e lint lint-reuse add-license postgres-up postgres-down mssql-up mssql-down local-data-api-up local-data-api-down all
+.PHONY: stage-oidc-fixtures api-docs clean build install-gremlins build-debug pkg-bin bundle-examples verify-examples-opkg publish-bin version-semver gen-pkl pkg-pkl publish-pkl run tidy-all test-build test-all test-scripts test-unit test-unit-postgres test-unit-auroradataapi test-unit-summary test-integration test-e2e test-property test-property-standard test-property-chaos mutation-test test-descriptors-pkl verify-schema-fakeaws version full-e2e lint lint-reuse add-license postgres-up postgres-down mssql-up mssql-down local-data-api-up local-data-api-down all
