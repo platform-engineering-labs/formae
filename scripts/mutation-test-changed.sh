@@ -296,6 +296,14 @@ main() {
     exit 2
   fi
 
+  local file_shard_index="${MUTATION_FILE_SHARD_INDEX-0}" file_shard_count="${MUTATION_FILE_SHARD_COUNT-1}"
+  if [[ ! "$file_shard_index" =~ ^(0|[1-9][0-9]{0,2})$ ]] \
+    || [[ ! "$file_shard_count" =~ ^[1-9][0-9]{0,2}$ ]] \
+    || (( file_shard_count > 256 || file_shard_index >= file_shard_count )); then
+    echo "Invalid mutation file shard: index=$file_shard_index count=$file_shard_count" >&2
+    exit 2
+  fi
+
   REPO_ROOT=$(git rev-parse --show-toplevel)
   BASE_REF="${GITHUB_BASE_REF:-main}"
 
@@ -367,6 +375,32 @@ main() {
       rel_pkg="${rel_pkg#"$module_root"/}"
     fi
 
+    # Split all direct source files, including unchanged files. A package-only
+    # shard cannot bound a package whose mutation run exceeds the job limit.
+    # Keep the unsharded invocation unchanged for local runs.
+    exclude_files='/'
+    if (( file_shard_count > 1 )); then
+      exclude_files=$(python3 - "$REPO_ROOT/$pkg" "$file_shard_index" "$file_shard_count" <<'PYFILES'
+import os
+import re
+import sys
+
+path, index, count = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+files = sorted(name for name in os.listdir(path)
+               if name.endswith(".go") and not name.endswith("_test.go")
+               and os.path.isfile(os.path.join(path, name)))
+if files[index::count]:
+    excluded = [re.escape(name).replace(",", r"\x2c")
+                for position, name in enumerate(files) if position % count != index]
+    print("/" + ("|^(" + "|".join(excluded) + ")$" if excluded else ""))
+PYFILES
+      )
+      if [[ -z "$exclude_files" ]]; then
+        echo "No source files in $pkg assigned to file shard $file_shard_index/$file_shard_count."
+        continue
+      fi
+    fi
+
     echo ""
     echo "=== $pkg (module: ${module_root#"$REPO_ROOT"/}) ==="
 
@@ -394,36 +428,34 @@ main() {
     # narrows what is mutated, not what is covered: coverage is still gathered
     # over the whole subtree, and gremlins has no flag to narrow that.
     #
-    # No pipeline, so the exit status is gremlins' own and set -e cannot end the
-    # run here. gremlins may exit non-zero when mutants survive — that's expected
-    # and not a failure; the status never overrules a report, it only says how a
-    # run that wrote none ended.
-    status=0
+    # Stream progress while retaining diagnostics for interruption. Preserve
+    # gremlins' status: surviving mutants may return nonzero with a valid report.
+    local -a pipeline_status=(0 0)
+    echo "::group::$pkg gremlins output"
     (cd "$module_root" && gremlins unleash \
       --tags unit \
       --timeout-coefficient 10 \
       --workers 4 \
-      --exclude-files '/' \
+      --exclude-files "$exclude_files" \
       -o "$report_file" \
-      "./$rel_pkg") > "$log_file" 2>&1 || status=$?
+      "./$rel_pkg") 2>&1 | tee "$log_file" || pipeline_status=("${PIPESTATUS[@]}")
+    status=${pipeline_status[0]}
+    echo "gremlins exit status: $status"
+    echo "::endgroup::"
+    in_flight_log=""
 
     result=$(classify_result "$report_file" "$status")
+    if [[ "${pipeline_status[1]}" != "0" ]]; then
+      result='failed|could not stream mutation output|n/a|0|0|0'
+    fi
     IFS='|' read -r result_status reason score killed lived timed_out <<< "$result"
 
     if [[ "$result_status" == "ok" ]]; then
       echo "$pkg: ok (score $score)"
-      echo "::group::$pkg gremlins output"
     else
       failed_packages=$((failed_packages + 1))
       echo "$pkg: $result_status ($reason)"
-      echo "::group::$pkg gremlins output ($reason)"
     fi
-    echo "gremlins exit status: $status"
-    tail -n 50 "$log_file" 2>/dev/null || true
-    echo "::endgroup::"
-    # The log has been shown, so an interrupt from here on must not repeat it.
-    in_flight_log=""
-
     summary_line "| \`$pkg\` | $result_status | $reason | $score | $killed | $lived | $timed_out |"
     in_flight_pkg=""
   done

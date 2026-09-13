@@ -19,10 +19,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
     env:
-      MUTATION_SHARD_INDEX: ${{ strategy.job-index }}
-      MUTATION_SHARD_COUNT: ${{ strategy.job-total }}
+      MUTATION_JOB_INDEX: ${{ strategy.job-index }}
+      MUTATION_JOB_COUNT: ${{ strategy.job-total }}
     services:
       postgres:
         image: postgres:latest
@@ -90,4 +90,11 @@ jobs:
           echo 12G | sudo tee /sys/fs/cgroup/mutation/memory.max
           echo 0 | sudo tee /sys/fs/cgroup/mutation/memory.swap.max
           echo $$ | sudo tee /sys/fs/cgroup/mutation/cgroup.procs
+          # Four file groups per package group; derive package groups from
+          # the matrix size so every candidate is assigned exactly once.
+          export MUTATION_FILE_SHARD_COUNT=4
+          (( MUTATION_JOB_COUNT % MUTATION_FILE_SHARD_COUNT == 0 ))
+          export MUTATION_SHARD_INDEX=$((MUTATION_JOB_INDEX / MUTATION_FILE_SHARD_COUNT))
+          export MUTATION_SHARD_COUNT=$((MUTATION_JOB_COUNT / MUTATION_FILE_SHARD_COUNT))
+          export MUTATION_FILE_SHARD_INDEX=$((MUTATION_JOB_INDEX % MUTATION_FILE_SHARD_COUNT))
           ./scripts/mutation-test-changed.sh
