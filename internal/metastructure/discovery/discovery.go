@@ -858,8 +858,15 @@ func discoverChildrenOnce(op ListOperation, data DiscoveryData, proc gen.Process
 		return fmt.Errorf("failed to load parent resources: %w", err)
 	}
 
+	// Mark the type done only once its children are actually queued. Setting
+	// this first made a partial or failed queueing indistinguishable from a
+	// complete one: the guard above then refused every retry for the rest of
+	// the cycle, and the next cycle restarted in the same arbitrary order.
+	if err := discoverChildren(parents, op, data, proc); err != nil {
+		return err
+	}
 	data.typesWithChildrenQueued[key] = struct{}{}
-	return discoverChildren(parents, op, data, proc)
+	return nil
 }
 
 func discoverChildren(parents []*pkgmodel.Resource, op ListOperation, data DiscoveryData, proc gen.Process) error {
@@ -916,10 +923,20 @@ func syncCompleted(from gen.PID, state gen.Atom, data DiscoveryData, message cha
 	}
 	delete(data.outstandingSyncCommands, message.CommandID)
 
+	// A changeset that finished with errors is still a changeset that wrote
+	// something: some parents synced, some did not. Dropping the whole batch's
+	// native IDs here used to take child discovery down with it, so every
+	// child of every parent in the batch went undiscovered because one sibling
+	// failed — and nothing revisited them, because listCompleted had already
+	// marked this type's children queued from a DB read taken before the sync.
+	//
+	// Keep the IDs. The block below re-reads the parents from the datastore
+	// and intersects with them, so a parent that genuinely failed to persist
+	// is filtered out on its own merits rather than by association.
 	if message.State == changeset.ChangeSetStateFinishedWithErrors {
 		proc.Log().Error("Discovery failed to synchronize discovered resources resourceType=%s listParams=%s commandID=%s", op.ResourceType, op.ListParams, message.CommandID)
-		delete(data.nativeIDsByCommand, message.CommandID)
-		if !data.HasOutstandingWork() {
+		if !data.HasOutstandingWork() && len(data.nativeIDsByCommand[message.CommandID]) == 0 {
+			delete(data.nativeIDsByCommand, message.CommandID)
 			return StateIdle, data, rescheduleAction(data), nil
 		}
 	}
