@@ -184,6 +184,7 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunCountResourcesInTargetUsesByteOrderForVersionComparison(t, newDS)
 	RunDeleteTargetSuccess(t, newDS)
 	RunUpdateTargetNotFoundReturnsError(t, newDS)
+	RunTargetProviderSchemaRoundTrip(t, newDS)
 	RunDeleteTargetNotFound(t, newDS)
 	RunTargetHealthDefaults(t, newDS)
 	RunTargetHealthStableAcrossUpdate(t, newDS)

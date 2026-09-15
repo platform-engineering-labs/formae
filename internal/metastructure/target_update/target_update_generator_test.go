@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1526,4 +1527,142 @@ func TestGenerateTargetUpdates_RejectsSubFloorReapAfter(t *testing.T) {
 
 	_, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, false)
 	require.Error(t, err, "a reap-after below the floor must be rejected at admission")
+}
+
+// TestGenerateTargetUpdates_ProviderDefaultReaping verifies the reaping
+// precedence around the provider default carried on ConfigSchema (from the
+// Config class ConfigHint annotation): a target with no explicit reaping
+// takes its provider's default over the global one, a target whose schema
+// carries no default falls through to the global default, and an explicit
+// per-target reaping still wins over the provider default.
+func TestGenerateTargetUpdates_ProviderDefaultReaping(t *testing.T) {
+	mockDS := &mockTargetDatastore{}
+	generator := NewTargetUpdateGenerator(mockDS)
+
+	neverReapSchema := pkgmodel.ConfigSchema{DefaultReap: json.RawMessage(`{"Kind":"never"}`)}
+	targets := []pkgmodel.Target{
+		{Label: "aws-target", Namespace: "AWS", Config: json.RawMessage(`{"Region":"us-east-1"}`), ConfigSchema: neverReapSchema},
+		{Label: "k8s-target", Namespace: "K8S", Config: json.RawMessage(`{"Context":"c"}`)},
+		{
+			Label: "aws-explicit", Namespace: "AWS", Config: json.RawMessage(`{"Region":"eu-west-1"}`),
+			ConfigSchema: neverReapSchema,
+			Reaping:      json.RawMessage(`{"Kind":"after","MaxUnreachableSeconds":86400}`),
+		},
+	}
+
+	updates, err := generator.GenerateTargetUpdates(targets, pkgmodel.CommandApply, false)
+	require.NoError(t, err)
+	require.Len(t, updates, 3)
+
+	byLabel := map[string]pkgmodel.Target{}
+	for _, u := range updates {
+		byLabel[u.Target.Label] = u.Target
+	}
+
+	awsReap, err := pkgmodel.ParseReaping(byLabel["aws-target"].Reaping)
+	require.NoError(t, err)
+	_, isNever := awsReap.(*pkgmodel.NeverReap)
+	assert.True(t, isNever, "the provider default on ConfigSchema must reach admission, got %T", awsReap)
+
+	k8sReap, err := pkgmodel.ParseReaping(byLabel["k8s-target"].Reaping)
+	require.NoError(t, err)
+	k8sAfter, isAfter := k8sReap.(*pkgmodel.ReapAfter)
+	require.True(t, isAfter, "a target without a provider default falls to the global default, got %T", k8sReap)
+	assert.Equal(t, pkgmodel.DefaultReapMaxUnreachableSeconds, k8sAfter.MaxUnreachableSeconds)
+
+	explicitReap, err := pkgmodel.ParseReaping(byLabel["aws-explicit"].Reaping)
+	require.NoError(t, err)
+	_, isAfter = explicitReap.(*pkgmodel.ReapAfter)
+	assert.True(t, isAfter, "an explicit per-target reaping must win over the provider default, got %T", explicitReap)
+}
+
+// Provider annotation changes must reach already-declared targets even when
+// their config and field hints do not change.
+func TestGenerateTargetUpdates_ProviderDefaultChanges(t *testing.T) {
+	for _, withHints := range []bool{false, true} {
+		for _, previous := range []string{"", `{"Kind":"after","MaxUnreachableSeconds":86400}`} {
+			t.Run(fmt.Sprintf("hints=%t/previous=%s", withHints, previous), func(t *testing.T) {
+				existing := &pkgmodel.Target{Label: "cloud", Namespace: "AWS", Config: json.RawMessage(`{"Region":"us-east-1"}`), Version: 1,
+					ConfigSchema: pkgmodel.ConfigSchema{DefaultReap: json.RawMessage(previous)},
+					Reaping:      json.RawMessage(`{"Kind":"after","MaxUnreachableSeconds":86400}`)}
+				if withHints {
+					existing.ConfigSchema.Hints = map[string]pkgmodel.ConfigFieldHint{"Region": {CreateOnly: true}}
+				}
+				desired := *existing
+				desired.Reaping = nil
+				desired.ConfigSchema.DefaultReap = json.RawMessage(`{"Kind":"never"}`)
+				ds := &mockTargetDatastore{targets: map[string]*pkgmodel.Target{"cloud": existing}}
+				updates, err := NewTargetUpdateGenerator(ds).GenerateTargetUpdates([]pkgmodel.Target{desired}, pkgmodel.CommandApply, false)
+				require.NoError(t, err)
+				require.Len(t, updates, 1, "new provider default must update an existing target")
+				assert.Equal(t, TargetOperationUpdate, updates[0].Operation)
+				assert.JSONEq(t, `{"Kind":"never"}`, string(updates[0].Target.Reaping))
+				assert.JSONEq(t, `{"Kind":"never"}`, string(updates[0].Target.ConfigSchema.DefaultReap))
+				ds.targets["cloud"] = &updates[0].Target
+				updates, err = NewTargetUpdateGenerator(ds).GenerateTargetUpdates([]pkgmodel.Target{desired}, pkgmodel.CommandApply, false)
+				require.NoError(t, err)
+				assert.Empty(t, updates, "identical reapply must remain a no-op")
+			})
+		}
+	}
+}
+
+func TestGenerateTargetUpdates_ExplicitReapingChange(t *testing.T) {
+	existing := &pkgmodel.Target{Label: "cloud", Namespace: "AWS", Config: json.RawMessage(`{"Region":"us-east-1"}`), Version: 1,
+		ConfigSchema: pkgmodel.ConfigSchema{DefaultReap: json.RawMessage(`{"Kind":"never"}`)}, Reaping: json.RawMessage(`{"Kind":"never"}`)}
+	ds := &mockTargetDatastore{targets: map[string]*pkgmodel.Target{"cloud": existing}}
+	desired := *existing
+	desired.Reaping = json.RawMessage(`{"Kind":"after","MaxUnreachableSeconds":86400}`)
+	updates, err := NewTargetUpdateGenerator(ds).GenerateTargetUpdates([]pkgmodel.Target{desired}, pkgmodel.CommandApply, false)
+	require.NoError(t, err)
+	require.Len(t, updates, 1, "explicit reaping change must persist without config changes")
+	assert.JSONEq(t, `{"Kind":"after","MaxUnreachableSeconds":86400}`, string(updates[0].Target.Reaping))
+	ds.targets["cloud"] = &updates[0].Target
+	desired.Reaping = nil
+	updates, err = NewTargetUpdateGenerator(ds).GenerateTargetUpdates([]pkgmodel.Target{desired}, pkgmodel.CommandApply, false)
+	require.NoError(t, err)
+	require.Len(t, updates, 1, "removing explicit reaping must restore the provider default")
+	assert.JSONEq(t, `{"Kind":"never"}`, string(updates[0].Target.Reaping))
+}
+
+func TestGenerateTargetUpdates_InvalidProviderReapingFallsBack(t *testing.T) {
+	for _, raw := range []string{`{"Kind":"unknown"}`, `{"Kind":"after","MaxUnreachableSeconds":1}`} {
+		t.Run(raw, func(t *testing.T) {
+			target := pkgmodel.Target{Label: "cloud", Namespace: "AWS", Config: json.RawMessage(`{"Region":"us-east-1"}`), ConfigSchema: pkgmodel.ConfigSchema{DefaultReap: json.RawMessage(raw)}}
+			updates, err := NewTargetUpdateGenerator(&mockTargetDatastore{}).GenerateTargetUpdates([]pkgmodel.Target{target}, pkgmodel.CommandApply, false)
+			require.NoError(t, err, "invalid provider annotation must not reject the apply")
+			require.Len(t, updates, 1)
+			assert.JSONEq(t, `{"Kind":"after","MaxUnreachableSeconds":86400}`, string(updates[0].Target.Reaping))
+		})
+	}
+}
+
+func TestGenerateTargetUpdates_PreservesProviderSchema(t *testing.T) {
+	for _, incomingDefault := range []json.RawMessage{nil, json.RawMessage(`null`)} {
+		t.Run(string(incomingDefault), func(t *testing.T) {
+			existing := &pkgmodel.Target{Label: "cloud", Namespace: "AWS", Config: json.RawMessage(`{"Region":"us-east-1"}`), Version: 1,
+				ConfigSchema: pkgmodel.ConfigSchema{DefaultReap: json.RawMessage(`{"Kind":"never"}`)}, Reaping: json.RawMessage(`{"Kind":"never"}`)}
+			desired := *existing
+			desired.Reaping = nil
+			desired.Discoverable = true
+			desired.ConfigSchema = pkgmodel.ConfigSchema{DefaultReap: incomingDefault}
+			updates, err := NewTargetUpdateGenerator(&mockTargetDatastore{targets: map[string]*pkgmodel.Target{"cloud": existing}}).GenerateTargetUpdates([]pkgmodel.Target{desired}, pkgmodel.CommandApply, false)
+			require.NoError(t, err)
+			require.Len(t, updates, 1)
+			assert.JSONEq(t, `{"Kind":"never"}`, string(updates[0].Target.ConfigSchema.DefaultReap))
+			assert.JSONEq(t, `{"Kind":"never"}`, string(updates[0].Target.Reaping))
+		})
+	}
+}
+
+func TestGenerateTargetUpdates_ReplacesPolicyBelowCurrentFloor(t *testing.T) {
+	existing := &pkgmodel.Target{Label: "cloud", Namespace: "AWS", Config: json.RawMessage(`{"Region":"us-east-1"}`), Version: 1,
+		Reaping: json.RawMessage(`{"Kind":"after","MaxUnreachableSeconds":3600}`)}
+	desired := *existing
+	desired.Reaping = json.RawMessage(`{"Kind":"never"}`)
+	generator := NewTargetUpdateGenerator(&mockTargetDatastore{targets: map[string]*pkgmodel.Target{"cloud": existing}}).WithMinReapDuration(7200 * time.Second)
+	updates, err := generator.GenerateTargetUpdates([]pkgmodel.Target{desired}, pkgmodel.CommandApply, false)
+	require.NoError(t, err, "a valid replacement must not validate the old policy against a changed floor")
+	require.Len(t, updates, 1)
+	assert.JSONEq(t, `{"Kind":"never"}`, string(updates[0].Target.Reaping))
 }

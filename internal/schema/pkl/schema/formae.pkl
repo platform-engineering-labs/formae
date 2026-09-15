@@ -587,9 +587,23 @@ open class ConfigFieldHint extends Annotation {
     fixed CreateOnly: Boolean = createOnly
 }
 
-/// Schema describing per-field mutability of a target's config.
+/// Class-level annotation for a target Config class, carrying target
+/// semantics the plugin author declares once for every target of this
+/// provider — the class-level sibling of the per-field ConfigFieldHint.
+open class ConfigHint extends Annotation {
+    /// Default reaping behaviour for this provider's targets when a target
+    /// declares none itself. A provider whose targets cannot go away out of
+    /// band (a cloud region) declares NeverReap here; providers whose
+    /// backing infrastructure can be deleted out of band leave it unset and
+    /// fall to the global default.
+    reap: Reaping?
+}
+
+/// Schema describing per-field mutability of a target's config, plus the
+/// provider-level target semantics from the Config class's ConfigHint.
 open class ConfigSchema {
     Hints: Mapping<String, ConfigFieldHint>?
+    DefaultReap: Dynamic?
 }
 
 // Schema output class
@@ -660,8 +674,12 @@ open class Target {
     fixed ConfigSchema: ConfigSchema? =
         if (config != null)
             let (hints = module.fq.configHints(reflect.Class(config.getClass())))
-            if (hints.length > 0)
-                new ConfigSchema { Hints = hints }
+            let (classHint = module.fq.findConfigHint(reflect.Class(config.getClass())))
+            if (hints.length > 0 || classHint != null)
+                new ConfigSchema {
+                    Hints = if (hints.length > 0) hints else null
+                    DefaultReap = classHint?.reap?.render()
+                }
             else null
         else null
     fixed Discoverable: Boolean = discoverable
@@ -1310,6 +1328,12 @@ class Fq {
                 else
                     Pair(key, rawValue)
             ).toDynamic()
+
+    function findConfigHint(configClass: reflect.Class?): ConfigHint? =
+      if (configClass == null)
+        null
+      else
+        configClass.annotations.filterIsInstance(ConfigHint).firstOrNull ?? findConfigHint(configClass.superclass)
 
     function configHints(configClass: reflect.Class): Mapping<String, ConfigFieldHint> =
         configClass.properties

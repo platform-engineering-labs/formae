@@ -14,6 +14,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/datastore"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func setupQueryTargetsTestData(ds datastore.Datastore, t *testing.T) {
@@ -351,5 +352,30 @@ func RunDeleteTargetNotFound(t *testing.T, newDS func(t *testing.T) TestDatastor
 		_, err := ds.DeleteTarget("non-existent-target")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "does not exist")
+	})
+}
+
+// A ConfigHint can carry provider reaping without any field mutability hints.
+// Both create and update must retain that schema for subsequent admission.
+func RunTargetProviderSchemaRoundTrip(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("Target_ProviderSchema_RoundTrip", func(t *testing.T) {
+		td := newDS(t)
+		defer td.CleanUpFn() //nolint:errcheck
+		target := &pkgmodel.Target{Label: "provider-schema", Namespace: "AWS", Config: json.RawMessage(`{"Region":"us-east-1"}`),
+			ConfigSchema: pkgmodel.ConfigSchema{DefaultReap: json.RawMessage(`{"Kind":"never"}`)}, Reaping: json.RawMessage(`{"Kind":"never"}`)}
+		_, err := td.Datastore.CreateTarget(target)
+		require.NoError(t, err)
+		loaded, err := td.Datastore.LoadTarget(target.Label)
+		require.NoError(t, err)
+		require.NotNil(t, loaded)
+		assert.JSONEq(t, `{"Kind":"never"}`, string(loaded.ConfigSchema.DefaultReap))
+		target.ConfigSchema.DefaultReap = json.RawMessage(`{"Kind":"after","MaxUnreachableSeconds":86400}`)
+		target.Reaping = json.RawMessage(`{"Kind":"after","MaxUnreachableSeconds":86400}`)
+		_, err = td.Datastore.UpdateTarget(target)
+		require.NoError(t, err)
+		loaded, err = td.Datastore.LoadTarget(target.Label)
+		require.NoError(t, err)
+		require.NotNil(t, loaded)
+		assert.JSONEq(t, `{"Kind":"after","MaxUnreachableSeconds":86400}`, string(loaded.ConfigSchema.DefaultReap))
 	})
 }
