@@ -4112,85 +4112,54 @@ func (d DatastorePostgres) Stats() (*stats.Stats, error) {
 		res.States[state] = count
 	}
 
-	// Count distinct stacks
-	stacksQuery := fmt.Sprintf(`
-	SELECT COUNT(DISTINCT stack)
-	FROM resources r1
-	WHERE stack IS NOT NULL
-	AND stack != '%s'
-	AND operation != $1 AND operation != 'reaped'
-	AND NOT EXISTS (
-		SELECT 1
-		FROM resources r2
-		WHERE r1.uri = r2.uri
-		AND r2.version COLLATE "C" > r1.version COLLATE "C"
+	// Resource counts: one pass over the current version of every resource.
+	//
+	// The current version is the highest version per uri. Asking for it as a
+	// correlated NOT EXISTS probes the primary key once per row, which on a
+	// table of a hundred thousand resources is a hundred thousand index probes
+	// for every count, and Stats used to run four such counts. DISTINCT ON
+	// walks the (uri, version) key once, and the four figures below are
+	// derived from that single result set.
+	resourceCountsQuery := `
+	WITH current AS (
+		SELECT DISTINCT ON (uri) stack, type, operation
+		FROM resources
+		ORDER BY uri, version COLLATE "C" DESC
 	)
-	`, constants.UnmanagedStack)
-	row = d.pool.QueryRow(ctx, stacksQuery, resource_update.OperationDelete)
-	if err := row.Scan(&res.Stacks); err != nil {
+	SELECT stack, type, COUNT(*)
+	FROM current
+	WHERE operation != $1 AND operation != 'reaped'
+	GROUP BY stack, type
+	`
+	rows, err = d.pool.Query(ctx, resourceCountsQuery, resource_update.OperationDelete)
+	if err != nil {
 		return nil, err
 	}
-
-	// Count managed resources by namespace
+	defer rows.Close()
 	res.ManagedResources = make(map[string]int)
-	managedResourcesQuery := fmt.Sprintf(`
-	SELECT SPLIT_PART(type, '::', 1) as namespace, COUNT(*)
-	FROM resources r1
-	WHERE stack IS NOT NULL
-	AND stack != '%s'
-	AND operation != $1 AND operation != 'reaped'
-	AND NOT EXISTS (
-		SELECT 1
-		FROM resources r2
-		WHERE r1.uri = r2.uri
-		AND r2.version COLLATE "C" > r1.version COLLATE "C"
-	)
-	GROUP BY namespace
-	`, constants.UnmanagedStack)
-	rows, err = d.pool.Query(ctx, managedResourcesQuery, resource_update.OperationDelete)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var namespace string
-		var count int
-		if err := rows.Scan(&namespace, &count); err != nil {
-			return nil, err
-		}
-		res.ManagedResources[namespace] = count
-	}
-
-	// Count unmanaged resources by namespace
 	res.UnmanagedResources = make(map[string]int)
-	unmanagedResourcesQuery := fmt.Sprintf(`
-	SELECT SPLIT_PART(type, '::', 1) as namespace, COUNT(*)
-	FROM resources r1
-	WHERE stack = '%s'
-	AND operation != $1 AND operation != 'reaped'
-	AND NOT EXISTS (
-		SELECT 1
-		FROM resources r2
-		WHERE r1.uri = r2.uri
-		AND r2.version COLLATE "C" > r1.version COLLATE "C"
-	)
-	GROUP BY namespace
-	`, constants.UnmanagedStack)
-	rows, err = d.pool.Query(ctx, unmanagedResourcesQuery, resource_update.OperationDelete)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
+	res.ResourceTypes = make(map[string]int)
+	managedStacks := make(map[string]struct{})
 	for rows.Next() {
-		var namespace string
+		var stack *string
+		var resourceType string
 		var count int
-		if err := rows.Scan(&namespace, &count); err != nil {
+		if err := rows.Scan(&stack, &resourceType, &count); err != nil {
 			return nil, err
 		}
-		res.UnmanagedResources[namespace] = count
+		res.ResourceTypes[resourceType] += count
+		namespace := strings.SplitN(resourceType, "::", 2)[0]
+		switch {
+		case stack == nil:
+			// A resource with no stack is neither managed nor unmanaged.
+		case *stack == constants.UnmanagedStack:
+			res.UnmanagedResources[namespace] += count
+		default:
+			res.ManagedResources[namespace] += count
+			managedStacks[*stack] = struct{}{}
+		}
 	}
+	res.Stacks = len(managedStacks)
 
 	// Count targets by namespace
 	res.Targets = make(map[string]int)
@@ -4221,34 +4190,6 @@ func (d DatastorePostgres) Stats() (*stats.Stats, error) {
 		res.Targets[namespace] = count
 	}
 
-	// Count resource types
-	res.ResourceTypes = make(map[string]int)
-	resourceTypesQuery := `
-	SELECT type, COUNT(*)
-	FROM resources r1
-	WHERE operation != $1 AND operation != 'reaped'
-	AND NOT EXISTS (
-		SELECT 1
-		FROM resources r2
-		WHERE r1.uri = r2.uri
-		AND r2.version COLLATE "C" > r1.version COLLATE "C"
-	)
-	GROUP BY type
-	`
-	rows, err = d.pool.Query(ctx, resourceTypesQuery, resource_update.OperationDelete)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var resourceType string
-		var count int
-		if err := rows.Scan(&resourceType, &count); err != nil {
-			return nil, err
-		}
-		res.ResourceTypes[resourceType] = count
-	}
 	return &res, nil
 }
 
