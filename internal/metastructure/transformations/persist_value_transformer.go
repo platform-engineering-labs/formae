@@ -5,6 +5,7 @@
 package transformations
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 
@@ -49,13 +50,20 @@ func OpaqueFields(schema pkgmodel.Schema, resourceType string) map[string]bool {
 	return opaqueFieldSet(schema, resourceType)
 }
 
-type PersistValueTransformer struct{}
+type PersistValueTransformer struct{ exactNumbers bool }
 
 // Ensure PersistValueTransformer implements ResourceTransformer
 var _ ResourceTransformer = (*PersistValueTransformer)(nil)
 
 func NewPersistValueTransformer() *PersistValueTransformer {
 	return &PersistValueTransformer{}
+}
+
+// NewPersistValueTransformerWithExactNumbers preserves number tokens while
+// hashing comparison-only declarations. Existing persistence callers keep
+// their current decoding behavior through NewPersistValueTransformer.
+func NewPersistValueTransformerWithExactNumbers() *PersistValueTransformer {
+	return &PersistValueTransformer{exactNumbers: true}
 }
 
 // ApplyToResource applies the transformation to hash all secret values in the resource
@@ -113,7 +121,16 @@ func (pv *PersistValueTransformer) transformRawProps(properties json.RawMessage,
 		return json.RawMessage("{}"), nil, nil
 	}
 	var props map[string]any
-	if err := json.Unmarshal(properties, &props); err != nil {
+	if pv.exactNumbers {
+		if !json.Valid(properties) {
+			return nil, nil, fmt.Errorf("invalid properties JSON")
+		}
+		decoder := json.NewDecoder(bytes.NewReader(properties))
+		decoder.UseNumber()
+		if err := decoder.Decode(&props); err != nil {
+			return nil, nil, fmt.Errorf("failed to unmarshal properties: %w", err)
+		}
+	} else if err := json.Unmarshal(properties, &props); err != nil {
 		return nil, nil, fmt.Errorf("failed to unmarshal properties: %w", err)
 	}
 

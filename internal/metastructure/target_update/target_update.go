@@ -204,3 +204,13 @@ func ShouldTriggerDiscovery(update *TargetUpdate) bool {
 
 	return false
 }
+
+// PersistTargetUpdatesResult carries only identities actually committed by the
+// write. A subsequent label lookup cannot substitute for this provenance.
+type PersistTargetUpdatesResult struct {
+	Versions     []string
+	Incarnations map[string]string
+	Error        string
+}
+
+func (r PersistTargetUpdatesResult) CallError() string { return r.Error }

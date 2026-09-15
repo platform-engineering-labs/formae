@@ -22,6 +22,9 @@ func ReferencedTargetLabels(resourceUpdates []ResourceUpdate) []string {
 	}
 	for i := range resourceUpdates {
 		ru := &resourceUpdates[i]
+		if ru.IsAcceptance() {
+			continue
+		}
 		consider(ru.DesiredState.Target)
 		consider(ru.ResourceTarget.Label)
 	}

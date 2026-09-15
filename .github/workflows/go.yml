@@ -60,7 +60,9 @@ jobs:
     - name: Test
       uses: nick-fields/retry@v2
       with:
-        timeout_minutes: 10
+        # Includes test-build, Pkl, scripts, and all Go modules. Allow room
+        # for Go's per-package timeout to report before the wrapper aborts.
+        timeout_minutes: 20
         max_attempts: 3
         command: make test-all
 

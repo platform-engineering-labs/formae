@@ -438,12 +438,30 @@ func targetUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, mess
 	//
 	// Resolve ops are synthetic: they are not stored in command.TargetUpdates,
 	// so MarkTargetUpdateAsComplete must not be called for them.
+	pinFailure := ""
 	node, exists := data.changeset.DAG.Nodes[message.NodeURI]
+	if exists && message.State == target_update.TargetUpdateStateSuccess && message.CommittedIncarnation != "" {
+		if tu, ok := node.Update.(*target_update.TargetUpdate); ok {
+			refs := []messages.TargetExecutionRef{}
+			for _, dependent := range data.changeset.DAG.Nodes {
+				if ru, ok := dependent.Update.(*resource_update.ResourceUpdate); ok && ru.ResourceTarget.Label == tu.Target.Label && dependsOnTransitively(dependent, node.URI) {
+					refs = append(refs, messages.TargetExecutionRef{KSUID: ru.DesiredState.Ksuid, Operation: ru.Operation})
+				}
+			}
+			_, err := messages.UnwrapCall(proc.Call(gen.ProcessID{Name: gen.Atom("FormaCommandPersister"), Node: proc.Node().Name()}, messages.PinTargetExecutionIdentity{CommandID: data.changeset.CommandID, TargetLabel: tu.Target.Label, Incarnation: message.CommittedIncarnation, Resources: refs}))
+			if err != nil {
+				message.State = target_update.TargetUpdateStateFailed
+				pinFailure = "target execution incarnation pin failed: " + err.Error()
+			}
+		}
+	}
+
 	if exists {
 		if tu, ok := node.Update.(*target_update.TargetUpdate); ok && tu.Operation != target_update.TargetOperationResolve {
 			_, err := messages.UnwrapCall(proc.Call(
 				gen.ProcessID{Name: gen.Atom("FormaCommandPersister"), Node: proc.Node().Name()},
 				messages.MarkTargetUpdateAsComplete{
+					FailureReason:   pinFailure,
 					CommandID:       data.changeset.CommandID,
 					TargetLabel:     tu.Target.Label,
 					TargetOperation: string(tu.Operation),
@@ -491,15 +509,10 @@ func targetUpdateFinished(from gen.PID, state gen.Atom, data ChangesetData, mess
 		}
 	}
 
-	// When the completed target update recovered a reaped target, its dependent
-	// resource updates were generated against the pre-recovery (reaped) incarnation.
-	// The recover update has now minted a fresh incarnation and un-reaped the
-	// target's resource rows, so drop the stale incarnation expectation from those
-	// pending resource updates or the resource-write guard would reject the
-	// recovery command's own re-adopts.
-	if message.State == target_update.TargetUpdateStateSuccess {
-		if tu, ok := node.Update.(*target_update.TargetUpdate); ok && targetUpdateRecoveredReaped(tu) {
-			data.changeset.DAG.clearTargetIncarnationOnResources(tu.Target.Label)
+	// Preserve the incarnation actually committed before dependent providers start.
+	if message.State == target_update.TargetUpdateStateSuccess && message.CommittedIncarnation != "" {
+		if _, ok := node.Update.(*target_update.TargetUpdate); ok {
+			data.changeset.DAG.propagateTargetIncarnation(node, message.CommittedIncarnation)
 		}
 	}
 
@@ -1081,17 +1094,6 @@ func shutdown(from gen.PID, state gen.Atom, data ChangesetData, shutdown Shutdow
 	return state, data, nil, gen.TerminateReasonNormal
 }
 
-// targetUpdateRecoveredReaped reports whether a completed target update recovered
-// a reaped target: the target existed and its pre-update row was in the reaped
-// health state. Such an update mints a fresh incarnation and un-reaps the
-// target's resources, so its dependent resource updates must have their stale
-// incarnation expectation cleared.
-func targetUpdateRecoveredReaped(tu *target_update.TargetUpdate) bool {
-	return tu.ExistingTarget != nil &&
-		tu.ExistingTarget.Health != nil &&
-		tu.ExistingTarget.Health.State == pkgmodel.TargetHealthStateReaped
-}
-
 // changesetHasUserUpdates checks if the changeset contains any updates from user operations.
 // Returns true if at least one update has Source == FormaCommandSourceUser.
 // changesetWritesResources reports whether the changeset will write any
@@ -1137,11 +1139,19 @@ func changesetHasUserUpdates(changeset Changeset) bool {
 }
 
 // collectStacksWithDeletes returns a list of unique stack labels that had delete operations
-// in the DAG, excluding the unmanaged stack.
+// in the DAG, excluding unmanaged stacks and stacks with admitted creation
+// intent. A replacement may delete the last resource before its create fails;
+// retaining that stack preserves the incarnation needed for recovery. This is
+// independent of asynchronous terminal-command persistence and does not publish
+// failed/canceled patch intent as desired state.
 func collectStacksWithDeletes(dag *ExecutionDAG) []string {
 	stackSet := make(map[string]struct{})
+	stacksWithCreates := make(map[string]bool)
 	for _, node := range dag.Nodes {
 		if ru, ok := node.Update.(*resource_update.ResourceUpdate); ok {
+			if ru.Operation == resource_update.OperationCreate || ru.Operation == resource_update.OperationReplace {
+				stacksWithCreates[ru.StackLabel] = true
+			}
 			if ru.Operation == resource_update.OperationDelete || ru.Operation == resource_update.OperationReplace {
 				stackLabel := ru.StackLabel
 				if stackLabel != "" && stackLabel != constants.UnmanagedStack {
@@ -1153,6 +1163,9 @@ func collectStacksWithDeletes(dag *ExecutionDAG) []string {
 
 	stacks := make([]string, 0, len(stackSet))
 	for stack := range stackSet {
+		if stacksWithCreates[stack] {
+			continue
+		}
 		stacks = append(stacks, stack)
 	}
 	return stacks

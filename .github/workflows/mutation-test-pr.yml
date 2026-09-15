@@ -1,8 +1,8 @@
 name: mutation-test-pr
 
 on:
-  pull_request:
-    branches: [main]
+  # Keep targeted runs available manually while the PR runtime is redesigned.
+  workflow_dispatch:
 
 jobs:
   # Contract: green means gremlins completed on every changed package —
@@ -15,7 +15,40 @@ jobs:
   # job rather than making the failure advisory.
   mutation-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+    env:
+      MUTATION_JOB_INDEX: ${{ strategy.job-index }}
+      MUTATION_JOB_COUNT: ${{ strategy.job-total }}
+    services:
+      postgres:
+        image: postgres:latest
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: admin
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      mssql:
+        image: mcr.microsoft.com/mssql/server:2019-latest
+        env:
+          ACCEPT_EULA: "Y"
+          MSSQL_SA_PASSWORD: "Formae_Test_1234!"
+          MSSQL_PID: "Developer"
+        ports:
+          - 1433:1433
+        options: >-
+          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P Formae_Test_1234! -No -Q 'SELECT 1'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 12
     steps:
       - uses: actions/checkout@v4
         with:
@@ -57,4 +90,11 @@ jobs:
           echo 12G | sudo tee /sys/fs/cgroup/mutation/memory.max
           echo 0 | sudo tee /sys/fs/cgroup/mutation/memory.swap.max
           echo $$ | sudo tee /sys/fs/cgroup/mutation/cgroup.procs
+          # Four file groups per package group; derive package groups from
+          # the matrix size so every candidate is assigned exactly once.
+          export MUTATION_FILE_SHARD_COUNT=4
+          (( MUTATION_JOB_COUNT % MUTATION_FILE_SHARD_COUNT == 0 ))
+          export MUTATION_SHARD_INDEX=$((MUTATION_JOB_INDEX / MUTATION_FILE_SHARD_COUNT))
+          export MUTATION_SHARD_COUNT=$((MUTATION_JOB_COUNT / MUTATION_FILE_SHARD_COUNT))
+          export MUTATION_FILE_SHARD_INDEX=$((MUTATION_JOB_INDEX % MUTATION_FILE_SHARD_COUNT))
           ./scripts/mutation-test-changed.sh

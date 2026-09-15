@@ -327,7 +327,9 @@ run_script_signalled() {
   script_status=0
   rm -f "$ready_file"
 
-  timeout -k "$RUN_KILL_DELAY" "$RUN_TIMEOUT" setsid --wait bash -c '
+  # Bash ignores SIGINT for asynchronous commands. Reset it before exec so
+  # this fixture models a foreground CI process, whose SIGINT is catchable.
+  env --default-signal=INT timeout -k "$RUN_KILL_DELAY" "$RUN_TIMEOUT" setsid --wait bash -c '
     echo "$$" > "$1"
     cd "$2" || exit 1
     exec env -u GITHUB_STEP_SUMMARY GITHUB_BASE_REF=main PATH="$3:$PATH" \
@@ -1029,6 +1031,7 @@ assert_interrupted_by() {
     "SIG$signal: a package that already reported gets no second row"
   assert_output_count '^\| `example/b` \|' 1 \
     "SIG$signal: the interrupted package gets exactly one row"
+  assert_output_count '^in-flight gremlins output$' 1 "SIG$signal: streamed output is not replayed"
   assert_status "$expected_status" "SIG$signal: the script exits 128 plus the signal"
 }
 
@@ -1067,6 +1070,149 @@ test_only_the_invoked_package_is_mutated() {
   assert_status 0 "a run confined to the invoked package passes"
 }
 
+# Package sharding must partition the original selection exactly once, and
+# must preserve failures rather than hide an uncompleted package.
+test_shards_cover_each_changed_package_once() {
+  local work repo bin shard combined=""
+  work=$(new_workdir); repo="$work/repo"; bin="$work/bin"
+  make_fixture_repo "$repo"
+  for pkg in a b c d e; do add_changed_package "$repo" "$pkg"; done
+  stub_gremlins_writing "$bin" 0 "$(mutation_report KILLED)"
+  for shard in 0 1 2; do
+    MUTATION_SHARD_INDEX="$shard" MUTATION_SHARD_COUNT=3 run_script "$repo" "$bin"
+    assert_status 0 "each shard completes"
+    combined+="$script_output"$'\n'
+  done
+  script_output="$combined"
+  for pkg in a b c d e; do
+    assert_output_count "^=== $pkg " 1 "each changed package runs exactly once"
+  done
+}
+
+test_invalid_shard_settings_fail_before_mutation() {
+  local work repo bin index count
+  work=$(new_workdir); repo="$work/repo"; bin="$work/bin"
+  make_fixture_repo "$repo"; add_changed_package "$repo" a
+  stub_gremlins_writing "$bin" 0 "$(mutation_report KILLED)"
+  MUTATION_SHARD_INDEX='' MUTATION_SHARD_COUNT=2 run_script "$repo" "$bin"
+  assert_status_nonzero "empty index cannot silently repeat shard zero"
+  MUTATION_SHARD_INDEX=0 MUTATION_SHARD_COUNT='' run_script "$repo" "$bin"
+  assert_status_nonzero "empty count cannot silently select the whole run"
+  for pair in '0 0' '2 2' '-1 2' 'x 2' '0 x'; do
+    read -r index count <<< "$pair"
+    MUTATION_SHARD_INDEX="$index" MUTATION_SHARD_COUNT="$count" run_script "$repo" "$bin"
+    assert_status_nonzero "invalid shard cannot silently skip packages"
+    assert_output_count '^=== ' 0 "invalid shard never invokes mutation"
+  done
+}
+
+test_shard_failure_is_not_suppressed() {
+  local work repo bin
+  work=$(new_workdir); repo="$work/repo"; bin="$work/bin"
+  make_fixture_repo "$repo"; add_changed_package "$repo" a
+  add_changed_package "$repo" b
+  stub_gremlins_failing_for "$bin" "$(mutation_report KILLED)" ./b
+  MUTATION_SHARD_INDEX=1 MUTATION_SHARD_COUNT=2 run_script "$repo" "$bin"
+  assert_status_nonzero "missing report fails its shard"
+  assert_output_count '^=== a ' 0 "other shard package is not invoked"
+  assert_output_count '^=== b ' 1 "failed package ran"
+}
+
+# File shards must include unchanged source in a changed package, exactly once,
+# while preserving the existing exclusion of child packages.
+test_file_shards_cover_all_source_once() {
+  local work repo bin shard combined="" file
+  work=$(new_workdir); repo="$work/repo"; bin="$work/bin"
+  make_fixture_repo "$repo"
+  add_base_package "$repo" "pkg/sub"
+  mkdir -p "$repo/pkg"
+  for file in old.go a.b.go axb.go extra.go last.go; do
+    printf 'package pkg\n' > "$repo/pkg/$file"
+  done
+  fixture_commit "$repo" "existing source"
+  git -C "$repo" update-ref refs/remotes/origin/main HEAD
+  add_changed_package "$repo" pkg
+  stub_gremlins_walking "$bin"
+  for shard in 0 1 2 3 4 5 6; do
+    MUTATION_FILE_SHARD_INDEX="$shard" MUTATION_FILE_SHARD_COUNT=7 run_script "$repo" "$bin"
+    assert_status 0 "each file shard completes, including empty shards"
+    combined+="$script_output"$'\n'
+  done
+  script_output="$combined"
+  for file in code old extra last axb; do
+    assert_output_count "^mutating $file\\.go$" 1 "each source file is mutated exactly once"
+  done
+  assert_output_count '^mutating a\.b\.go$' 1 "file name regex metacharacters are literal"
+  assert_output_count '^mutating sub/' 0 "children remain excluded"
+}
+
+test_invalid_file_shards_fail_before_mutation() {
+  local work repo bin index count pair
+  work=$(new_workdir); repo="$work/repo"; bin="$work/bin"
+  make_fixture_repo "$repo"; add_changed_package "$repo" pkg
+  stub_gremlins_walking "$bin"
+  for pair in '0 0' '2 2' '-1 2' 'x 2' '0 x' '0 257'; do
+    read -r index count <<< "$pair"
+    MUTATION_FILE_SHARD_INDEX="$index" MUTATION_FILE_SHARD_COUNT="$count" run_script "$repo" "$bin"
+    assert_status_nonzero "invalid file partition cannot silently drop coverage"
+    assert_output_count '^mutating ' 0 "invalid partition never invokes mutation"
+  done
+  MUTATION_FILE_SHARD_INDEX='' MUTATION_FILE_SHARD_COUNT=2 run_script "$repo" "$bin"
+  assert_status_nonzero "empty file index fails"
+  MUTATION_FILE_SHARD_INDEX=0 MUTATION_FILE_SHARD_COUNT='' run_script "$repo" "$bin"
+  assert_status_nonzero "empty file count fails"
+}
+
+test_file_shard_missing_report_fails() {
+  local work repo bin
+  work=$(new_workdir); repo="$work/repo"; bin="$work/bin"
+  make_fixture_repo "$repo"; add_changed_package "$repo" pkg
+  stub_gremlins_failing_for "$bin" "$(mutation_report KILLED)" ./pkg
+  MUTATION_FILE_SHARD_INDEX=0 MUTATION_FILE_SHARD_COUNT=4 run_script "$repo" "$bin"
+  assert_status_nonzero "assigned source without a report fails"
+}
+
+test_progress_is_visible_before_gremlins_finishes() {
+  local work repo bin output
+  work=$(new_workdir); repo="$work/repo"; bin="$work/bin"; output="$work/output"
+  make_fixture_repo "$repo"; add_changed_package "$repo" pkg
+  stub_gremlins "$bin" '
+echo "live progress marker"
+for attempt in {1..100}; do
+  if grep -q "^live progress marker$" "$PROGRESS_LOG"; then
+    printf '\''{"files": []}'\'' > "$report_path"
+    exit 0
+  fi
+  sleep 0.02
+done
+exit 9'
+  script_status=0
+  (cd "$repo" && env -u GITHUB_STEP_SUMMARY GITHUB_BASE_REF=main \
+    PROGRESS_LOG="$output" PATH="$bin:$PATH" bash "$SCRIPT_UNDER_TEST") > "$output" 2>&1 || script_status=$?
+  script_output=$(cat "$output")
+  assert_status 0 "tool progress reaches the job log before the report is written"
+  assert_output_count '^live progress marker$' 1 "completed output is not duplicated"
+}
+
+test_completed_empty_file_group_is_not_a_cancelled_run() {
+  local work repo bin
+  work=$(new_workdir); repo="$work/repo"; bin="$work/bin"
+  make_fixture_repo "$repo"; add_changed_package "$repo" pkg
+  stub_gremlins "$bin" 'printf "\nNo results to report.\n"; exit 0'
+  MUTATION_FILE_SHARD_INDEX=0 MUTATION_FILE_SHARD_COUNT=4 run_script "$repo" "$bin"
+  assert_status 0 "gremlins terminal empty result completes the file group"
+  assert_output_matches '\| ok \| no mutants \|' "empty completion is explicit"
+  stub_gremlins "$bin" 'printf "\nNo results to report.\n"; exit 9'
+  run_script "$repo" "$bin"
+  assert_status_nonzero "empty marker cannot hide a failed process"
+  stub_gremlins "$bin" 'echo "test output: No results to report."; exit 0'
+  run_script "$repo" "$bin"
+  assert_status_nonzero "only the exact terminal marker can complete an empty group"
+  stub_gremlins "$bin" 'printf "No results to report.\nShutting down gracefully...\n"; exit 0'
+  run_script "$repo" "$bin"
+  assert_status_nonzero "an earlier marker cannot hide a subsequent cancellation"
+}
+
 # ── 4. Runner ───────────────────────────────────────────────────────────────
 run_test() {
   local test_name="$1"
@@ -1084,6 +1230,14 @@ run_test() {
 }
 
 main() {
+  run_test test_completed_empty_file_group_is_not_a_cancelled_run
+  run_test test_progress_is_visible_before_gremlins_finishes
+  run_test test_file_shards_cover_all_source_once
+  run_test test_invalid_file_shards_fail_before_mutation
+  run_test test_file_shard_missing_report_fails
+  run_test test_shards_cover_each_changed_package_once
+  run_test test_invalid_shard_settings_fail_before_mutation
+  run_test test_shard_failure_is_not_suppressed
   run_test test_exit_zero_without_report_is_a_failure
   run_test test_a_non_zero_exit_without_a_report_names_the_status
   run_test test_a_report_with_a_zero_exit_is_ok

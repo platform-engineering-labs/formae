@@ -83,6 +83,9 @@ type Target struct {
 	Discoverable bool            `json:"Discoverable" pkl:"Discoverable"`
 	Version      int             `json:"Version,omitempty"`
 	Health       *TargetHealth   `json:"-"`
+	// ExecutionIncarnation is nonsecret internal resource-update provenance.
+	// Apply planning discards client supplied values and pins datastore evidence.
+	ExecutionIncarnation string `json:"ExecutionIncarnation,omitempty"`
 	// Reaping holds the target's reaping behaviour. It is stored as a raw
 	// JSON message (not the ReapingBehaviour interface) because Target is
 	// embedded in structs that round-trip through json.Marshal/Unmarshal for

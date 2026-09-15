@@ -22,7 +22,13 @@ class Props {
 
   /// ARN of the ACM certificate. Typed member `certArn`, CLI flag `--cert-arn`.
   @formae.Flag { name = "cert-arn" }
+  @formae.Sensitive { value = false }
   certArn: String = ""
+
+  @formae.Sensitive {}
+  token: String = "typed-secret-default"
+
+  unclassified: String = "older-default"
 }
 
 forma {

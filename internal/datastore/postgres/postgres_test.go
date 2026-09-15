@@ -438,6 +438,13 @@ func TestDatastore(t *testing.T) {
 				)
 				return err
 			},
+			SetPolicyTypeForTest: func(label, policyType string) error {
+				_, err := d.Pool().Exec(context.Background(),
+					`UPDATE policies SET policy_type = $1 WHERE label = $2 AND version = (SELECT MAX(version) FROM policies WHERE label = $2)`,
+					policyType, label,
+				)
+				return err
+			},
 			NullResourceUpdateModifiedTsForTest: func(ksuid string) error {
 				_, err := d.Pool().Exec(context.Background(),
 					`UPDATE resource_updates SET modified_ts = NULL WHERE ksuid = $1`, ksuid,

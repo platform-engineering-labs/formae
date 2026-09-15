@@ -11,6 +11,8 @@ set -euo pipefail
 # A package counts as done when gremlins wrote a schema-valid report for it, not
 # when gremlins exited 0: a cancelled run exits 0 and writes nothing, while a run
 # that leaves mutants alive exits non-zero after writing a perfectly good report.
+# The pinned version reports completed zero-mutant runs only through its exact
+# terminal marker plus exit 0; it does not write JSON for that case.
 # The script exits non-zero when any changed package produced no usable result.
 #
 # These rules are coupled to the observed failure semantics of the pinned
@@ -18,24 +20,21 @@ set -euo pipefail
 # is a single write after the run — so a version bump means re-checking them.
 
 # ── 1. Classify one package's result ────────────────────────────────────────
-# classify_result <report-path> <exit-status>
+# classify_result <report-path> <exit-status> [log-path]
 # Prints "status|reason|score|killed|lived|timed_out" for a single package.
-#
-# Only the report decides the verdict. With no report, gremlins' exit status
-# names the reason, because it is all there is to tell a cancelled run — which
-# exits 0 and writes nothing — from one that ended before it could write.
-# Nothing is read from gremlins' output: it carries the coverage run's own
-# output when coverage fails, so a unit test that panics puts panic text there
-# without gremlins having died. A report that is missing, unreadable, or not
-# shaped like a gremlins report is a classification outcome, never an abort.
+# A report is authoritative even if tests print panic text. With no report,
+# only a successful exit plus gremlins 0.6's exact empty-completion marker is
+# usable. Its cancellation path bypasses reporting, so exit 0 alone still fails.
 classify_result() {
-  local report_path="$1" status="$2" result
+  local report_path="$1" status="$2" log_path="${3:-}" result
 
   if [[ ! -f "$report_path" ]]; then
     # A gremlins that is not installed leaves the shell exiting 127, so the tool
     # is checked before the status of the run that never happened.
     if ! command -v gremlins > /dev/null 2>&1; then
       echo "failed|gremlins not found|n/a|0|0|0"
+    elif [[ "$status" == 0 && -f "$log_path" ]] && [[ "$(sed '/^[[:space:]]*$/d' "$log_path" | tail -n 1)" == 'No results to report.' ]]; then
+      echo "ok|no mutants|n/a|0|0|0"
     elif [[ "$status" == 0 ]]; then
       echo "failed|no output|n/a|0|0|0"
     else
@@ -235,28 +234,19 @@ flush_summary() {
 # SIGKILL leaves nothing to run, so the red check stays the authoritative signal
 # whenever this script cannot finish.
 in_flight_pkg=""
-in_flight_log=""
+output_group_open=0
 
-# emit_in_flight_log: prints the running package's output once, before whatever
-# is about to delete the directory it lives in. A package that already reported
-# its own output leaves nothing here to print.
-emit_in_flight_log() {
-  local log="$in_flight_log"
-  in_flight_log=""
-  if [[ -z "$log" || ! -f "$log" ]]; then
-    return 0
+# Close a streamed log before annotations and the summary. Its contents have
+# already reached stdout and must not be replayed on interruption.
+close_output_group() {
+  if (( output_group_open )); then
+    echo "::endgroup::"
+    output_group_open=0
   fi
-  echo "::group::$in_flight_pkg gremlins output (interrupted)"
-  tail -n 50 "$log" 2>/dev/null || true
-  echo "::endgroup::"
 }
 
-# cleanup: the run directory goes away last, so an interrupted package's log is
-# always emitted before it is removed. The table is flushed here too, so a run
-# that ends without reaching the end of the loop still reports what it managed
-# to do; a run that already printed its table prints nothing more.
 cleanup() {
-  emit_in_flight_log
+  close_output_group
   flush_summary
   if [[ -n "${run_dir:-}" ]]; then
     rm -rf "$run_dir"
@@ -271,11 +261,11 @@ on_signal() {
   trap '' INT TERM
 
   echo ""
+  close_output_group
   echo "Interrupted by SIG$name."
 
   if [[ -n "$in_flight_pkg" ]]; then
     echo "$in_flight_pkg: interrupted"
-    emit_in_flight_log
     summary_line "| \`$in_flight_pkg\` | interrupted | signal SIG$name | n/a | 0 | 0 | 0 |"
     in_flight_pkg=""
   fi
@@ -286,6 +276,24 @@ on_signal() {
 
 # ── 5. Main ─────────────────────────────────────────────────────────────────
 main() {
+  # Zero-based package shards partition the same sorted selection; unset means
+  # the original complete local run. Reject malformed values before invoking Go.
+  local shard_index="${MUTATION_SHARD_INDEX-0}" shard_count="${MUTATION_SHARD_COUNT-1}"
+  if [[ ! "$shard_index" =~ ^(0|[1-9][0-9]{0,2})$ ]] \
+    || [[ ! "$shard_count" =~ ^[1-9][0-9]{0,2}$ ]] \
+    || (( shard_count > 256 || shard_index >= shard_count )); then
+    echo "Invalid mutation shard: index=$shard_index count=$shard_count" >&2
+    exit 2
+  fi
+
+  local file_shard_index="${MUTATION_FILE_SHARD_INDEX-0}" file_shard_count="${MUTATION_FILE_SHARD_COUNT-1}"
+  if [[ ! "$file_shard_index" =~ ^(0|[1-9][0-9]{0,2})$ ]] \
+    || [[ ! "$file_shard_count" =~ ^[1-9][0-9]{0,2}$ ]] \
+    || (( file_shard_count > 256 || file_shard_index >= file_shard_count )); then
+    echo "Invalid mutation file shard: index=$file_shard_index count=$file_shard_count" >&2
+    exit 2
+  fi
+
   REPO_ROOT=$(git rev-parse --show-toplevel)
   BASE_REF="${GITHUB_BASE_REF:-main}"
 
@@ -311,6 +319,19 @@ main() {
 
   if [[ ${#testable_packages[@]} -eq 0 ]]; then
     echo "Changed packages have no unit-tagged tests — nothing to mutate."
+    exit 0
+  fi
+
+  local -a shard_packages=()
+  local index
+  for index in "${!testable_packages[@]}"; do
+    if (( index % shard_count == shard_index )); then
+      shard_packages+=("${testable_packages[$index]}")
+    fi
+  done
+  testable_packages=("${shard_packages[@]}")
+  if [[ ${#testable_packages[@]} -eq 0 ]]; then
+    echo "No changed packages assigned to shard $shard_index/$shard_count."
     exit 0
   fi
 
@@ -344,6 +365,32 @@ main() {
       rel_pkg="${rel_pkg#"$module_root"/}"
     fi
 
+    # Split all direct source files, including unchanged files. A package-only
+    # shard cannot bound a package whose mutation run exceeds the job limit.
+    # Keep the unsharded invocation unchanged for local runs.
+    exclude_files='/'
+    if (( file_shard_count > 1 )); then
+      exclude_files=$(python3 - "$REPO_ROOT/$pkg" "$file_shard_index" "$file_shard_count" <<'PYFILES'
+import os
+import re
+import sys
+
+path, index, count = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+files = sorted(name for name in os.listdir(path)
+               if name.endswith(".go") and not name.endswith("_test.go")
+               and os.path.isfile(os.path.join(path, name)))
+if files[index::count]:
+    excluded = [re.escape(name)
+                for position, name in enumerate(files) if position % count != index]
+    print("/" + ("|^(" + "|".join(excluded) + ")$" if excluded else ""))
+PYFILES
+      )
+      if [[ -z "$exclude_files" ]]; then
+        echo "No source files in $pkg assigned to file shard $file_shard_index/$file_shard_count."
+        continue
+      fi
+    fi
+
     echo ""
     echo "=== $pkg (module: ${module_root#"$REPO_ROOT"/}) ==="
 
@@ -359,7 +406,6 @@ main() {
     # Named while gremlins holds the foreground, so a signal arriving before the
     # row is written finds the package that lost its result and its output.
     in_flight_pkg="$pkg"
-    in_flight_log="$log_file"
 
     # gremlins mutates the whole directory subtree below the package it is
     # invoked on, so a package with sub-packages under it is charged with
@@ -371,36 +417,36 @@ main() {
     # narrows what is mutated, not what is covered: coverage is still gathered
     # over the whole subtree, and gremlins has no flag to narrow that.
     #
-    # No pipeline, so the exit status is gremlins' own and set -e cannot end the
-    # run here. gremlins may exit non-zero when mutants survive — that's expected
-    # and not a failure; the status never overrules a report, it only says how a
-    # run that wrote none ended.
-    status=0
+    # Stream progress while retaining diagnostics for interruption. Preserve
+    # gremlins' status: surviving mutants may return nonzero with a valid report.
+    # The reader ignores cancellation signals so it drains the writer's final
+    # output before closing; gremlins and the parent still receive those signals.
+    local -a pipeline_status=(0 0)
+    output_group_open=1
+    echo "::group::$pkg gremlins output"
     (cd "$module_root" && gremlins unleash \
       --tags unit \
       --timeout-coefficient 10 \
       --workers 4 \
-      --exclude-files '/' \
+      --exclude-files "$exclude_files" \
       -o "$report_file" \
-      "./$rel_pkg") > "$log_file" 2>&1 || status=$?
+      "./$rel_pkg") 2>&1 | (trap '' INT TERM; exec tee "$log_file") || pipeline_status=("${PIPESTATUS[@]}")
+    status=${pipeline_status[0]}
+    echo "gremlins exit status: $status"
+    close_output_group
 
-    result=$(classify_result "$report_file" "$status")
+    result=$(classify_result "$report_file" "$status" "$log_file")
+    if [[ "${pipeline_status[1]}" != "0" ]]; then
+      result='failed|could not stream mutation output|n/a|0|0|0'
+    fi
     IFS='|' read -r result_status reason score killed lived timed_out <<< "$result"
 
     if [[ "$result_status" == "ok" ]]; then
       echo "$pkg: ok (score $score)"
-      echo "::group::$pkg gremlins output"
     else
       failed_packages=$((failed_packages + 1))
       echo "$pkg: $result_status ($reason)"
-      echo "::group::$pkg gremlins output ($reason)"
     fi
-    echo "gremlins exit status: $status"
-    tail -n 50 "$log_file" 2>/dev/null || true
-    echo "::endgroup::"
-    # The log has been shown, so an interrupt from here on must not repeat it.
-    in_flight_log=""
-
     summary_line "| \`$pkg\` | $result_status | $reason | $score | $killed | $lived | $timed_out |"
     in_flight_pkg=""
   done

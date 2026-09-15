@@ -145,6 +145,9 @@ func (pg *PolicyUpdateGenerator) generateInlinePolicyUpdates(stack pkgmodel.Stac
 				label = existing.GetLabel()
 				setPolicyLabel(policy, label)
 			}
+			if policiesEqual(existing, policy) {
+				continue
+			}
 			operation = PolicyOperationUpdate
 		} else {
 			// New policy - generate label if not provided

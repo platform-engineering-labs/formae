@@ -733,13 +733,13 @@ func refuseRotationOnDrift(ds datastore.Datastore, forma *pkgmodel.Forma, fc *fo
 	for label, modifications := range modificationsByStack {
 		unabsorbed := drift.FilterUnabsorbedModifications(modifications, forma, fc)
 		unabsorbed = append(unabsorbed, drift.WitnessedMovedModifications(modifications, witnessByKsuid, recordByKsuid, forma, fc)...)
-		unabsorbed = drift.RetainConfrontable(unabsorbed, recordByKsuid, forma)
+		unabsorbed = drift.RetainConfrontable(unabsorbed, recordByKsuid, witnessByKsuid, forma)
 		if len(unabsorbed) == 0 {
 			continue
 		}
 		modifiedResources := make([]apimodel.ResourceModification, 0, len(unabsorbed))
 		for _, modification := range unabsorbed {
-			modifiedResources = append(modifiedResources, drift.ToAPIResourceModification(modification))
+			modifiedResources = append(modifiedResources, drift.ToAPIResourceModificationForForma(modification, forma, witnessByKsuid[modification.Ksuid]))
 		}
 		modifiedStacks[label] = apimodel.ModifiedStack{ModifiedResources: modifiedResources}
 	}

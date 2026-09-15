@@ -90,7 +90,7 @@ func TestApplyForma_TerminalResolveFailure_PersistsFailureReason(t *testing.T) {
 		require.Eventually(t, func() bool {
 			cmds, err = m.Datastore.LoadFormaCommands()
 			require.NoError(t, err)
-			return len(cmds) > 0 && cmds[0].State != forma_command.CommandStateInProgress
+			return len(cmds) > 0 && cmds[0].IsInFinalState()
 		}, 60*time.Second, 200*time.Millisecond, "the apply must reach a terminal state")
 
 		var consumerUpdate *resource_update.ResourceUpdate

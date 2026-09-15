@@ -179,6 +179,12 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
+                        "description": "Optional human-readable reason for the command.",
+                        "name": "message",
+                        "in": "formData"
+                    },
+                    {
+                        "type": "string",
                         "description": "Only applies to the apply command. The desired command mode, either reconcile or patch.",
                         "name": "mode",
                         "in": "formData"
@@ -193,6 +199,12 @@ const docTemplate = `{
                         "type": "boolean",
                         "description": "Only applies to the apply command in reconcile mode. If true, any changes made to the infrastructure since the last reconcile, either by patches or outside of Formae, will be overwritten.",
                         "name": "force",
+                        "in": "formData"
+                    },
+                    {
+                        "type": "string",
+                        "description": "JSON drift-resolution controls for soft reconcile: ObservationID, Decisions [{ResourceID, Action (absorb or revert)}], ReviewID, IdempotencyKey. Simulate the final choices first; real submission requires its ReviewID and a stable IdempotencyKey. Mutually exclusive with force. Requires shared-drift-resolution capability.",
+                        "name": "resolution",
                         "in": "formData"
                     },
                     {
@@ -231,6 +243,12 @@ const docTemplate = `{
                                 "type": "string",
                                 "description": "The URL to poll for the command's execution status (e.g., /api/v1/commands/{command_id}/status)."
                             }
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict: drift resolution rejected; inspect data.Code and data.Reason before retrying.",
+                        "schema": {
+                            "$ref": "#/definitions/model.ErrorResponse-model_DriftResolutionError"
                         }
                     },
                     "500": {
@@ -370,6 +388,66 @@ const docTemplate = `{
                 }
             }
         },
+        "/commands/{id}/desired-delta": {
+            "get": {
+                "description": "Returns partial recorded desired intent for source catch-up. This is not a complete reconcile declaration. Requires shared-drift-resolution capability.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "commands"
+                ],
+                "summary": "Get a command's desired source delta",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Unique identifier for the client.",
+                        "name": "Client-ID",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Command ID returned by the accepted submission.",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Partial desired source guidance and command state.",
+                        "schema": {
+                            "$ref": "#/definitions/model.CommandDesiredDelta"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request: missing Client-ID or invalid command.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict: resolution receipt or terminal desired intent is unavailable; inspect data.Code and data.Reason.",
+                        "schema": {
+                            "$ref": "#/definitions/model.ErrorResponse-model_DriftResolutionError"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error: command lookup or extraction failed.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "501": {
+                        "description": "Not Implemented: shared drift resolution unavailable.",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/generators": {
             "get": {
                 "description": "Retrieves all live generators with their cadence, the instant of their last committed rotation, and the resources bound to them",
@@ -478,6 +556,16 @@ const docTemplate = `{
                         "name": "query",
                         "in": "query",
                         "required": true
+                    },
+                    {
+                        "enum": [
+                            "actual",
+                            "desired"
+                        ],
+                        "type": "string",
+                        "description": "Extraction state. desired requires desired-stack-extraction capability and complete stack selectors; returns accepted declarations including complete empty stacks. Defaults to actual inventory.",
+                        "name": "state",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -851,6 +939,15 @@ const docTemplate = `{
                         "$ref": "#/definitions/model.GeneratorUpdate"
                     }
                 },
+                "InputProperties": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    }
+                },
+                "Message": {
+                    "type": "string"
+                },
                 "Mode": {
                     "description": "\"reconcile\" | \"patch\"",
                     "type": "string"
@@ -860,6 +957,9 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/model.PolicyUpdate"
                     }
+                },
+                "Resolution": {
+                    "$ref": "#/definitions/model.DriftReview"
                 },
                 "ResourceUpdates": {
                     "type": "array",
@@ -907,6 +1007,21 @@ const docTemplate = `{
                 }
             }
         },
+        "github_com_platform-engineering-labs_formae_pkg_model.Command": {
+            "type": "string",
+            "enum": [
+                "apply",
+                "eval",
+                "destroy",
+                "sync"
+            ],
+            "x-enum-varnames": [
+                "CommandApply",
+                "CommandEval",
+                "CommandDestroy",
+                "CommandSync"
+            ]
+        },
         "github_com_platform-engineering-labs_formae_pkg_model.Description": {
             "type": "object",
             "properties": {
@@ -917,6 +1032,67 @@ const docTemplate = `{
                     "type": "string"
                 }
             }
+        },
+        "model.APIError": {
+            "type": "string",
+            "enum": [
+                "DriftResolutionRejected",
+                "ConflictingCommands",
+                "PatchRejected",
+                "ReconcileRejected",
+                "CyclesDetected",
+                "EmptyStackRejected",
+                "TargetAlreadyExists",
+                "TargetReaped",
+                "ReferencedResourcesNotFound",
+                "ReferencedGeneratorsNotFound",
+                "RequiredFieldMissingOnCreate",
+                "StackReferenceNotFound",
+                "TargetReferenceNotFound",
+                "InvalidQueryError",
+                "StackDeletedDuringApply",
+                "ReconcilePolicyRequired",
+                "NonPortableResources",
+                "PluginNotFound",
+                "PluginVersionNotFound",
+                "PluginDependencyConflict",
+                "PluginRepositoryUnreachable",
+                "PluginSignatureInvalid",
+                "TargetHasDependents",
+                "ResourceHasDependents",
+                "GeneratorDestinationsUnreachable",
+                "GeneratorBoundToSetOnceField",
+                "GeneratorHasDependents"
+            ],
+            "x-enum-varnames": [
+                "DriftResolutionRejected",
+                "ConflictingCommands",
+                "PatchRejected",
+                "ReconcileRejected",
+                "CyclesDetected",
+                "EmptyStackRejected",
+                "TargetAlreadyExists",
+                "TargetReaped",
+                "ReferencedResourcesNotFound",
+                "ReferencedGeneratorsNotFound",
+                "RequiredFieldMissingOnCreate",
+                "StackReferenceNotFound",
+                "TargetReferenceNotFound",
+                "InvalidQuery",
+                "StackDeletedDuringApply",
+                "ReconcilePolicyRequired",
+                "NonPortableResources",
+                "PluginNotFound",
+                "PluginVersionNotFound",
+                "PluginDependencyConflict",
+                "PluginRepositoryUnreachable",
+                "PluginSignatureInvalid",
+                "TargetHasDependents",
+                "ResourceHasDependents",
+                "GeneratorDestinationsUnreachable",
+                "GeneratorBoundToSetOnceField",
+                "GeneratorHasDependents"
+            ]
         },
         "model.CancelCommandResponse": {
             "type": "object",
@@ -956,6 +1132,44 @@ const docTemplate = `{
                 }
             }
         },
+        "model.CoOwnership": {
+            "type": "object",
+            "properties": {
+                "SystemPatterns": {
+                    "description": "SystemPatterns are glob patterns over member identities naming entries\ninjected by the platform itself. Consulted only by extract on resources\nwith no ownership record; never by plan or drift.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "model.CommandDesiredDelta": {
+            "type": "object",
+            "properties": {
+                "CommandId": {
+                    "type": "string"
+                },
+                "DeletedResources": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.DriftObservation"
+                    }
+                },
+                "Forma": {
+                    "$ref": "#/definitions/model.Forma"
+                },
+                "Partial": {
+                    "type": "boolean"
+                },
+                "Resolution": {
+                    "$ref": "#/definitions/model.DriftReview"
+                },
+                "State": {
+                    "type": "string"
+                }
+            }
+        },
         "model.ConfigFieldHint": {
             "type": "object",
             "properties": {
@@ -975,6 +1189,91 @@ const docTemplate = `{
                 }
             }
         },
+        "model.DriftDecision": {
+            "type": "object",
+            "properties": {
+                "Action": {
+                    "description": "absorb or revert",
+                    "type": "string"
+                },
+                "ResourceID": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.DriftObservation": {
+            "type": "object",
+            "properties": {
+                "BaselineCommandID": {
+                    "type": "string"
+                },
+                "Kind": {
+                    "description": "update, create, or delete",
+                    "type": "string"
+                },
+                "Label": {
+                    "type": "string"
+                },
+                "ObservedCommandID": {
+                    "type": "string"
+                },
+                "ObservedVersion": {
+                    "type": "string"
+                },
+                "ResourceID": {
+                    "type": "string"
+                },
+                "Stack": {
+                    "type": "string"
+                },
+                "StackID": {
+                    "type": "string"
+                },
+                "Type": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.DriftResolutionError": {
+            "type": "object",
+            "properties": {
+                "Code": {
+                    "type": "string"
+                },
+                "CommandId": {
+                    "type": "string"
+                },
+                "Reason": {
+                    "type": "string"
+                },
+                "ResourceID": {
+                    "type": "string"
+                }
+            }
+        },
+        "model.DriftReview": {
+            "type": "object",
+            "properties": {
+                "Decisions": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.DriftDecision"
+                    }
+                },
+                "ObservationID": {
+                    "type": "string"
+                },
+                "Observations": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.DriftObservation"
+                    }
+                },
+                "ReviewID": {
+                    "type": "string"
+                }
+            }
+        },
         "model.EdgeKind": {
             "type": "string",
             "enum": [
@@ -988,12 +1287,51 @@ const docTemplate = `{
                 "EdgeKindRuntimeDependency"
             ]
         },
+        "model.ErrorResponse-model_DriftResolutionError": {
+            "type": "object",
+            "properties": {
+                "data": {
+                    "$ref": "#/definitions/model.DriftResolutionError"
+                },
+                "error": {
+                    "$ref": "#/definitions/model.APIError"
+                }
+            }
+        },
+        "model.ExtractionContext": {
+            "type": "object",
+            "properties": {
+                "CompleteStacks": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.Stack"
+                    }
+                },
+                "ReferenceGenerators": {
+                    "type": "array",
+                    "items": {
+                        "type": "array",
+                        "items": {
+                            "type": "integer"
+                        }
+                    }
+                }
+            }
+        },
         "model.FieldHint": {
             "type": "object",
             "properties": {
                 "AttachesTo": {
                     "description": "DEPRECATED: kept for one release; engine derives EdgeKind from this when set.",
                     "type": "boolean"
+                },
+                "CoOwned": {
+                    "description": "CoOwned marks a collection field whose live content legitimately has\nwriters other than this forma. nil = not co-owned.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/model.CoOwnership"
+                        }
+                    ]
                 },
                 "CreateOnly": {
                     "type": "boolean"
@@ -1105,6 +1443,9 @@ const docTemplate = `{
                 "Description": {
                     "$ref": "#/definitions/github_com_platform-engineering-labs_formae_pkg_model.Description"
                 },
+                "Extraction": {
+                    "$ref": "#/definitions/model.ExtractionContext"
+                },
                 "Generators": {
                     "description": "Generators, keyed to a stack by their own Stack field",
                     "type": "array",
@@ -1150,6 +1491,21 @@ const docTemplate = `{
                     }
                 }
             }
+        },
+        "model.FormaApplyMode": {
+            "type": "string",
+            "enum": [
+                "patch",
+                "reconcile",
+                "none",
+                "properties"
+            ],
+            "x-enum-varnames": [
+                "FormaApplyModePatch",
+                "FormaApplyModeReconcile",
+                "FormaApplyModeNone",
+                "FormaApplyModeProperties"
+            ]
         },
         "model.GeneratorDestination": {
             "type": "object",
@@ -1302,6 +1658,28 @@ const docTemplate = `{
                 }
             }
         },
+        "model.OwnedMembers": {
+            "type": "object",
+            "additionalProperties": {
+                "$ref": "#/definitions/model.OwnedPathRecord"
+            }
+        },
+        "model.OwnedPathRecord": {
+            "type": "object",
+            "properties": {
+                "Members": {
+                    "description": "Members are member identities, sorted, in provider spelling.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "Rule": {
+                    "description": "Rule is the record-compatibility rule the members were computed under\n(see IdentityRule). A stored record whose Rule no longer matches the\nfield's current hint is stale and must not be trusted for comparison.",
+                    "type": "string"
+                }
+            }
+        },
         "model.ParentMapping": {
             "type": "object",
             "properties": {
@@ -1436,6 +1814,12 @@ const docTemplate = `{
                 "Flag": {
                     "type": "string"
                 },
+                "Sensitive": {
+                    "type": "boolean"
+                },
+                "Source": {
+                    "type": "string"
+                },
                 "Type": {
                     "type": "string"
                 },
@@ -1472,6 +1856,14 @@ const docTemplate = `{
                 },
                 "NativeID": {
                     "type": "string"
+                },
+                "OwnedMembers": {
+                    "description": "OwnedMembers records, per co-owned collection field, the set of member\nidentities this forma last declared. Absent (nil) means no field on\nthis resource carries a declared ownership record.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/model.OwnedMembers"
+                        }
+                    ]
                 },
                 "PatchDocument": {
                     "description": "Need this for CLI patch display",
@@ -1512,6 +1904,21 @@ const docTemplate = `{
                 "Label": {
                     "type": "string"
                 },
+                "ObservedCommand": {
+                    "$ref": "#/definitions/github_com_platform-engineering-labs_formae_pkg_model.Command"
+                },
+                "ObservedCommandID": {
+                    "type": "string"
+                },
+                "ObservedMode": {
+                    "$ref": "#/definitions/model.FormaApplyMode"
+                },
+                "ObservedSource": {
+                    "type": "string"
+                },
+                "ObservedVersion": {
+                    "type": "string"
+                },
                 "OldProperties": {
                     "description": "properties at last reconcile — update ops only",
                     "type": "array",
@@ -1536,7 +1943,13 @@ const docTemplate = `{
                         "type": "integer"
                     }
                 },
+                "ResourceID": {
+                    "type": "string"
+                },
                 "Stack": {
+                    "type": "string"
+                },
+                "StackID": {
                     "type": "string"
                 },
                 "Type": {
@@ -1792,6 +2205,12 @@ const docTemplate = `{
                 "AgentId": {
                     "type": "string"
                 },
+                "Capabilities": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
                 "Clients": {
                     "type": "integer"
                 },
@@ -1866,6 +2285,9 @@ const docTemplate = `{
                 "Description": {
                     "$ref": "#/definitions/github_com_platform-engineering-labs_formae_pkg_api_model.Description"
                 },
+                "Review": {
+                    "$ref": "#/definitions/model.DriftReview"
+                },
                 "Simulation": {
                     "$ref": "#/definitions/model.Simulation"
                 }
@@ -1885,6 +2307,10 @@ const docTemplate = `{
                 },
                 "Discoverable": {
                     "type": "boolean"
+                },
+                "ExecutionIncarnation": {
+                    "description": "ExecutionIncarnation is nonsecret internal resource-update provenance.\nApply planning discards client supplied values and pins datastore evidence.",
+                    "type": "string"
                 },
                 "Label": {
                     "type": "string"

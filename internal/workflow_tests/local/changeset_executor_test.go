@@ -850,8 +850,8 @@ func newTestUpdateResourceUpdate(label, nativeID, resourceType string) resource_
 //
 // Cleanup eligibility is about what the deletes actually did, not about the
 // changeset's aggregate verdict: one delete can succeed and take the last
-// resource out of a stack while an unrelated update fails in the same command,
-// and that stack is just as empty either way. Gating the cleanup on
+// resource out of a stack while a create in another stack fails in the same
+// command, and the delete-only stack is just as empty either way. Gating cleanup on
 // FinishedSuccessfully alone leaves the emptied stack's record behind.
 func TestChangesetExecutor_PartialFailureStillCleansUpEmptiedStacks(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
@@ -889,9 +889,11 @@ func TestChangesetExecutor_PartialFailureStillCleansUpEmptiedStacks(t *testing.T
 
 		commandID := "test-command-partial-failure-cleanup"
 
-		// Independent of each other: the delete is not what fails, and nothing
-		// cascades. The changeset simply ends with one of each.
+		// Independent stacks: failed create intent must retain its own stack,
+		// while the successful delete still permits cleanup of test-stack.
 		doomed := newTestResourceUpdate("test-doomed", nil, "FakeAWS::EC2::VPC")
+		doomed.StackLabel = "failed-create-stack"
+		doomed.DesiredState.Stack = "failed-create-stack"
 		gone := newTestResourceUpdate("test-gone", nil, "FakeAWS::S3::Bucket")
 		gone.Operation = resource_update.OperationDelete
 

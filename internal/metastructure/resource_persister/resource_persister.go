@@ -87,7 +87,17 @@ func (rp *ResourcePersister) HandleCall(from gen.PID, ref gen.Ref, request any) 
 		return resource_update.PersistResourceUpdateResult{Version: hash}, nil
 	case target_update.PersistTargetUpdates:
 		versions, err := rp.persistTargetUpdates(req.TargetUpdates, req.CommandID)
-		return persistVersionsResult(rp, "target updates", versions, err), nil
+		result := target_update.PersistTargetUpdatesResult{Versions: versions, Incarnations: map[string]string{}}
+		if err != nil {
+			result.Error = err.Error()
+		} else {
+			for _, update := range req.TargetUpdates {
+				if update.Target.ExecutionIncarnation != "" {
+					result.Incarnations[update.Target.Label] = update.Target.ExecutionIncarnation
+				}
+			}
+		}
+		return result, nil
 	case stack_update.PersistStackUpdates:
 		versions, err := rp.persistStackUpdates(req.StackUpdates, req.CommandID)
 		return persistVersionsResult(rp, "stack updates", versions, err), nil
@@ -105,6 +115,28 @@ func (rp *ResourcePersister) HandleCall(from gen.PID, ref gen.Ref, request any) 
 		}
 		return result, nil
 	case messages.PersistTargetReap:
+		// Capture incarnation before the reap. A delayed cleanup must never
+		// resolve a reused label to its replacement incarnation.
+		summaries, err := rp.datastore.ListResourceSummaries(&datastore.ResourceQuery{Target: &datastore.QueryItem[string]{Item: req.Label, Constraint: datastore.Required}})
+		if err != nil {
+			return messages.PersistTargetReapResult{Error: err.Error()}, nil
+		}
+		labels := make([]string, 0, len(summaries))
+		seen := map[string]bool{}
+		for _, r := range summaries {
+			if !seen[r.Stack] {
+				labels = append(labels, r.Stack)
+				seen[r.Stack] = true
+			}
+		}
+		stacks, err := rp.datastore.LoadStacksByLabels(labels)
+		if err != nil {
+			return messages.PersistTargetReapResult{Error: err.Error()}, nil
+		}
+		incarnations := map[string]string{}
+		for _, st := range stacks {
+			incarnations[st.Label] = st.ID
+		}
 		reaped, reapedStacks, err := rp.datastore.PersistTargetReap(datastore.PersistTargetReapRequest{
 			Label:            req.Label,
 			IncarnationID:    req.IncarnationID,
@@ -116,13 +148,16 @@ func (rp *ResourcePersister) HandleCall(from gen.PID, ref gen.Ref, request any) 
 			rp.Log().Error("ResourcePersister: target reap of %s failed: %s", req.Label, err)
 			return messages.PersistTargetReapResult{Error: err.Error()}, nil
 		}
-		if reaped && len(reapedStacks) > 0 {
-			// The reap tombstoned the last live resource(s) of one or more
-			// stacks; clean up any that are now empty, exactly as a normal
-			// resource delete does. The reap bypasses the changeset executor, so
-			// there is no forma command to attribute the stack tombstone to — a
-			// synthetic id records the provenance on the deleted stack row.
-			rp.cleanupEmptyStacks(reapedStacks, "reap-"+util.NewID())
+		if reaped {
+			if retirer, ok := rp.datastore.(datastore.EmptyStackRetirer); ok {
+				for _, label := range reapedStacks {
+					if _, err := retirer.TryRetireEmptyStack(incarnations[label], label, ""); err != nil {
+						rp.Log().Error("Failed to retire reaped stack %s: %v", label, err)
+					}
+				}
+			} else {
+				rp.Log().Error("Datastore does not support atomic stack retirement")
+			}
 		}
 		return messages.PersistTargetReapResult{Reaped: reaped, ReapedStackLabels: reapedStacks}, nil
 	default:
@@ -498,7 +533,7 @@ func (rp *ResourcePersister) processResourceUpdate(commandID string, rc resource
 	// can pass the incarnation it believes is current. An empty incarnation
 	// (target health not populated) means "no incarnation check" at the
 	// datastore; the reaped-tombstone check still applies.
-	expectedIncarnation := ""
+	expectedIncarnation := rc.ResourceTarget.ExecutionIncarnation
 	if rc.ResourceTarget.Health != nil {
 		expectedIncarnation = rc.ResourceTarget.Health.IncarnationID
 	}
@@ -1298,21 +1333,12 @@ func (rp *ResourcePersister) notifyAutoReconcilerOfPolicyRemoval(stackLabel, sta
 // This is called after a changeset completes to clean up stacks that became empty
 // due to resource deletions.
 func (rp *ResourcePersister) cleanupEmptyStacks(stackLabels []string, commandID string) {
-	for _, stackLabel := range stackLabels {
-		count, err := rp.datastore.CountResourcesInStack(stackLabel)
+	for _, label := range stackLabels {
+		retired, err := datastore.RetireCommandStack(rp.datastore, label, commandID)
 		if err != nil {
-			rp.Log().Error("Failed to count resources in stack stackLabel=%s: %v",
-				stackLabel, err)
-			continue
-		}
-
-		if count == 0 {
-			_, err := rp.datastore.DeleteStack(stackLabel, commandID)
-			if err != nil {
-				rp.Log().Error("Failed to delete empty stack stackLabel=%s: %v", stackLabel, err)
-			} else {
-				rp.Log().Info("Deleted empty stack stackLabel=%s", stackLabel)
-			}
+			rp.Log().Error("Failed to retire empty stack stackLabel=%s: %v", label, err)
+		} else if retired {
+			rp.Log().Info("Deleted empty stack stackLabel=%s", label)
 		}
 	}
 }

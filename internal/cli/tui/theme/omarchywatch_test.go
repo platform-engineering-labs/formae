@@ -260,9 +260,15 @@ func TestOmarchyWatcher_StaleTargetNotWatchedAfterSwap(t *testing.T) {
 
 	// Prove the watch is still live and correctly re-pointed: editing the
 	// CURRENT (beta) target's colors.toml does fire, and reflects beta's
-	// fresh content.
-	if err := os.WriteFile(filepath.Join(themes, "beta", "colors.toml"),
+	// fresh content. Stage outside the watched directory, then publish with
+	// a rename: an in-place write can fire after truncation but before the
+	// contents arrive, which tests partial-file reads instead of watch routing.
+	stagedColors := filepath.Join(themes, "beta-colors.toml")
+	if err := os.WriteFile(stagedColors,
 		[]byte("background=\"#000000\"\nforeground=\"#ffffff\"\naccent=\"#c0ffee\"\ncolor1=\"#ff0000\"\ncolor2=\"#00ff00\"\ncolor3=\"#ffff00\"\ncolor8=\"#888888\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(stagedColors, filepath.Join(themes, "beta", "colors.toml")); err != nil {
 		t.Fatal(err)
 	}
 	select {

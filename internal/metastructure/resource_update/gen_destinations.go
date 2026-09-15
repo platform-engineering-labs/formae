@@ -104,7 +104,7 @@ func GeneratorsNeedingDraw(updates []ResourceUpdate) []string {
 	var ksuids []string
 	seen := make(map[string]bool)
 	for i := range updates {
-		if updates[i].Operation == OperationDelete || updates[i].Operation == OperationReaped {
+		if updates[i].IsAcceptance() || updates[i].Operation == OperationDelete || updates[i].Operation == OperationReaped {
 			continue
 		}
 		records := updates[i].ProvenanceRecords

@@ -311,6 +311,14 @@ func (d *DatastoreAuroraDataAPI) GetGenerator(label, stackLabel string) (pkgmode
 // The stack label is resolved to its current KSUID first, for the same
 // reason GetGenerator does. A stack that doesn't exist owns no generators.
 func (d *DatastoreAuroraDataAPI) LoadGeneratorsByStack(stackLabel string) ([]pkgmodel.Generator, error) {
+	return d.loadGeneratorsByStack(stackLabel, false)
+}
+
+func (d *DatastoreAuroraDataAPI) LoadDesiredGeneratorsByStack(stackLabel string) ([]pkgmodel.Generator, error) {
+	return d.loadGeneratorsByStack(stackLabel, true)
+}
+
+func (d *DatastoreAuroraDataAPI) loadGeneratorsByStack(stackLabel string, strict bool) ([]pkgmodel.Generator, error) {
 	ctx := context.Background()
 
 	stack, err := d.GetStackByLabel(stackLabel)
@@ -343,15 +351,24 @@ func (d *DatastoreAuroraDataAPI) LoadGeneratorsByStack(stackLabel string) ([]pkg
 	var generators []pkgmodel.Generator
 	for _, record := range result.Records {
 		if len(record) < 1 {
+			if strict {
+				return nil, fmt.Errorf("invalid desired generator row")
+			}
 			continue
 		}
 		dataStr, err := getStringField(record[0])
 		if err != nil {
+			if strict {
+				return nil, fmt.Errorf("invalid desired generator field: %w", err)
+			}
 			slog.Warn("Failed to read generator data, skipping", "error", err, "stackLabel", stackLabel)
 			continue
 		}
 		gen, err := datastore.GeneratorFromData([]byte(dataStr))
 		if err != nil {
+			if strict {
+				return nil, fmt.Errorf("invalid desired metadata: %w", err)
+			}
 			slog.Warn("Failed to deserialize generator, skipping", "error", err, "stackLabel", stackLabel)
 			continue
 		}

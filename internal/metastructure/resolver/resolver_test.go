@@ -1784,3 +1784,22 @@ func TestGuardNoUnresolvedGenerators_AcceptsPropertiesWithoutAGeneratorReference
 	assert.NoError(t, GuardNoUnresolvedGenerators(out))
 	assert.Equal(t, "plaintext", gjson.GetBytes(out, "SecretString").String())
 }
+
+func TestExtractResolvableURIsStableOrder(t *testing.T) {
+	props := json.RawMessage(`{"first":{"$ref":"formae://z#/name"},"second":{"$ref":"formae://a#/name"},"duplicate":{"$ref":"formae://a#/name"}}`)
+	want := []pkgmodel.FormaeURI{"formae://a#/name", "formae://z#/name"}
+	for range 64 {
+		require.Equal(t, want, ExtractResolvableURIs(pkgmodel.Resource{Properties: props}))
+		require.Equal(t, want, ExtractResolvableURIsFromJSON(props))
+	}
+}
+
+func TestExtractResolvableRefsStableOrder(t *testing.T) {
+	r := pkgmodel.Resource{Properties: json.RawMessage(`{"z":{"$ref":"formae://z#/name"},"b":{"$ref":"formae://a#/name"},"a":{"$ref":"formae://a#/name"}}`)}
+	for range 64 {
+		refs := ExtractResolvableRefs(r)
+		require.Len(t, refs, 3)
+		require.Equal(t, []string{"a", "b", "z"}, []string{refs[0].TargetPath, refs[1].TargetPath, refs[2].TargetPath})
+		require.Equal(t, []pkgmodel.FormaeURI{"formae://a", "formae://a", "formae://z"}, []pkgmodel.FormaeURI{refs[0].URI, refs[1].URI, refs[2].URI})
+	}
+}

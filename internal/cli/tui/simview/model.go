@@ -41,6 +41,8 @@ const (
 
 // Options configures the simulation preview model.
 type Options struct {
+	// Message is edited by the apply confirmation after the plan preview. Nil disables the field.
+	Message      *string
 	Kind         Kind
 	Mode         string
 	Source       string
@@ -89,6 +91,7 @@ const (
 type Model struct {
 	th       *theme.Theme
 	opts     Options
+	warnings []string
 	cmd      apimodel.Command // stored for footer delegation to components.PromptForOperations
 	groups   []simGroup
 	cursor   int
@@ -118,11 +121,12 @@ func New(th *theme.Theme, sim *apimodel.Simulation, opts Options) Model {
 	}
 
 	return Model{
-		th:     th,
-		opts:   opts,
-		cmd:    sim.Command,
-		groups: groups,
-		cursor: 0,
+		th:       th,
+		opts:     opts,
+		cmd:      sim.Command,
+		warnings: append([]string(nil), sim.Warnings...),
+		groups:   groups,
+		cursor:   0,
 		sortHi: map[rowKind]int{
 			kindTarget:   colOp,
 			kindStack:    colOp,

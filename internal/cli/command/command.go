@@ -35,6 +35,7 @@ func CommandCmd() *cobra.Command {
 
 	command.AddCommand(
 		StatusCmd(),
+		LogCmd(),
 		ListCmd())
 
 	return command

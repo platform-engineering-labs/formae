@@ -22,7 +22,7 @@ import (
 // before proceeding. Movement confined to a co-owned collection's never-owned
 // members — a co-actor's content, the very thing the ownership partition
 // exists to tolerate — is not confrontable; everything else is (a plain-field
-// change, a provider-default move, a declared/formerly-owned co-owned member
+// change, a change to an established provider-default value, a declared/formerly-owned co-owned member
 // move).
 //
 // It is the gate's answer to "does this resource carry drift the user has not
@@ -31,15 +31,15 @@ import (
 // "there is unconfronted drift", which rejected every edit of a resource that
 // merely carried a co-actor's tolerated content.
 //
-// The comparison keeps everything except never-owned co-owned members, so it
-// errs toward confront: only that one tolerated class is removed, and anything
-// it cannot classify as a co-owned member (an opaque or malformed co-owned
-// value, a provider-default field, a plain field) stays and confronts. A false
-// "confront" is a spurious rejection recoverable with --force, never a silent
-// overwrite of drift. Provider-default and witness handling for resources the
-// forma does NOT edit stays in the earlier drift stages (FilterUnabsorbed /
-// WitnessedMoved); this predicate only re-examines what those already flagged.
-func ModificationConfrontable(oldProps, newProps, desired json.RawMessage, priorOwned pkgmodel.OwnedMembers, schema pkgmodel.Schema) (bool, error) {
+// Initial provider-default population is tolerated when neither the baseline
+// nor the declaration contains a value. Existing values and declared values
+// remain protected, independently of whether an unrelated edit is planned.
+// Unclassifiable values stay confrontable.
+func ModificationConfrontable(oldProps, newProps, desired, witness json.RawMessage, priorOwned pkgmodel.OwnedMembers, schema pkgmodel.Schema) (bool, error) {
+	newProps, err := withoutInitialProviderDefaults(oldProps, newProps, desired, witness, schema)
+	if err != nil {
+		return false, err
+	}
 	oldRem, oldEmptied, err := confrontableRemainder(oldProps, desired, priorOwned, schema)
 	if err != nil {
 		return false, err
@@ -291,4 +291,123 @@ func coOwnedValueClassifiable(val gjson.Result, hint pkgmodel.FieldHint) bool {
 	default:
 		return false
 	}
+}
+
+// withoutInitialProviderDefaults removes a provider-default value first
+// populated after the baseline, when the declaration does not request it.
+// A value already present in the baseline remains observable: an annotation
+// alone is not evidence that a later external edit was made by the provider.
+func withoutInitialProviderDefaults(oldProps, newProps, desired, witness json.RawMessage, schema pkgmodel.Schema) (json.RawMessage, error) {
+	witnessMap, err := unmarshalPropsObject(witness)
+	if err != nil {
+		return nil, err
+	}
+	desiredMap, err := unmarshalPropsObject(desired)
+	if err != nil {
+		return nil, err
+	}
+	oldMap, err := unmarshalPropsObject(oldProps)
+	if err != nil {
+		return nil, err
+	}
+	out := newProps
+	for _, path := range schema.HasProviderDefault() {
+		hint := schema.Hints[path]
+		if hint.CoOwned != nil {
+			continue
+		}
+		parts := strings.Split(path, ".")
+		// The existing witness predicate treats absent/null/empty collections
+		// as unpopulated; false and zero are established values. Apply it to
+		// both the reconcile baseline and later genuine writes.
+		if anyWitnessedLeaf(collectSuppressedLeaves(oldMap, nil, parts)) ||
+			anyWitnessedLeaf(collectSuppressedLeaves(witnessMap, nil, parts)) {
+			continue
+		}
+		declared := false
+		for _, leaf := range collectSuppressedLeaves(desiredMap, nil, parts) {
+			if leaf != nil {
+				declared = true
+				break
+			}
+		}
+		if declared {
+			continue
+		}
+		out, err = maskInitialDefaultPath(oldProps, out, parts)
+		if err != nil {
+			return nil, err
+		}
+		if len(out) == 0 {
+			out = json.RawMessage(`{}`)
+		}
+	}
+	return out, nil
+}
+
+// maskInitialDefaultPath neutralizes only a path whose baseline, witness and
+// declaration were proved unpopulated. Raw JSON retains exact numeric values.
+// Array elements keep their positions; only schema-addressed leaves change.
+func maskInitialDefaultPath(oldProps, newProps json.RawMessage, parts []string) (json.RawMessage, error) {
+	if len(parts) == 0 {
+		return oldProps, nil
+	}
+	value := gjson.ParseBytes(newProps)
+	if value.IsArray() {
+		var observed, baseline []json.RawMessage
+		if err := json.Unmarshal(newProps, &observed); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal(oldProps, &baseline)
+		for i := range observed {
+			var old json.RawMessage
+			if i < len(baseline) {
+				old = baseline[i]
+			}
+			next, err := maskInitialDefaultPath(old, observed[i], parts)
+			if err != nil {
+				return nil, err
+			}
+			if len(next) == 0 {
+				next = json.RawMessage(`{}`)
+			}
+			observed[i] = next
+		}
+		return json.Marshal(observed)
+	}
+	if !value.IsObject() {
+		return newProps, nil
+	}
+	var observed, baseline map[string]json.RawMessage
+	if err := json.Unmarshal(newProps, &observed); err != nil {
+		return nil, err
+	}
+	_ = json.Unmarshal(oldProps, &baseline)
+	child, exists := observed[parts[0]]
+	if !exists {
+		return newProps, nil
+	}
+	next, err := maskInitialDefaultPath(baseline[parts[0]], child, parts[1:])
+	if err != nil {
+		return nil, err
+	}
+	if len(next) == 0 {
+		delete(observed, parts[0])
+	} else {
+		observed[parts[0]] = next
+	}
+	if len(observed) == 0 && (len(oldProps) == 0 || gjson.ParseBytes(oldProps).Type == gjson.Null) {
+		return oldProps, nil
+	}
+	return json.Marshal(observed)
+}
+
+// DriftReviewPatch describes actionable movement while retaining provider
+// defaults in the full observed properties used to bind the review.
+func DriftReviewPatch(oldProps, newProps, desired, witness json.RawMessage, schema pkgmodel.Schema) (json.RawMessage, error) {
+	filtered, err := withoutInitialProviderDefaults(oldProps, newProps, desired, witness, schema)
+	if err != nil {
+		return nil, err
+	}
+	return DriftPatch(oldProps, filtered)
 }

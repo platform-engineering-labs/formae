@@ -10,10 +10,12 @@ import (
 	"ergo.services/ergo/act"
 	"ergo.services/ergo/gen"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 )
 
 type ChangesetSupervisor struct {
 	act.Supervisor
+	admittedDispatch map[string]gen.PID
 }
 
 func NewChangesetSupervisor() gen.ProcessBehavior {
@@ -48,6 +50,13 @@ func (s *ChangesetSupervisor) Init(args ...any) (act.SupervisorSpec, error) {
 
 func (s *ChangesetSupervisor) HandleMessage(from gen.PID, message any) error {
 	switch msg := message.(type) {
+	case messages.RetireAdmittedDispatch:
+		// Only the persister can attest that provider work is durably terminal.
+		persister, err := s.Node().ProcessPID(actornames.FormaCommandPersister)
+		if err == nil && from == persister {
+			delete(s.admittedDispatch, msg.CommandID)
+		}
+		return nil
 	case EnsureChangesetExecutor:
 		err := s.ensureChangesetExecutor(from, msg)
 		if err != nil {
@@ -63,6 +72,8 @@ func (s *ChangesetSupervisor) HandleMessage(from gen.PID, message any) error {
 
 func (s *ChangesetSupervisor) HandleCall(from gen.PID, ref gen.Ref, request any) (any, error) {
 	switch req := request.(type) {
+	case DispatchAdmittedChangeset:
+		return s.dispatchAdmittedChangeset(from, req), nil
 	case EnsureChangesetExecutor:
 		err := s.ensureChangesetExecutor(from, req)
 		if err != nil {
@@ -89,4 +100,53 @@ func (s *ChangesetSupervisor) ensureChangesetExecutor(from gen.PID, req EnsureCh
 	}
 
 	return nil
+}
+
+// DispatchAdmittedChangeset serializes ownership and Start in the supervisor.
+// A nil Changeset is an ownership query; unknown existing actors fail closed.
+type DispatchAdmittedChangeset struct {
+	CommandID string
+	Changeset *Changeset
+}
+type AdmittedDispatchResult struct {
+	Owned bool
+	Error string
+}
+
+func (r AdmittedDispatchResult) CallError() string { return r.Error }
+func (s *ChangesetSupervisor) dispatchAdmittedChangeset(from gen.PID, req DispatchAdmittedChangeset) AdmittedDispatchResult {
+	if owner, known := s.admittedDispatch[req.CommandID]; known {
+		current, err := s.Node().ProcessPID(actornames.ChangesetExecutor(req.CommandID))
+		if err != nil || current != owner {
+			return AdmittedDispatchResult{Error: "original command executor owner was lost; recovery required: " + req.CommandID}
+		}
+		return AdmittedDispatchResult{Owned: true}
+	}
+	if _, err := s.Node().ProcessPID(actornames.ChangesetExecutor(req.CommandID)); err == nil {
+		return AdmittedDispatchResult{Error: "original command executor has uncertain ownership; recovery required: " + req.CommandID}
+	}
+	if req.Changeset == nil {
+		return AdmittedDispatchResult{}
+	}
+	if req.Changeset.CommandID != req.CommandID {
+		return AdmittedDispatchResult{Error: "changeset command identity mismatch"}
+	}
+	if err := s.ensureChangesetExecutor(from, EnsureChangesetExecutor{CommandID: req.CommandID}); err != nil {
+		return AdmittedDispatchResult{Error: err.Error()}
+	}
+	// Record the owner only after successful delivery. On a send error a later retry must surface
+	// recovery, not guess whether a provider was reached. No process-wide lease
+	// or cross-agent exactly-once claim is made by this local owner record.
+	if s.admittedDispatch == nil {
+		s.admittedDispatch = map[string]gen.PID{}
+	}
+	owner, err := s.Node().ProcessPID(actornames.ChangesetExecutor(req.CommandID))
+	if err != nil {
+		return AdmittedDispatchResult{Error: err.Error()}
+	}
+	if err := s.Send(gen.ProcessID{Name: actornames.ChangesetExecutor(req.CommandID), Node: s.Node().Name()}, Start{Changeset: *req.Changeset}); err != nil {
+		return AdmittedDispatchResult{Error: "original command dispatch requires recovery: " + req.CommandID + ": " + err.Error()}
+	}
+	s.admittedDispatch[req.CommandID] = owner
+	return AdmittedDispatchResult{Owned: true}
 }

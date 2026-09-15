@@ -24,7 +24,7 @@ func (m Model) renderSummaryCounts() string {
 	// stay in the row's base text color.
 	wordSt := lipgloss.NewStyle().Foreground(p.TextPrimary)
 
-	ordered := []opKind{opCreate, opUpdate, opDelete, opReplace, opDraw, opDetach, opKeep}
+	ordered := []opKind{opCreate, opUpdate, opDelete, opReplace, opDraw, opDetach, opKeep, opAccept, opAcceptDelete, opWithdraw}
 	var parts []string
 	for _, op := range ordered {
 		n := counts[op]
@@ -49,6 +49,11 @@ func (m Model) renderBody() (string, int) {
 	// so a counter incremented per row matches the nav index without an O(n)
 	// lookup per row.
 	navIdx := 0
+	for _, warning := range m.warnings {
+		text := "Warning: " + wrapText(warning, max(m.width-4, 20)) + "\n"
+		body.WriteString(text)
+		lineCount += strings.Count(text, "\n")
+	}
 
 	// Destroy cascade warning banner: shown at the top of the viewport when
 	// KindDestroy and any resource row has cascade=true.
@@ -314,6 +319,9 @@ func (m Model) renderRow(r simRow, kind rowKind, opW, labelW, typeW, stackW int,
 
 	// Build op plain string and pad
 	opPlain := opGlyph(m.th.Glyphs, r.op) + " " + r.op.word()
+	if r.op == opAcceptDelete {
+		opPlain = "accept del"
+	}
 	opPadded := components.Pad(opPlain, opW)
 
 	trunc := func(s string, maxW int) string {

@@ -68,6 +68,11 @@ func CoPlanGeneratorDestinations(
 	if err != nil {
 		return nil, fmt.Errorf("failed to load existing stacks: %w", err)
 	}
+	allResourcesByStack, err = acceptedOwnershipView(ds, forma, allResourcesByStack)
+	if err != nil {
+		return nil, err
+	}
+
 	existingByKsuid := make(map[string]*pkgmodel.Resource)
 	for _, resources := range allResourcesByStack {
 		for _, existing := range resources {
@@ -84,7 +89,7 @@ func CoPlanGeneratorDestinations(
 	// co-planned resource's desired document is derived exactly as it would
 	// have been had something about it moved.
 	resolvableLookup := resourcesForResolvables(forma, allResourcesByStack)
-	effectiveDesired, err := ComputeEffectiveDesired(forma, allResourcesByStack)
+	effectiveDesired, err := ComputeEffectiveDesired(forma, allResourcesByStack, resolver.PlanningResourceObserver(ds))
 	if err != nil {
 		return nil, fmt.Errorf("failed to compute effective desired state: %w", err)
 	}
@@ -112,7 +117,7 @@ func CoPlanGeneratorDestinations(
 		}
 
 		readOnlyProperties, err := resolver.LoadResolvablePropertiesFromStacks(
-			newResource, resolvableLookup, effectiveDesired, generatorGenerationLookup)
+			newResource, resolvableLookup, effectiveDesired, generatorGenerationLookup, resolver.PlanningResourceObserver(ds))
 		if err != nil {
 			return nil, fmt.Errorf("failed to load resolvable properties for %s: %w", newResource.Label, err)
 		}

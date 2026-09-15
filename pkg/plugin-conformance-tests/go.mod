@@ -7,7 +7,7 @@ toolchain go1.26.2
 require (
 	ergo.services/ergo v1.999.320
 	github.com/platform-engineering-labs/formae/pkg/api/model v0.1.1
-	github.com/platform-engineering-labs/formae/pkg/model v0.1.28
+	github.com/platform-engineering-labs/formae/pkg/model v0.1.29-dev.0
 	github.com/platform-engineering-labs/formae/pkg/plugin v0.4.2
 	github.com/platform-engineering-labs/orbital v0.1.36
 	github.com/tidwall/gjson v1.18.0

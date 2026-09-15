@@ -185,8 +185,12 @@ func prepareDestroyExpiredStack(ds datastore.Datastore, stackInfo datastore.Expi
 		return nil, fmt.Errorf("failed to load stack %s: %w", stackInfo.StackLabel, err)
 	}
 	if len(resources) == 0 {
-		// Stack is expired but has no resources - delete the empty stack directly
-		_, err := ds.DeleteStack(stackInfo.StackLabel, cleanupClientID)
+		// Physical emptiness alone cannot retire failed-create or generator intent.
+		retirer, ok := ds.(datastore.EmptyStackRetirer)
+		if !ok {
+			return nil, fmt.Errorf("datastore does not support atomic stack retirement")
+		}
+		_, err := retirer.TryRetireEmptyStack(stackInfo.StackID, stackInfo.StackLabel, "")
 		if err != nil {
 			return nil, fmt.Errorf("failed to delete empty expired stack %s: %w", stackInfo.StackLabel, err)
 		}

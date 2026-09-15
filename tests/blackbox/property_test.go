@@ -158,7 +158,7 @@ func TestProperty_FullChaos(t *testing.T) {
 			model := NewStateModel(config.StackCount, config.ResourceCount)
 
 			// Set up stacks with resources and policies
-			h.SetupStacks(t, model, config)
+			h.SetupStacks(rt, model, config)
 
 			ops := OperationSequenceGen(config).Draw(rt, "ops")
 			for i, op := range ops {
@@ -205,7 +205,7 @@ func TestProperty_RenameViaApply(t *testing.T) {
 
 			h.ResetAgentState(t)
 			model := NewStateModel(config.StackCount, config.ResourceCount)
-			h.SetupStacks(t, model, config)
+			h.SetupStacks(rt, model, config)
 
 			ops := OperationSequenceGen(config).Draw(rt, "ops")
 			for i, op := range ops {

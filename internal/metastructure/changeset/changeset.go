@@ -96,7 +96,16 @@ func NewChangeset(
 		trackedUpdates: make(map[string]bool),
 	}
 
-	if err := changeset.DAG.Init(resourceUpdates, command); err != nil {
+	// Acceptance is durable intent, not an operation on the provider. Filter
+	// into a fresh slice so recovery and normal planning retain the original
+	// command contributions without creating executable nodes for them.
+	executionUpdates := make([]resource_update.ResourceUpdate, 0, len(resourceUpdates))
+	for _, update := range resourceUpdates {
+		if !update.IsAcceptance() {
+			executionUpdates = append(executionUpdates, update)
+		}
+	}
+	if err := changeset.DAG.Init(executionUpdates, command); err != nil {
 		return Changeset{}, err
 	}
 
@@ -974,27 +983,13 @@ func (p *ExecutionDAG) propagateDrawnGeneratorValue(generatorKsuid string, value
 	return nil
 }
 
-// clearTargetIncarnationOnResources drops the target-incarnation expectation
-// from every resource-update node bound to targetLabel. It runs after a reaped
-// target recovers: the recover target update mints a fresh incarnation and
-// un-reaps the target's resource rows (stamping them with that fresh
-// incarnation), but the pending resource updates were generated from the target
-// as it was loaded BEFORE recovery, so they still carry the stale (reaped)
-// incarnation. Left in place, the resource-write guard would reject the recovery
-// command's own re-adopts (stale expected != fresh current). Clearing the
-// expectation lets these writes through (the row is no longer reaped, so the
-// tombstone check passes and the incarnation check is skipped), while a genuinely
-// stale in-flight sync write from a different command still carries the old
-// incarnation and is still correctly rejected. The incarnation is not persisted
-// with resource_updates rows, so a resume after crash rebuilds these updates with
-// no expectation at all — making the clear effectively durable without a separate
-// persisted re-stamp.
-func (p *ExecutionDAG) clearTargetIncarnationOnResources(targetLabel string) {
+// propagateTargetIncarnation pins the actual completed target write on every
+// dependent resource before its provider execution snapshot is taken.
+func (p *ExecutionDAG) propagateTargetIncarnation(targetNode *DAGNode, incarnation string) {
 	for _, node := range p.Nodes {
-		if ru, ok := node.Update.(*resource_update.ResourceUpdate); ok {
-			if ru.DesiredState.Target == targetLabel && ru.ResourceTarget.Health != nil {
-				ru.ResourceTarget.Health = nil
-			}
+		if ru, ok := node.Update.(*resource_update.ResourceUpdate); ok && ru.ResourceTarget.Label == targetNode.Update.(*target_update.TargetUpdate).Target.Label && dependsOnTransitively(node, targetNode.URI) {
+			ru.ResourceTarget.Health = &pkgmodel.TargetHealth{IncarnationID: incarnation}
+			ru.ResourceTarget.ExecutionIncarnation = incarnation
 		}
 	}
 }

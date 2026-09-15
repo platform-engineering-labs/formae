@@ -1,0 +1,26 @@
+// © 2026 Platform Engineering Labs Inc.
+// SPDX-License-Identifier: FSL-1.1-ALv2
+module test
+import "@formae/formae.pkl"
+
+open class Config {
+  hidden fixed type: String = "Test"
+  fixed Type: String = type
+}
+
+@formae.ResourceHint {
+  type = "Test::Generic::Resource"
+  identifier = "Name"
+}
+class GenericResource extends formae.Resource {
+  @formae.FieldHint
+  Name: String
+  @formae.FieldHint
+  Value: String
+  @formae.FieldHint
+  SetTags: Listing<String> = new {}
+  @formae.FieldHint { updateMethod = "EntitySet"; indexField = "Key" }
+  EntityTags: Listing<Dynamic> = new {}
+  @formae.FieldHint { updateMethod = "Array" }
+  OrderedItems: Listing<String> = new {}
+}

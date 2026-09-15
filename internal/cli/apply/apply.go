@@ -5,6 +5,8 @@
 package apply
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -25,6 +27,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/simview"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/statuswatch"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
@@ -53,7 +56,17 @@ var (
 		if err != nil {
 			return simview.DecisionAborted, err
 		}
-		return final.(simview.Model).Decision(), nil
+		decision := final.(simview.Model).Decision()
+		if decision == simview.DecisionConfirmed && opts.Message != nil && !opts.SimulateOnly {
+			ok, err := components.RunConfirmWithMessage(th, components.PromptForOperations(th, &sim.Command), opts.Message)
+			if err != nil {
+				return simview.DecisionAborted, err
+			}
+			if !ok {
+				return simview.DecisionAborted, nil
+			}
+		}
+		return decision, nil
 	}
 
 	launchWatch = func(a *app.App, commandID string) (bool, error) {
@@ -73,7 +86,14 @@ var (
 	}
 
 	applyFn = func(a *app.App, opts *ApplyOptions, simulate bool) (*apimodel.SubmitCommandResponse, []string, error) {
-		return a.Apply(opts.FormaFile, opts.Properties, opts.Mode, simulate, opts.Force)
+		if opts.evaluated == nil {
+			forma, err := a.EvaluateApply(opts.FormaFile, opts.Properties, opts.Mode)
+			if err != nil {
+				return nil, nil, err
+			}
+			opts.evaluated = forma
+		}
+		return a.ApplyEvaluated(opts.evaluated, opts.Mode, simulate, opts.Force, opts.Resolution, opts.Message)
 	}
 )
 
@@ -104,15 +124,21 @@ type ApplyCommand struct {
 }
 
 type ApplyOptions struct {
-	OutputConsumer printer.Consumer
-	FormaFile      string
-	Mode           pkgmodel.FormaApplyMode
-	Force          bool
-	Yes            bool
-	Simulate       bool
-	OutputSchema   string
-	StatusOutput   status.StatusOutput
-	Properties     map[string]string
+	Message          string
+	MessageExplicit  bool
+	Resolution       *pkgmodel.DriftResolution
+	evaluated        *pkgmodel.Forma
+	suggestedMessage string
+	messageEdited    bool
+	OutputConsumer   printer.Consumer
+	FormaFile        string
+	Mode             pkgmodel.FormaApplyMode
+	Force            bool
+	Yes              bool
+	Simulate         bool
+	OutputSchema     string
+	StatusOutput     status.StatusOutput
+	Properties       map[string]string
 }
 
 func ApplyCmd() *cobra.Command {
@@ -127,12 +153,32 @@ func ApplyCmd() *cobra.Command {
 			mode, _ := command.Flags().GetString("mode")
 			opts.Mode = pkgmodel.FormaApplyMode(mode)
 			opts.Force, _ = command.Flags().GetBool("force")
+			opts.Message, _ = command.Flags().GetString("message")
+			opts.MessageExplicit = command.Flags().Changed("message")
+			resolutionPath, _ := command.Flags().GetString("resolution")
+			if resolutionPath != "" {
+				raw, err := os.ReadFile(resolutionPath)
+				if err != nil {
+					return err
+				}
+				decoder := json.NewDecoder(bytes.NewReader(raw))
+				decoder.DisallowUnknownFields()
+				if err = decoder.Decode(&opts.Resolution); err != nil {
+					return cmd.FlagErrorWrap(err)
+				}
+				if opts.Resolution == nil {
+					return cmd.FlagErrorf("resolution must be an object")
+				}
+				if err = decoder.Decode(new(any)); err != io.EOF {
+					return cmd.FlagErrorf("resolution must contain one JSON object")
+				}
+			}
 			opts.OutputSchema, _ = command.Flags().GetString("output-schema")
 			opts.Simulate, _ = command.Flags().GetBool("simulate")
 			statusOutput, _ := command.Flags().GetString("status-output-layout")
 			opts.StatusOutput = status.StatusOutput(statusOutput)
 			opts.Yes, _ = command.Flags().GetBool("yes")
-			opts.Properties = cmd.PropertiesFromCmd(command)
+			opts.Properties = cmd.ExplicitPropertiesFromCmd(command)
 
 			configFile, _ := command.Flags().GetString("config")
 			app, err := cmd.AppFromContext(command.Context(), configFile, "", command)
@@ -152,6 +198,8 @@ func ApplyCmd() *cobra.Command {
 
 	command.SetUsageTemplate(cmd.SimpleCmdUsageTemplate)
 
+	command.Flags().String("resolution", "", "JSON resolution controls file (ObservationID, Decisions, optional ReviewID and IdempotencyKey)")
+	command.Flags().StringP("message", "m", "", "Optional intent message recorded with the command")
 	command.Flags().String("mode", "", "Apply mode (reconcile | patch). This flag is required.")
 	command.Flags().String("output-consumer", string(printer.ConsumerHuman), "Consumer of the command result (human | machine)")
 	command.Flags().String("output-schema", "json", "The schema to use for the result output (json | yaml)")
@@ -185,6 +233,9 @@ func validateApplyOptions(opts *ApplyOptions) error {
 	if opts.Mode != pkgmodel.FormaApplyModeReconcile && opts.Mode != pkgmodel.FormaApplyModePatch {
 		return cmd.FlagErrorf("invalid mode: %s. Should be either reconcile or patch", opts.Mode)
 	}
+	if opts.Resolution != nil && (opts.Mode != pkgmodel.FormaApplyModeReconcile || opts.Force) {
+		return cmd.FlagErrorf("--resolution requires reconcile without --force")
+	}
 	if opts.OutputConsumer != printer.ConsumerHuman && opts.OutputConsumer != printer.ConsumerMachine {
 		return cmd.FlagErrorf("output consumer must be either 'human' or 'machine'")
 	}
@@ -199,7 +250,7 @@ func validateApplyOptions(opts *ApplyOptions) error {
 
 func runApplyForHumans(a *app.App, opts *ApplyOptions) error {
 	// Interactive path: human + TTY + no --yes flag → alt-screen TUI; suppress banner.
-	if !opts.Yes && isTerminal(os.Stdout) {
+	if !opts.Yes && isTerminal(os.Stdout) && isTerminal(os.Stdin) {
 		return runApplyInteractive(a, opts)
 	}
 	printBanner(a)
@@ -212,8 +263,13 @@ func runApplyInteractive(a *app.App, opts *ApplyOptions) error {
 
 	res, _, err := applyFn(a, opts, true)
 	if err != nil {
+		if resolutionStale(err) && opts.Resolution != nil {
+			opts.Resolution = nil
+			fmt.Println("The previous review is stale. Review the current plan again.")
+			return runApplyInteractive(a, opts)
+		}
 		if reconcileErr, ok := err.(*apimodel.ErrorResponse[apimodel.FormaReconcileRejectedError]); ok {
-			return runDriftFlow(a, th, opts, reconcileErr.Data)
+			return runRecordedDriftFlow(a, th, opts, reconcileErr.Data)
 		}
 		msg, renderErr := errfmt.Render(err)
 		if renderErr != nil {
@@ -231,57 +287,11 @@ func runApplyInteractive(a *app.App, opts *ApplyOptions) error {
 		return nil
 	}
 
-	decision, err := launchSimView(th, &res.Simulation, simview.Options{
-		Kind:         simview.KindApply,
-		Mode:         string(opts.Mode),
-		Source:       opts.FormaFile,
-		SimulateOnly: opts.Simulate,
-		Description:  res.Description,
-	})
-	if err != nil {
-		return err
-	}
-
-	if opts.Simulate {
-		return nil
-	}
-
-	if decision == simview.DecisionAborted {
-		fmt.Print(lipgloss.NewStyle().Foreground(a.Theme().Palette.TextSubtle).Render("Apply aborted.") + "\n")
-		return nil
-	}
-
-	// Confirmed: run the real apply.
-	realRes, _, err := applyFn(a, opts, false)
-	if err != nil {
-		msg, renderErr := errfmt.Render(err)
-		if renderErr != nil {
-			return fmt.Errorf("error rendering error message: %v", renderErr)
-		}
-		return fmt.Errorf("%s", msg)
-	}
-
-	// Watch the command to completion (D4: watch-by-default on TTY path).
-	finished, err := launchWatch(a, realRes.CommandID)
-	if err != nil {
-		return err
-	}
-
-	// The user detached (q/esc/ctrl+c) before the command reached a terminal
-	// state — remind them how to check on it. When it finished before the TUI
-	// closed, there is nothing more to say.
-	if !finished {
-		printAsyncNotice(realRes.CommandID)
-	}
-
-	// No post-TUI nag here: the interactive path exits clean.
-
-	return nil
+	return confirmAndSubmitResolution(a, th, opts, res)
 }
 
 // runApplyLegacy is the pre-existing human apply flow (non-TTY / --yes / legacy).
-// Byte-identical to the old runApplyForHumans minus the banner (which is now in
-// runApplyForHumans).
+// It also reports terminal acceptance-only commands immediately.
 func runApplyLegacy(a *app.App, opts *ApplyOptions) error {
 	// always simulate first for humans
 	res, _, err := applyFn(a, opts, true)
@@ -336,6 +346,16 @@ func runApplyLegacy(a *app.App, opts *ApplyOptions) error {
 		}
 	}
 
+	if opts.Resolution != nil {
+		if res.Review == nil || res.Review.ReviewID == "" {
+			return fmt.Errorf("agent returned no final resolution review; command was not submitted")
+		}
+		opts.Resolution.ReviewID = res.Review.ReviewID
+		if opts.Resolution.IdempotencyKey == "" {
+			opts.Resolution.IdempotencyKey = util.NewID()
+		}
+	}
+
 	var nags []string
 	res, nags, err = applyFn(a, opts, false)
 	if err != nil {
@@ -346,6 +366,13 @@ func runApplyLegacy(a *app.App, opts *ApplyOptions) error {
 		return fmt.Errorf("%s", msg)
 	}
 
+	if res.Simulation.Command.State == "Success" || res.Simulation.Command.State == "Failed" {
+		fmt.Printf("Command %s: %s\n", res.CommandID, res.Simulation.Command.State)
+		if opts.Resolution != nil {
+			printRecordedGuidance(a, res.CommandID)
+		}
+		return nil
+	}
 	fmt.Printf("\n%s\n", lipgloss.NewStyle().Foreground(a.Theme().Palette.Warning).Render("The asynchronous command has started on the formae agent."))
 
 	// Watch by default on an interactive terminal (this path also serves --yes,
@@ -359,6 +386,8 @@ func runApplyLegacy(a *app.App, opts *ApplyOptions) error {
 		}
 		if !finished {
 			printAsyncNotice(res.CommandID)
+		} else if opts.Resolution != nil {
+			printRecordedGuidance(a, res.CommandID)
 		}
 		return nil
 	}
@@ -376,7 +405,10 @@ func runApplyForMachines(app *app.App, opts *ApplyOptions) error {
 	if opts.Simulate {
 		res, _, err := applyFn(app, opts, true)
 		if err != nil {
-			return fmt.Errorf("error simlating apply command: %v", err)
+			return printMachineApplyError(opts, err)
+		}
+		if res.Review != nil {
+			return printer.NewMachineReadablePrinter[apimodel.SubmitCommandResponse](os.Stdout, opts.OutputSchema).Print(res)
 		}
 		printer := printer.NewMachineReadablePrinter[apimodel.Simulation](os.Stdout, opts.OutputSchema)
 
@@ -384,7 +416,7 @@ func runApplyForMachines(app *app.App, opts *ApplyOptions) error {
 	}
 	res, _, err := applyFn(app, opts, false)
 	if err != nil {
-		return fmt.Errorf("error applying forma: %v", err)
+		return printMachineApplyError(opts, err)
 	}
 	printer := printer.NewMachineReadablePrinter[apimodel.CommandID](os.Stdout, opts.OutputSchema)
 
@@ -420,4 +452,21 @@ func maybePrintDescription(th *theme.Theme, description apimodel.Description) er
 		return errDescriptionAborted
 	}
 	return nil
+}
+
+func printMachineApplyError(opts *ApplyOptions, err error) error {
+	var rejection *apimodel.ErrorResponse[apimodel.FormaReconcileRejectedError]
+	var resolution *apimodel.ErrorResponse[apimodel.DriftResolutionError]
+	var payload any
+	if errors.As(err, &rejection) {
+		payload = rejection
+	} else if errors.As(err, &resolution) {
+		payload = resolution
+	} else {
+		return err
+	}
+	if printErr := printer.NewMachineReadablePrinter[any](os.Stdout, opts.OutputSchema).Print(&payload); printErr != nil {
+		return printErr
+	}
+	return err
 }

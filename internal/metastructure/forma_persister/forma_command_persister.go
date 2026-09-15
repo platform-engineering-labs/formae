@@ -16,6 +16,7 @@ import (
 	"ergo.services/ergo/act"
 	"ergo.services/ergo/gen"
 	"github.com/platform-engineering-labs/formae/internal/datastore"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
@@ -89,7 +90,7 @@ func buildResourceUpdateIndex(cmd *forma_command.FormaCommand) map[string]int {
 func countNonFinalResources(cmd *forma_command.FormaCommand) int {
 	count := 0
 	for _, ru := range cmd.ResourceUpdates {
-		if !isResourceInFinalState(ru.State) {
+		if !ru.IsAcceptance() && !isResourceInFinalState(ru.State) {
 			count++
 		}
 	}
@@ -199,7 +200,9 @@ func (f *FormaCommandPersister) getOrLoadCommand(commandID string) (*cachedComma
 		pendingCompletions: countNonFinalResources(cmd),
 		terminalizedByBulk: buildTerminalizedByBulkIndex(cmd),
 	}
-	f.activeCommands[commandID] = cached
+	if !cmd.IsInFinalState() {
+		f.activeCommands[commandID] = cached
+	}
 
 	return cached, nil
 }
@@ -208,6 +211,11 @@ func (f *FormaCommandPersister) getOrLoadCommand(commandID string) (*cachedComma
 // For simple progress updates, use this directly.
 func (f *FormaCommandPersister) persistCommand(cached *cachedCommand) error {
 	cmd := cached.command
+	// Legacy metadata completion can terminalize acceptance without any later
+	// provider completion. Use the same finalization boundary as admission.
+	if cmd.IsInFinalState() && !cmd.HasExecutableChanges() {
+		return f.finalizeAndPersist(cached)
+	}
 
 	if err := f.datastore.StoreFormaCommand(cmd, cmd.ID); err != nil {
 		f.Log().Error("Failed to store command commandID=%s: %v", cmd.ID, err)
@@ -237,6 +245,9 @@ func (f *FormaCommandPersister) finalizeAndPersist(cached *cachedCommand) error 
 			cached.dirty = true
 			return fmt.Errorf("failed to delete sync command: %w", err)
 		}
+		if err := f.Send(gen.ProcessID{Name: actornames.ChangesetSupervisor, Node: f.Node().Name()}, messages.RetireAdmittedDispatch{CommandID: cmd.ID}); err != nil {
+			f.Log().Debug("Failed to retire terminal dispatch commandID=%s: %v", cmd.ID, err)
+		}
 		delete(f.activeCommands, cmd.ID)
 		return nil
 	}
@@ -257,6 +268,9 @@ func (f *FormaCommandPersister) finalizeAndPersist(cached *cachedCommand) error 
 		if cached.pendingCompletions > 0 {
 			return nil
 		}
+		if err := f.Send(gen.ProcessID{Name: actornames.ChangesetSupervisor, Node: f.Node().Name()}, messages.RetireAdmittedDispatch{CommandID: cmd.ID}); err != nil {
+			f.Log().Debug("Failed to retire terminal dispatch commandID=%s: %v", cmd.ID, err)
+		}
 		delete(f.activeCommands, cmd.ID)
 	}
 
@@ -264,7 +278,8 @@ func (f *FormaCommandPersister) finalizeAndPersist(cached *cachedCommand) error 
 }
 
 type StoreNewFormaCommand struct {
-	Command forma_command.FormaCommand
+	Command   forma_command.FormaCommand
+	Admission *datastore.CommandAdmission
 }
 
 type LoadFormaCommand struct {
@@ -369,11 +384,31 @@ type FinalizeIncompleteCommand struct {
 // carries the handler's boolean outcome, Error the failure that refused the
 // request.
 type CommandPersistResult struct {
-	OK    bool
-	Error string
+	OK                 bool
+	Error              string
+	Admission          *datastore.AdmissionResult
+	AdmissionErrorCode string
 }
 
 func (r CommandPersistResult) CallError() string { return r.Error }
+func (r CommandPersistResult) CallFailure() error {
+	if r.Error == "" {
+		return nil
+	}
+	var cause error
+	switch r.AdmissionErrorCode {
+	case "stale":
+		cause = datastore.ErrStaleAdmission
+	case "conflict":
+		cause = datastore.ErrAdmissionConflict
+	case "invalid":
+		cause = datastore.ErrInvalidAdmission
+	}
+	if cause != nil {
+		return fmt.Errorf("%s: %w", r.Error, cause)
+	}
+	return errors.New(r.Error)
+}
 
 // LoadFormaCommandResult is the reply to a LoadFormaCommand call.
 type LoadFormaCommandResult struct {
@@ -407,7 +442,11 @@ func (f *FormaCommandPersister) HandleCall(from gen.PID, ref gen.Ref, message an
 	}()
 	switch msg := message.(type) {
 	case StoreNewFormaCommand:
-		return f.ack(f.storeNewFormaCommand(&msg.Command))
+		result, err := f.storeNewFormaCommandWithAdmission(&msg.Command, msg.Admission)
+		if err != nil {
+			return f.ack(false, err)
+		}
+		return result, nil
 	case LoadFormaCommand:
 		cmd, err := f.loadFormaCommand(msg.CommandID)
 		if err != nil {
@@ -447,6 +486,39 @@ func (f *FormaCommandPersister) HandleCall(from gen.PID, ref gen.Ref, message an
 		return f.ack(f.markResourceUpdateAsComplete(&msg))
 	case FinalizeIncompleteCommand:
 		return f.ack(f.finalizeIncompleteCommand(&msg))
+	case messages.PinTargetExecutionIdentity:
+		cached, err := f.getOrLoadCommand(msg.CommandID)
+		if err != nil {
+			return messages.PersistVersionsResult{Error: err.Error()}, nil
+		}
+		writer, ok := f.datastore.(datastore.CommandTargetIdentityWriter)
+		if !ok {
+			return messages.PersistVersionsResult{Error: "datastore lacks target execution identity persistence"}, nil
+		}
+		refs := []datastore.ResourceUpdateRef{}
+		indices := []int{}
+		for _, requested := range msg.Resources {
+			found := false
+			for i, ru := range cached.command.ResourceUpdates {
+				if ru.DesiredState.Ksuid == requested.KSUID && ru.Operation == requested.Operation && ru.ResourceTarget.Label == msg.TargetLabel {
+					refs = append(refs, datastore.ResourceUpdateRef{KSUID: requested.KSUID, Operation: requested.Operation})
+					indices = append(indices, i)
+					found = true
+					break
+				}
+			}
+			if !found {
+				return messages.PersistVersionsResult{Error: "target execution resource identity mismatch"}, nil
+			}
+		}
+		if err = writer.PinCommandTargetIncarnation(msg.CommandID, msg.TargetLabel, msg.Incarnation, refs); err != nil {
+			return messages.PersistVersionsResult{Error: err.Error()}, nil
+		}
+		for _, i := range indices {
+			cached.command.ResourceUpdates[i].ResourceTarget.ExecutionIncarnation = msg.Incarnation
+		}
+
+		return messages.PersistVersionsResult{}, nil
 	case messages.MarkTargetUpdateAsComplete:
 		return f.ack(f.markTargetUpdateAsComplete(&msg))
 	default:
@@ -458,41 +530,98 @@ func (f *FormaCommandPersister) HandleCall(from gen.PID, ref gen.Ref, message an
 // ack folds a command-mutation outcome into its reply, letting invariant
 // violations terminate the actor.
 func (f *FormaCommandPersister) ack(ok bool, err error) (any, error) {
+	result := CommandPersistResult{OK: ok}
 	if err != nil {
 		if errors.Is(err, errInvariantViolation) {
 			return nil, err
 		}
 		f.Log().Error("FormaCommandPersister: request failed: %s", err)
-		return CommandPersistResult{Error: err.Error()}, nil
+		result.Error = err.Error()
+		switch {
+		case errors.Is(err, datastore.ErrStaleAdmission):
+			result.AdmissionErrorCode = "stale"
+		case errors.Is(err, datastore.ErrAdmissionConflict):
+			result.AdmissionErrorCode = "conflict"
+		case errors.Is(err, datastore.ErrInvalidAdmission):
+			result.AdmissionErrorCode = "invalid"
+		}
 	}
-	return CommandPersistResult{OK: ok}, nil
+	return result, nil
 }
 
-func (f *FormaCommandPersister) storeNewFormaCommand(command *forma_command.FormaCommand) (bool, error) {
+func (f *FormaCommandPersister) storeNewFormaCommandWithAdmission(command *forma_command.FormaCommand, admission *datastore.CommandAdmission) (CommandPersistResult, error) {
+	result := CommandPersistResult{OK: true}
 	f.Log().Debug("Storing new Forma command commandID=%s commandType=%s", command.ID, command.Command)
 
-	// NOTE: do NOT hash DesiredState here. The user's plaintext secret input
-	// must survive to execution/resume; read/actual values are hashed at their own write
-	// choke points, and DesiredState input is hashed only at final state.
+	// DesiredState plaintext must survive pending execution/resume. Commands
+	// that complete at admission instead need hashing before their first write.
 
+	// Guarded callers resolved identity during their protected planning pass.
+	// Resolving it again here could silently rebind a reviewed incarnation.
+	if admission == nil {
+		if err := command.ResolveStackIdentities(f.datastore); err != nil {
+			return CommandPersistResult{}, err
+		}
+	}
+	for i := range command.ResourceUpdates {
+		if command.ResourceUpdates[i].IsAcceptance() {
+			command.ResourceUpdates[i].State = types.ResourceUpdateStateSuccess
+		}
+	}
+	// Acceptance with metadata also has no later executor completion: guarded
+	// admission commits that metadata and marks any non-executable command Success.
+	if len(command.ResourceUpdates) > 0 && !command.HasExecutableChanges() {
+		command.State = overallCommandState(command)
+		if admission != nil {
+			command.State = forma_command.CommandStateSuccess
+		}
+		if _, err := f.hashSensitiveDataIfComplete(command); err != nil {
+			return CommandPersistResult{}, err
+		}
+	}
 	// Store the command metadata and ResourceUpdates (StoreFormaCommand handles both)
-	err := f.datastore.StoreFormaCommand(command, command.ID)
-	if err != nil {
-		f.Log().Error("Failed to store new Forma command: %v", err)
-		return false, fmt.Errorf("failed to store new Forma command: %w", err)
+	if admission != nil {
+		admitter, ok := f.datastore.(datastore.CommandAdmitter)
+		if !ok {
+			return CommandPersistResult{}, fmt.Errorf("datastore does not support guarded admission")
+		}
+		accepted, err := admitter.AdmitFormaCommand(command, *admission)
+		if err != nil {
+			return CommandPersistResult{}, err
+		}
+		result.Admission = &accepted
+		if accepted.Replayed {
+			return result, nil
+		}
+		command = accepted.Command
+		if command == nil {
+			return CommandPersistResult{}, fmt.Errorf("admission did not return committed command")
+		}
+		// Refresh is a postcommit hint; startup also reloads effective policies.
+		if len(command.StackUpdates) > 0 || len(command.PolicyUpdates) > 0 {
+			if err := f.Send(gen.ProcessID{Name: actornames.AutoReconciler, Node: f.Node().Name()}, messages.RefreshEffectivePolicies{}); err != nil {
+				f.Log().Warning("Failed to refresh committed policies: %v", err)
+			}
+		}
+	} else if err := f.datastore.StoreFormaCommand(command, command.ID); err != nil {
+		return CommandPersistResult{}, fmt.Errorf("failed to store new Forma command: %w", err)
+	}
+
+	if command.IsInFinalState() {
+		return result, nil
 	}
 
 	// Cache the command to avoid immediate database reload on next message
 	f.activeCommands[command.ID] = &cachedCommand{
 		command:            command,
 		ksuidOpToIndex:     buildResourceUpdateIndex(command),
-		pendingCompletions: len(command.ResourceUpdates),
-		terminalizedByBulk: make(map[string]bool),
+		pendingCompletions: countExecutionResources(command),
+		terminalizedByBulk: acceptanceIndex(command),
 	}
 
 	f.Log().Debug("Stored and cached new Forma command commandID=%s", command.ID)
 
-	return true, nil
+	return result, nil
 }
 
 func (f *FormaCommandPersister) loadFormaCommand(commandID string) (*forma_command.FormaCommand, error) {
@@ -719,6 +848,9 @@ func (f *FormaCommandPersister) markTargetUpdateAsComplete(msg *messages.MarkTar
 			return true, nil
 		}
 
+		if msg.FailureReason != "" {
+			tu.ErrorMessage = msg.FailureReason
+		}
 		if string(tu.Operation) == msg.TargetOperation {
 			// Direct match (e.g., standalone delete or create)
 			tu.State = msg.FinalState
@@ -781,6 +913,9 @@ func (f *FormaCommandPersister) updateStackStates(msg *messages.UpdateStackState
 	}
 
 	command := cached.command
+	if command.Setup != nil && command.Setup.Committed {
+		return true, nil
+	}
 	command.StackUpdates = msg.StackUpdates
 	command.State = overallCommandState(command)
 
@@ -803,6 +938,9 @@ func (f *FormaCommandPersister) updatePolicyStates(msg *messages.UpdatePolicySta
 	}
 
 	command := cached.command
+	if command.Setup != nil && command.Setup.Committed {
+		return true, nil
+	}
 	command.PolicyUpdates = msg.PolicyUpdates
 	command.State = overallCommandState(command)
 
@@ -1367,6 +1505,27 @@ func commandStateLogFields(cmd *forma_command.FormaCommand, pending int) []any {
 
 func overallCommandState(command *forma_command.FormaCommand) forma_command.CommandState {
 	var states []types.ResourceUpdateState
+	metadataPending := false
+	var metadataStates []string
+	for _, u := range command.StackUpdates {
+		metadataStates = append(metadataStates, string(u.State))
+	}
+	for _, u := range command.PolicyUpdates {
+		metadataStates = append(metadataStates, string(u.State))
+	}
+	for _, u := range command.GeneratorUpdates {
+		metadataStates = append(metadataStates, string(u.State))
+	}
+	for _, state := range metadataStates {
+		if state == "Failed" {
+			states = append(states, types.ResourceUpdateStateFailed)
+		} else if state != "Success" {
+			metadataPending = true
+		}
+	}
+	if metadataPending {
+		return forma_command.CommandStateInProgress
+	}
 	for _, res := range command.ResourceUpdates {
 		states = append(states, res.State)
 	}
@@ -1507,4 +1666,26 @@ func (f *FormaCommandPersister) hashSensitiveDataIfComplete(command *forma_comma
 	}
 
 	return hashedCount > 0, nil
+}
+
+// Newly admitted ordinary work still owes a completion event even if progress
+// already says Success. Acceptance never emits one.
+func countExecutionResources(cmd *forma_command.FormaCommand) int {
+	count := 0
+	for _, ru := range cmd.ResourceUpdates {
+		if !ru.IsAcceptance() {
+			count++
+		}
+	}
+	return count
+}
+
+func acceptanceIndex(cmd *forma_command.FormaCommand) map[string]bool {
+	index := make(map[string]bool)
+	for _, ru := range cmd.ResourceUpdates {
+		if ru.IsAcceptance() {
+			index[resourceUpdateKey(ru.DesiredState.Ksuid, ru.Operation)] = true
+		}
+	}
+	return index
 }

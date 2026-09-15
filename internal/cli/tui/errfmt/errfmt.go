@@ -63,6 +63,20 @@ func (r *renderer) subtle(s string) string {
 
 func (r *renderer) render(err error) (string, error) {
 	var msg string
+	if response, ok := err.(*apimodel.ErrorResponse[apimodel.DriftResolutionError]); ok {
+		data := response.Data
+		message := fmt.Sprintf("%s: %s", data.Code, data.Reason)
+		if data.ResourceID != "" {
+			message += fmt.Sprintf("\nResource: %s", data.ResourceID)
+		}
+		if data.CommandID != "" {
+			message += fmt.Sprintf("\nCommand: %s", data.CommandID)
+		}
+		if data.Code == "desired-intent-unavailable" && data.CommandID != "" {
+			message += "\nInspect the failed create outcome, recover or reapply its declaration, then reconcile removal once the resource is manageable. Complete desired extraction remains available."
+		}
+		return message, nil
+	}
 
 	if errResp, ok := err.(*apimodel.ErrorResponse[apimodel.FormaConflictingCommandsError]); ok {
 		var e error
@@ -238,6 +252,23 @@ func (r *renderer) conflictLine(cmd apimodel.Command) string {
 
 // renderReconcileRejected formats FormaReconcileRejectedError.
 func (r *renderer) renderReconcileRejected(data *apimodel.FormaReconcileRejectedError) (string, error) {
+	if data.ObservationID != "" {
+		var text strings.Builder
+		fmt.Fprintln(&text, "Reconcile needs drift decisions. Run apply in an interactive terminal to choose absorb or revert for every resource and review the final combined plan.")
+		fmt.Fprintln(&text, "For automation, use --simulate --output-consumer machine to obtain the observation, then --resolution controls.json to simulate your decisions and submit the returned ReviewID with an IdempotencyKey.")
+		labels := make([]string, 0, len(data.ModifiedStacks))
+		for label := range data.ModifiedStacks {
+			labels = append(labels, label)
+		}
+		sort.Strings(labels)
+		for _, label := range labels {
+			for _, mod := range data.ModifiedStacks[label].ModifiedResources {
+				fmt.Fprintf(&text, "  %s: stack=%q type=%q label=%q resource=%q\n", mod.Operation, label, mod.Type, mod.Label, mod.ResourceID)
+			}
+		}
+		return text.String(), nil
+	}
+
 	var commands string
 	var deletions string
 	for _, change := range data.ModifiedStacks {

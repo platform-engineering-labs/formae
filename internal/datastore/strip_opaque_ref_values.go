@@ -5,6 +5,7 @@
 package datastore
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 )
@@ -29,7 +30,12 @@ func StripOpaqueRefValues(raw json.RawMessage) (json.RawMessage, error) {
 		return raw, nil
 	}
 	var v any
-	if err := json.Unmarshal(raw, &v); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if !json.Valid(raw) {
+		return raw, nil
+	}
+	if err := decoder.Decode(&v); err != nil {
 		return raw, nil // not JSON we manage; leave as-is
 	}
 	stripped := stripOpaqueRefValues(v)

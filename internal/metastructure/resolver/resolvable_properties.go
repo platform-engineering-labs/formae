@@ -171,7 +171,7 @@ func (p *ResolvableProperties) Answer(ksuid, property string) (SourceAnswer, boo
 // classification: it names a generator, which has no resource row and no
 // property to read, so the source-property path has nothing to look up. See
 // answerGeneratorOutputs.
-func LoadResolvablePropertiesFromStacks(resource pkgmodel.Resource, allResources map[string][]*pkgmodel.Resource, effective map[string]json.RawMessage, generators GeneratorGenerationLookup) (ResolvableProperties, error) {
+func LoadResolvablePropertiesFromStacks(resource pkgmodel.Resource, allResources map[string][]*pkgmodel.Resource, effective map[string]json.RawMessage, generators GeneratorGenerationLookup, observers ...ResourceObserver) (ResolvableProperties, error) {
 	res := NewResolvableProperties()
 
 	answerGeneratorOutputs(&res, resource, generators)
@@ -188,7 +188,7 @@ func LoadResolvablePropertiesFromStacks(resource pkgmodel.Resource, allResources
 	uris := ExtractResolvableURIs(resource)
 
 	for _, uri := range uris {
-		answer, err := classifySourceProperty(uri.KSUID(), uri.PropertyPath(), resourcesByKsuid, effective, nil)
+		answer, err := classifySourceProperty(uri.KSUID(), uri.PropertyPath(), resourcesByKsuid, effective, nil, observers...)
 		if err != nil {
 			return res, err
 		}
@@ -313,8 +313,8 @@ func generationRootDigest(ksuid string, generators GeneratorGenerationLookup) st
 // visiting is the ordered chain of hops currently being classified, used both
 // to detect a cycle (linear membership check; chains here are short) and, on
 // a cycle, as the error's Chain.
-func classifySourceProperty(ksuid, propertyPath string, resourcesByKsuid map[string]*pkgmodel.Resource, effective map[string]json.RawMessage, visiting []string) (SourceAnswer, error) {
-	answer, err := classifySourcePropertyValue(ksuid, propertyPath, resourcesByKsuid, effective, visiting)
+func classifySourceProperty(ksuid, propertyPath string, resourcesByKsuid map[string]*pkgmodel.Resource, effective map[string]json.RawMessage, visiting []string, observers ...ResourceObserver) (SourceAnswer, error) {
+	answer, err := classifySourcePropertyValue(ksuid, propertyPath, resourcesByKsuid, effective, visiting, observers...)
 	if err != nil {
 		return answer, err
 	}
@@ -386,7 +386,7 @@ func storedRootDigest(target *pkgmodel.Resource, propertyPath string) string {
 	return ""
 }
 
-func classifySourcePropertyValue(ksuid, propertyPath string, resourcesByKsuid map[string]*pkgmodel.Resource, effective map[string]json.RawMessage, visiting []string) (SourceAnswer, error) {
+func classifySourcePropertyValue(ksuid, propertyPath string, resourcesByKsuid map[string]*pkgmodel.Resource, effective map[string]json.RawMessage, visiting []string, observers ...ResourceObserver) (SourceAnswer, error) {
 	key := ksuid + "#/" + propertyPath
 	for _, v := range visiting {
 		if v == key {
@@ -396,6 +396,7 @@ func classifySourcePropertyValue(ksuid, propertyPath string, resourcesByKsuid ma
 	visiting = append(visiting, key)
 
 	targetResource, exists := resourcesByKsuid[ksuid]
+	ObservePlanningResource(observers, ksuid, targetResource)
 	if !exists {
 		return SourceAnswer{}, fmt.Errorf("resource with KSUID %s not found", ksuid)
 	}
@@ -411,7 +412,7 @@ func classifySourcePropertyValue(ksuid, propertyPath string, resourcesByKsuid ma
 			if !refused && isReferenceEnvelope(effVal) {
 				nested := pkgmodel.FormaeURI(effVal.Get("$ref").String())
 				if nested != "" && nested.KSUID() != "" {
-					sub, err := classifySourceProperty(nested.KSUID(), nested.PropertyPath(), resourcesByKsuid, effective, visiting)
+					sub, err := classifySourceProperty(nested.KSUID(), nested.PropertyPath(), resourcesByKsuid, effective, visiting, observers...)
 					if err != nil {
 						return SourceAnswer{}, err
 					}

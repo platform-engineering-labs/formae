@@ -40,12 +40,26 @@ func EnforceSetOnceAndCompareResourceForUpdate(existing, new *pkgmodel.Resource,
 // filtering - meaningfully differs from the existing row. The caller supplies
 // the filtered document so the filtering is computed exactly once per command.
 func CompareFilteredResourceForUpdate(existing, new *pkgmodel.Resource, schema pkgmodel.Schema, filteredProps json.RawMessage) (bool, error) {
+	return compareFilteredResourceForUpdate(existing, new, schema, filteredProps, false)
+}
+
+// CompareFilteredResourceForUpdateExactNumbers keeps exact numeric declaration
+// values through both comparison-only hashing and structural equality. Its
+// schema, array-order and empty-value rules are otherwise unchanged.
+func CompareFilteredResourceForUpdateExactNumbers(existing, new *pkgmodel.Resource, schema pkgmodel.Schema, filteredProps json.RawMessage) (bool, error) {
+	return compareFilteredResourceForUpdate(existing, new, schema, filteredProps, true)
+}
+
+func compareFilteredResourceForUpdate(existing, new *pkgmodel.Resource, schema pkgmodel.Schema, filteredProps json.RawMessage, exactNumbers bool) (bool, error) {
 	// Hash the filtered properties ONLY for comparison (like verses like).
 	// The temp resource carries the schema so schema-keyed opaque fields
 	// (PersistValueTransformer) are hashed here the same way they are hashed
 	// on persist — otherwise a stored-hashed secret compares unequal to the
 	// re-submitted desired plaintext and produces a spurious update.
 	transformer := transformations.NewPersistValueTransformer()
+	if exactNumbers {
+		transformer = transformations.NewPersistValueTransformerWithExactNumbers()
+	}
 	tempResource := &pkgmodel.Resource{Type: new.Type, Schema: new.Schema, Properties: filteredProps}
 	// Comparison-only: nothing here is persisted, and the same values are hashed
 	// again on the persist path, which surfaces the opaque-match diagnostics with
@@ -66,7 +80,11 @@ func CompareFilteredResourceForUpdate(existing, new *pkgmodel.Resource, schema p
 	// echoes and legacy rendering noise) must not hide an empty-only
 	// difference inside them - repairing a member the old normalization
 	// stripped IS a change.
-	equal, err := util.JsonEqualIgnoreArrayOrderStrictRoots(existingForCompare, newForCompare, patch.PreserveEmptyRootFields(schema))
+	compare := util.JsonEqualIgnoreArrayOrderStrictRoots
+	if exactNumbers {
+		compare = util.JsonEqualIgnoreArrayOrderStrictRootsExactNumbers
+	}
+	equal, err := compare(existingForCompare, newForCompare, patch.PreserveEmptyRootFields(schema))
 	if err != nil {
 		return false, fmt.Errorf("failed to compare properties: %w", err)
 	}

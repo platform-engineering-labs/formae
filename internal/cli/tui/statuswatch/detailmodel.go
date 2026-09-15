@@ -362,6 +362,10 @@ func (d detailModel) View(height int, showQueryBar bool) string {
 	// and rows in the same order navLines builds them (one nav entry per row), so
 	// a per-row counter matches the nav index without an O(n) lookup per row.
 	navIdx := 0
+	if summary := components.AcceptanceSummary(&d.pinnedSrc.cmd); summary != "" {
+		body.WriteString(summary + "\n")
+		lineCount++
+	}
 
 	for _, g := range d.groups {
 		shown := g.rows
@@ -674,6 +678,9 @@ func (d detailModel) renderSummaryRow(r updateRow, kind updateKind, labelW, type
 	}
 	// On the cursor row (dark band) use the .Dark side so the op color stays
 	// readable in light mode instead of resolving to a near-black foreground.
+	if r.operation == "accept_delete" {
+		opPlain = "= accept del"
+	}
 	opColor := components.OperationColor(p, r.operation)
 	var opFg lipgloss.TerminalColor = opColor
 	if isCursor {

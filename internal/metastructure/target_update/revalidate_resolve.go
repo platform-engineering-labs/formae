@@ -58,6 +58,18 @@ func revalidateResolveTarget(tu TargetUpdate, ds targetLoader) (TargetUpdate, er
 		return tu, fmt.Errorf("re-validate resolve target %q: target no longer exists", label)
 	}
 
+	expected := tu.Target.ExecutionIncarnation
+	if expected == "" && tu.Target.Health != nil {
+		expected = tu.Target.Health.IncarnationID
+	}
+	if expected != "" && (current.Health == nil || current.Health.IncarnationID != expected) {
+		return tu, fmt.Errorf("re-validate resolve target %q: target incarnation changed", label)
+	}
+	tu.Target.Health = current.Health
+	if current.Health != nil {
+		tu.Target.ExecutionIncarnation = current.Health.IncarnationID
+	}
+
 	if current.Version == tu.Target.Version {
 		// Revision unchanged: the snapshot config is still current, so resolve
 		// against it as-is with no wasted re-read of resolvables.

@@ -20,6 +20,7 @@ import (
 
 	"github.com/platform-engineering-labs/formae/internal/datastore"
 	dssqlite "github.com/platform-engineering-labs/formae/internal/datastore/sqlite"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/generator_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/policy_update"
@@ -1403,6 +1404,9 @@ func TestResourcePersister_CleanupEmptyStacks(t *testing.T) {
 	}, "cmd-3")
 	assert.NoError(t, err)
 
+	// Cleanup must have a durably completed command for this incarnation.
+	terminal := &forma_command.FormaCommand{ID: "cmd-4", Command: pkgmodel.CommandDestroy, Source: forma_command.SourceUser, State: forma_command.CommandStateSuccess, Stacks: []forma_command.CommandStack{{ID: stack.ID, Label: stack.Label}}}
+	require.NoError(t, ds.StoreFormaCommand(terminal, terminal.ID))
 	// Send CleanupEmptyStacks - stack should be deleted because it's now empty
 	persister.SendMessage(sender, messages.CleanupEmptyStacks{
 		StackLabels: []string{"test-stack"},

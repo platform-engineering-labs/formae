@@ -1,0 +1,12 @@
+// © 2026 Platform Engineering Labs Inc.
+// SPDX-License-Identifier: FSL-1.1-ALv2
+amends "pkl:Project"
+package {
+  name = "test"
+  baseUri = "package://test.local/test"
+  version = "0.0.1"
+  packageZipUrl = "https://test.local/test@0.0.1.zip"
+}
+dependencies {
+  ["formae"] = import("../../../../internal/schema/pkl/schema/PklProject")
+}

@@ -97,12 +97,14 @@ func (ar *AutoReconciler) Init(args ...any) (statemachine.StateMachineSpec[AutoR
 		statemachine.WithStateMessageHandler(AutoReconcilerStateIdle, handleChangesetCompleted),
 		statemachine.WithStateMessageHandler(AutoReconcilerStateIdle, handlePolicyAttached),
 		statemachine.WithStateMessageHandler(AutoReconcilerStateIdle, handlePolicyRemoved),
+		statemachine.WithStateMessageHandler(AutoReconcilerStateIdle, handleRefreshEffectivePolicies),
 
 		// Reconciling state handlers
 		statemachine.WithStateMessageHandler(AutoReconcilerStateReconciling, handleReconcileStack),
 		statemachine.WithStateMessageHandler(AutoReconcilerStateReconciling, handleChangesetCompleted),
 		statemachine.WithStateMessageHandler(AutoReconcilerStateReconciling, handlePolicyAttached),
 		statemachine.WithStateMessageHandler(AutoReconcilerStateReconciling, handlePolicyRemoved),
+		statemachine.WithStateMessageHandler(AutoReconcilerStateReconciling, handleRefreshEffectivePolicies),
 	), nil
 }
 
@@ -476,7 +478,7 @@ func reconcileResourceFromSnapshot(snapshot datastore.ResourceSnapshot, existing
 			alias = snapshot.Label
 		}
 	}
-	return &pkgmodel.Resource{
+	result := &pkgmodel.Resource{
 		Ksuid:      ksuid,
 		Type:       snapshot.Type,
 		Label:      label,
@@ -488,4 +490,56 @@ func reconcileResourceFromSnapshot(snapshot datastore.ResourceSnapshot, existing
 		Schema:     snapshot.Schema,
 		Managed:    true,
 	}
+	if snapshot.Declaration != nil {
+		result = ownPlanningValue(snapshot.Declaration)
+		result.Ksuid = ksuid
+		result.Label = label
+		result.Alias = alias
+		result.Stack = stackLabel
+		result.Managed = true
+	}
+	return result
+}
+
+func handleRefreshEffectivePolicies(from gen.PID, state gen.Atom, data AutoReconcilerData, msg messages.RefreshEffectivePolicies, proc gen.Process) (gen.Atom, AutoReconcilerData, []statemachine.Action, error) {
+	if err := refreshEffectivePolicies(&data, func(label string, delay time.Duration) error {
+		_, err := proc.SendAfter(proc.PID(), ReconcileStack{StackLabel: label}, delay)
+		return err
+	}); err != nil {
+		proc.Log().Error("Failed to refresh effective policies: %v", err)
+	}
+	return state, data, nil, nil
+}
+
+// A repeated hint never replays an attachment/removal against a reused label.
+// Read current policy state, and leave already scheduled work alone. As before,
+// the scheduler re-reads effective policies before subsequent execution.
+func refreshEffectivePolicies(data *AutoReconcilerData, schedule func(string, time.Duration) error) error {
+	policies, err := data.datastore.GetStacksWithAutoReconcilePolicy()
+	if err != nil {
+		return err
+	}
+	current := map[string]bool{}
+	for _, p := range policies {
+		current[p.StackLabel] = true
+	}
+	for label := range data.scheduled {
+		if !current[label] {
+			delete(data.scheduled, label)
+		}
+	}
+	for _, p := range policies {
+		if data.scheduled[p.StackLabel] {
+			continue
+		}
+		delay := time.Duration(p.IntervalSeconds) * time.Second
+		if delay < time.Second {
+			delay = time.Second
+		}
+		if err := schedule(p.StackLabel, delay); err != nil {
+			return err
+		}
+		data.scheduled[p.StackLabel] = true
+	}
+	return nil
 }

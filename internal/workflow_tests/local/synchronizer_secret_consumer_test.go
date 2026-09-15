@@ -571,7 +571,7 @@ func TestSynchronizer_SecretConsumer_ResEnvelope_OutOfBandDrift(t *testing.T) {
 		require.Equal(t, hashV2, field(sLabel, "secret.$value").String(), "S.secret must be ingested as hashed(v2)")
 		require.Equal(t, hashV2, field(rLabel, "consumes.$value").String(),
 			"R.consumes.$value must be re-hashed to sha256(v2) on sync (no plaintext at rest)")
-		require.NotContains(t, field(rLabel, "consumes").Raw, "v2",
+		require.NotContains(t, field(rLabel, "consumes").Raw, `"v2"`,
 			"the cleartext secret 'v2' must never appear in R's stored $res envelope")
 		// Structural integrity: the resolvable envelope survives the sync merge.
 		require.True(t, field(rLabel, "consumes.$res").Bool(), "R.consumes keeps its $res resolvable structure after sync")

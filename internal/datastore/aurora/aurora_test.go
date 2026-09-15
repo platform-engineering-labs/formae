@@ -67,6 +67,7 @@ func TestDatastore(t *testing.T) {
 			SetStackValidFromForTest: func(label string, validFrom []time.Time) error {
 				return d.SetStackValidFromForTesting(label, validFrom)
 			},
+			SetPolicyTypeForTest: func(label, policyType string) error { return d.SetPolicyTypeForTesting(label, policyType) },
 			SetPolicyDataForTest: func(label, policyData string) error {
 				return d.SetPolicyDataForTesting(label, policyData)
 			},

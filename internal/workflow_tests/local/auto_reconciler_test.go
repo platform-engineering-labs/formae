@@ -367,6 +367,12 @@ func TestAutoReconciler_RetriesFailedUpdate(t *testing.T) {
 func TestAutoReconciler_RetriesFailureAndRevertsOOBDriftSimultaneously(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		var failBUpdate atomic.Bool
+		// Keep the observed OOB state present until the test witnesses its
+		// ingestion. Otherwise a legitimate auto-revert can complete between
+		// inventory polls and make the transient-state assertion miss it.
+		allowARevert := make(chan struct{})
+		var releaseRevertOnce sync.Once
+		releaseARevert := func() { releaseRevertOnce.Do(func() { close(allowARevert) }) }
 
 		// observedProps simulates the plugin-side ("cloud") view of each
 		// resource's properties, keyed by NativeID (the field Read sees).
@@ -416,6 +422,9 @@ func TestAutoReconciler_RetriesFailureAndRevertsOOBDriftSimultaneously(t *testin
 						},
 					}, nil
 				}
+				if request.Label == "resource-a" && getPropsByNativeID(request.NativeID) == `{"foo":"v_oob"}` {
+					<-allowARevert
+				}
 				setPropsByNativeID(request.NativeID, string(request.DesiredProperties))
 				return &resource.UpdateResult{
 					ProgressResult: &resource.ProgressResult{
@@ -435,6 +444,7 @@ func TestAutoReconciler_RetriesFailureAndRevertsOOBDriftSimultaneously(t *testin
 		cfg.Agent.Synchronization.Interval = 1 * time.Second
 		m, cleanup, err := test_helpers.NewTestMetastructureWithConfig(t, overrides, cfg)
 		defer cleanup()
+		defer releaseARevert() // Unblock the provider before node cleanup on failure.
 		require.NoError(t, err)
 
 		schema := pkgmodel.Schema{Fields: []string{"foo"}}
@@ -509,6 +519,7 @@ func TestAutoReconciler_RetriesFailureAndRevertsOOBDriftSimultaneously(t *testin
 			}
 			return false
 		}, 10*time.Second, 200*time.Millisecond, "sync should ingest OOB drift on A into the resources table")
+		releaseARevert()
 
 		// Phase 4: auto-reconcile should revert A's drift while B's update
 		// still fails. We assert by waiting for A's stored properties to

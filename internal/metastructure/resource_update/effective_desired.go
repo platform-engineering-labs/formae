@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/platform-engineering-labs/formae/internal/metastructure/resolver"
+
 	"github.com/platform-engineering-labs/formae/internal/metastructure/patch"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
@@ -27,7 +29,7 @@ type EffectiveDesired map[string]json.RawMessage
 // ComputeEffectiveDesired builds the map for every forma resource whose KSUID
 // matches a persisted row. A resource with no persisted row (a create) has no
 // entry: its declaration is already effective as written.
-func ComputeEffectiveDesired(forma *pkgmodel.Forma, allResourcesByStack map[string][]*pkgmodel.Resource) (EffectiveDesired, error) {
+func ComputeEffectiveDesired(forma *pkgmodel.Forma, allResourcesByStack map[string][]*pkgmodel.Resource, observers ...resolver.ResourceObserver) (EffectiveDesired, error) {
 	persisted := make(map[string]*pkgmodel.Resource)
 	for _, resources := range allResourcesByStack {
 		for _, r := range resources {
@@ -43,6 +45,9 @@ func ComputeEffectiveDesired(forma *pkgmodel.Forma, allResourcesByStack map[stri
 			continue
 		}
 		row, ok := persisted[r.Ksuid]
+		if row != nil {
+			resolver.ObservePlanningResource(observers, r.Ksuid, row)
+		}
 		if !ok {
 			continue
 		}

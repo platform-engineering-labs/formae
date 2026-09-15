@@ -50,6 +50,7 @@ type UpdateResourceProgress struct {
 }
 
 type MarkTargetUpdateAsComplete struct {
+	FailureReason   string
 	CommandID       string
 	TargetLabel     string
 	TargetOperation string
@@ -66,3 +67,15 @@ type UpdatePolicyStates struct {
 	CommandID     string
 	PolicyUpdates []policy_update.PolicyUpdate
 }
+
+type TargetExecutionRef struct {
+	KSUID     string
+	Operation types.OperationType
+}
+type PinTargetExecutionIdentity struct {
+	CommandID, TargetLabel, Incarnation string
+	Resources                           []TargetExecutionRef
+}
+
+// RetireAdmittedDispatch is sent only after durable command terminality.
+type RetireAdmittedDispatch struct{ CommandID string }

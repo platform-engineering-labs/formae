@@ -40,9 +40,10 @@ type StartTargetUpdate struct {
 
 // TargetUpdateFinished is sent back to the requester when the target update completes.
 type TargetUpdateFinished struct {
-	NodeURI        pkgmodel.FormaeURI
-	State          TargetUpdateState
-	ResolvedConfig json.RawMessage // The target config after resolution (with $value filled in)
+	NodeURI              pkgmodel.FormaeURI
+	State                TargetUpdateState
+	CommittedIncarnation string
+	ResolvedConfig       json.RawMessage // The target config after resolution (with $value filled in)
 }
 
 // Shutdown is sent to terminate the TargetUpdater process.
@@ -225,7 +226,7 @@ func targetResolveCacheTimeout(from gen.PID, state gen.Atom, data TargetUpdaterD
 
 // persistTarget sends the target update to the ResourcePersister for storage.
 func persistTarget(data TargetUpdaterData, proc gen.Process) (gen.Atom, TargetUpdaterData, []statemachine.Action, error) {
-	_, err := messages.UnwrapCall(proc.Call(
+	result, err := messages.UnwrapCall(proc.Call(
 		resourcePersisterProcess(proc),
 		PersistTargetUpdates{
 			TargetUpdates: []TargetUpdate{data.targetUpdate},
@@ -237,6 +238,13 @@ func persistTarget(data TargetUpdaterData, proc gen.Process) (gen.Atom, TargetUp
 		return StateFinishedWithError, data, nil, nil
 	}
 
+	if data.targetUpdate.Operation != TargetOperationDelete {
+		persisted, ok := result.(PersistTargetUpdatesResult)
+		if !ok || persisted.Incarnations[data.targetUpdate.Target.Label] == "" {
+			return StateFinishedWithError, data, nil, nil
+		}
+		data.targetUpdate.Target.Health = &pkgmodel.TargetHealth{IncarnationID: persisted.Incarnations[data.targetUpdate.Target.Label]}
+	}
 	return StateFinishedSuccessfully, data, nil, nil
 }
 
@@ -256,6 +264,9 @@ func onTargetUpdaterStateChange(oldState gen.Atom, newState gen.Atom, data Targe
 		}
 		if finalState == TargetUpdateStateSuccess {
 			finished.ResolvedConfig = data.targetUpdate.Target.Config
+			if (data.targetUpdate.Operation == TargetOperationCreate || data.targetUpdate.Operation == TargetOperationUpdate) && data.targetUpdate.Target.Health != nil {
+				finished.CommittedIncarnation = data.targetUpdate.Target.Health.IncarnationID
+			}
 		}
 		err := proc.Send(data.requestedBy, finished)
 		if err != nil {

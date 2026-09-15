@@ -66,7 +66,7 @@ func EvalCmd() *cobra.Command {
 			consumer, _ := command.Flags().GetString("output-consumer")
 			opts.OutputConsumer = printer.Consumer(consumer)
 			opts.OutputSchema, _ = command.Flags().GetString("output-schema")
-			opts.Properties = cmd.PropertiesFromCmd(command)
+			opts.Properties = cmd.ExplicitPropertiesFromCmd(command)
 			schemaLocation, _ := command.Flags().GetString("schema-location")
 			loc, err := parseSchemaLocation(schemaLocation)
 			if err != nil {

@@ -875,7 +875,124 @@ func RunDifferentResourceTypesSameNativeId(t *testing.T, newDS func(t *testing.T
 }
 
 func RunGetResourceModificationsSinceLastReconcile(t *testing.T, newDS func(t *testing.T) TestDatastore) {
-	t.Run("GetResourceModificationsSinceLastReconcile_WithIntermediateReconcileCommand", func(t *testing.T) {
+	RunPendingDeletion(t, newDS)
+	RunExplicitDestroyDrift(t, newDS)
+	t.Run("GetResourceModificationsSinceLastReconcile_AcceptedNilProperties", func(t *testing.T) {
+		td := newDS(t)
+		defer func(cleanup func() error) { _ = cleanup() }(td.CleanUpFn)
+		_, err := td.CreateStack(&pkgmodel.Stack{Label: "accepted-nil-stack"}, "stack-create")
+		assert.NoError(t, err)
+		stack, err := td.GetStackByLabel("accepted-nil-stack")
+		assert.NoError(t, err)
+		observed := pkgmodel.Resource{Ksuid: util.NewID(), Stack: stack.Label, Label: "accepted", Type: "Test::Resource", Target: "default", NativeID: "native", Managed: true}
+		before := reconcileBuilder(forma_command.CommandStateSuccess, pkgmodel.FormaApplyModePatch, -10*time.Minute, nil)
+		assert.NoError(t, td.StoreFormaCommand(before, before.ID))
+		version, err := td.StoreResource(&observed, before.ID)
+		assert.NoError(t, err)
+		accepted := resourceUpdate(stack.Label, observed.Ksuid, observed.Label, `{}`, resource_update.OperationAccept, resource_update.FormaCommandSourceUser)
+		accepted.Version = strings.TrimPrefix(version, observed.Ksuid+"_")
+		cmd := reconcileBuilder(forma_command.CommandStateSuccess, pkgmodel.FormaApplyModeReconcile, -5*time.Minute, []resource_update.ResourceUpdate{accepted})
+		cmd.Stacks = []forma_command.CommandStack{{ID: stack.ID, Label: stack.Label}}
+		assert.NoError(t, td.StoreFormaCommand(cmd, cmd.ID))
+		after := reconcileBuilder(forma_command.CommandStateSuccess, pkgmodel.FormaApplyModePatch, -time.Minute, nil)
+		assert.NoError(t, td.StoreFormaCommand(after, after.ID))
+		observed.Properties = json.RawMessage(`{"foo":"v2"}`)
+		_, err = td.StoreResource(&observed, after.ID)
+		assert.NoError(t, err)
+		mods, err := td.GetResourceModificationsSinceLastReconcile(stack.Label)
+		assert.NoError(t, err)
+		if assert.NotEmpty(t, mods) {
+			assert.Nil(t, mods[0].OldProperties, "a present nil-properties observation is a valid baseline")
+		}
+		cmd.ResourceUpdates[0].Version = "missing-observation"
+		assert.NoError(t, td.StoreFormaCommand(cmd, cmd.ID))
+		_, err = td.GetResourceModificationsSinceLastReconcile(stack.Label)
+		assert.ErrorContains(t, err, "accepted observation version missing")
+	})
+
+	t.Run("GetResourceModificationsSinceLastReconcile_AcceptedObservation", func(t *testing.T) {
+		td := newDS(t)
+		defer func(cleanup func() error) { _ = cleanup() }(td.CleanUpFn)
+		_, err := td.CreateStack(&pkgmodel.Stack{Label: "accepted-stack"}, "stack-create")
+		assert.NoError(t, err)
+		stack, err := td.GetStackByLabel("accepted-stack")
+		assert.NoError(t, err)
+		observed := pkgmodel.Resource{Ksuid: util.NewID(), Stack: stack.Label, Label: "accepted", Type: "Test::Resource", Target: "default", NativeID: "native", Managed: true, Properties: json.RawMessage(`{"endpoint":"resolved-value","readonly":"provider-field","foo":"v1"}`)}
+		before := reconcileBuilder(forma_command.CommandStateSuccess, pkgmodel.FormaApplyModePatch, -10*time.Minute, nil)
+		assert.NoError(t, td.StoreFormaCommand(before, before.ID))
+		version, err := td.StoreResource(&observed, before.ID)
+		assert.NoError(t, err)
+		accepted := resourceUpdate(stack.Label, observed.Ksuid, observed.Label, `{"endpoint":{"$ref":"resource://other#/value"},"foo":"v1"}`, resource_update.OperationAccept, resource_update.FormaCommandSourceUser)
+		accepted.Version = strings.TrimPrefix(version, observed.Ksuid+"_")
+		cmd := reconcileBuilder(forma_command.CommandStateSuccess, pkgmodel.FormaApplyModeReconcile, -5*time.Minute, []resource_update.ResourceUpdate{accepted})
+		cmd.Stacks = []forma_command.CommandStack{{ID: stack.ID, Label: stack.Label}}
+		historyBefore, err := td.LoadAllResourceVersions()
+		assert.NoError(t, err)
+		assert.NoError(t, td.StoreFormaCommand(cmd, cmd.ID))
+		historyAfter, err := td.LoadAllResourceVersions()
+		assert.NoError(t, err)
+		assert.Equal(t, historyBefore, historyAfter, "acceptance must not create or rewrite inventory versions")
+		mods, err := td.GetResourceModificationsSinceLastReconcile(stack.Label)
+		assert.NoError(t, err)
+		assert.Empty(t, mods)
+		after := reconcileBuilder(forma_command.CommandStateSuccess, pkgmodel.FormaApplyModePatch, -time.Minute, nil)
+		assert.NoError(t, td.StoreFormaCommand(after, after.ID))
+		observed.Properties = json.RawMessage(`{"endpoint":"resolved-value","readonly":"provider-field","foo":"v2"}`)
+		_, err = td.StoreResource(&observed, after.ID)
+		assert.NoError(t, err)
+		mods, err = td.GetResourceModificationsSinceLastReconcile(stack.Label)
+		assert.NoError(t, err)
+		if assert.NotEmpty(t, mods) {
+			assert.JSONEq(t, `{"endpoint":"resolved-value","readonly":"provider-field","foo":"v1"}`, string(mods[0].OldProperties))
+		}
+		cmd.ResourceUpdates[0].Version = "missing-observation"
+		assert.NoError(t, td.StoreFormaCommand(cmd, cmd.ID))
+		_, err = td.GetResourceModificationsSinceLastReconcile(stack.Label)
+		assert.ErrorContains(t, err, "accepted observation version missing")
+		deletedVersion, err := td.DeleteResource(&observed, after.ID)
+		assert.NoError(t, err)
+		deletion := resourceUpdate(stack.Label, observed.Ksuid, observed.Label, `{}`, resource_update.OperationAcceptDelete, resource_update.FormaCommandSourceUser)
+		deletion.Version = strings.TrimPrefix(deletedVersion, observed.Ksuid+"_")
+		deletionCommand := reconcileBuilder(forma_command.CommandStateSuccess, pkgmodel.FormaApplyModeReconcile, 0, []resource_update.ResourceUpdate{deletion})
+		deletionCommand.Stacks = cmd.Stacks
+		historyBefore, err = td.LoadAllResourceVersions()
+		assert.NoError(t, err)
+		assert.NoError(t, td.StoreFormaCommand(deletionCommand, deletionCommand.ID))
+		historyAfter, err = td.LoadAllResourceVersions()
+		assert.NoError(t, err)
+		assert.Equal(t, historyBefore, historyAfter)
+		baseline, err := td.GetResourcesAtLastReconcile(stack.Label)
+		assert.NoError(t, err)
+		assert.Empty(t, baseline)
+		mods, err = td.GetResourceModificationsSinceLastReconcile(stack.Label)
+		assert.NoError(t, err)
+		assert.Empty(t, mods)
+
+	})
+
+	t.Run("GetResourceModificationsSinceLastReconcile_MixedMembershipUsesPerStackFallback", func(t *testing.T) {
+		td := newDS(t)
+		ds := td.Datastore
+		defer td.CleanUpFn() //nolint:errcheck
+		baseline := &forma_command.FormaCommand{ID: "mixed-baseline", Command: pkgmodel.CommandApply,
+			Config: config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, StartTs: util.TimeNow().Add(-10 * time.Minute),
+			Stacks: []forma_command.CommandStack{{ID: "stack-a-id", Label: "stack-a"}}}
+		_, err := ds.StoreResource(&pkgmodel.Resource{Ksuid: "mixed-resource", NativeID: "mixed", Stack: "stack-b", Type: "Test::Resource", Label: "mixed", Target: "default"}, baseline.ID)
+		assert.NoError(t, err)
+		assert.NoError(t, ds.StoreFormaCommand(baseline, baseline.ID))
+		patch := &forma_command.FormaCommand{ID: "mixed-patch", Command: pkgmodel.CommandApply,
+			Config: config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModePatch}, StartTs: util.TimeNow().Add(-time.Minute)}
+		_, err = ds.StoreResource(&pkgmodel.Resource{Ksuid: "mixed-resource-2", NativeID: "after", Stack: "stack-b", Type: "Test::Resource", Label: "after", Target: "default"}, patch.ID)
+		assert.NoError(t, err)
+		assert.NoError(t, ds.StoreFormaCommand(patch, patch.ID))
+		mods, err := ds.GetResourceModificationsSinceLastReconcile("stack-b")
+		assert.NoError(t, err)
+		if assert.Len(t, mods, 1) {
+			assert.Equal(t, "after", mods[0].Label)
+		}
+	})
+
+	t.Run("GetResourceModificationsSinceLastReconcile_ZeroWriteMembershipIsBoundary", func(t *testing.T) {
 		td := newDS(t)
 		ds := td.Datastore
 		defer td.CleanUpFn() //nolint:errcheck
@@ -885,6 +1002,7 @@ func RunGetResourceModificationsSinceLastReconcile(t *testing.T, newDS func(t *t
 			Command:         pkgmodel.CommandApply,
 			Config:          config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
 			StartTs:         util.TimeNow().Add(-10 * time.Minute),
+			Stacks:          []forma_command.CommandStack{{ID: "other-stack-id", Label: "other-stack"}},
 			ResourceUpdates: []resource_update.ResourceUpdate{{StackLabel: "test-stack"}},
 		}
 		_, err := ds.StoreResource(&pkgmodel.Resource{
@@ -916,11 +1034,18 @@ func RunGetResourceModificationsSinceLastReconcile(t *testing.T, newDS func(t *t
 		err = ds.StoreFormaCommand(stackPatchA, stackPatchA.ID)
 		assert.NoError(t, err)
 
+		_, err = ds.CreateStack(&pkgmodel.Stack{Label: "test-stack"}, "stack-create")
+		assert.NoError(t, err)
+		currentStack, err := ds.GetStackByLabel("test-stack")
+		assert.NoError(t, err)
+
 		intermediateReconcile := &forma_command.FormaCommand{
 			ID:              "intermediate-reconcile-id",
 			Command:         pkgmodel.CommandApply,
 			Config:          config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
 			StartTs:         util.TimeNow().Add(-6 * time.Minute),
+			State:           forma_command.CommandStateSuccess,
+			Stacks:          []forma_command.CommandStack{{ID: currentStack.ID, Label: "test-stack"}},
 			ResourceUpdates: []resource_update.ResourceUpdate{},
 		}
 		err = ds.StoreFormaCommand(intermediateReconcile, intermediateReconcile.ID)
@@ -947,13 +1072,64 @@ func RunGetResourceModificationsSinceLastReconcile(t *testing.T, newDS func(t *t
 		modifications, err := ds.GetResourceModificationsSinceLastReconcile("test-stack")
 		assert.NoError(t, err)
 
-		assert.Len(t, modifications, 2, "Should include both patches despite intermediate reconcile")
+		assert.Len(t, modifications, 1, "zero-write reconcile membership must establish the new boundary")
 		labels := make(map[string]bool)
 		for _, mod := range modifications {
 			labels[mod.Label] = true
 		}
-		assert.True(t, labels["bucket-2"], "Should include first patch")
+		assert.False(t, labels["bucket-2"], "patch before the explicit boundary must be excluded")
 		assert.True(t, labels["bucket-3"], "Should include second patch")
+		for _, state := range []forma_command.CommandState{forma_command.CommandStateCanceled, forma_command.CommandStateInProgress, forma_command.CommandStateFailed, forma_command.CommandStateSuccess} {
+			intermediateReconcile.State = state
+			assert.NoError(t, ds.StoreFormaCommand(intermediateReconcile, intermediateReconcile.ID))
+			mods, err := ds.GetResourceModificationsSinceLastReconcile("test-stack")
+			assert.NoError(t, err)
+			expected := 2
+			if state == forma_command.CommandStateSuccess || state == forma_command.CommandStateFailed {
+				expected = 1
+			}
+			assert.Len(t, mods, expected, "boundary eligibility for %s", state)
+		}
+		for _, source := range []forma_command.Source{forma_command.SourceGeneratorRotator, forma_command.SourceSynchronizer, forma_command.SourceDiscovery, forma_command.SourceUser, forma_command.SourceAutoReconciler, ""} {
+			intermediateReconcile.Source = source
+			assert.NoError(t, ds.StoreFormaCommand(intermediateReconcile, intermediateReconcile.ID))
+			mods, err := ds.GetResourceModificationsSinceLastReconcile("test-stack")
+			assert.NoError(t, err)
+			expected := 1
+			if source == forma_command.SourceGeneratorRotator || source == forma_command.SourceSynchronizer || source == forma_command.SourceDiscovery {
+				expected = 2
+			}
+			assert.Len(t, mods, expected, "partial source %s must not clear unrelated drift", source)
+		}
+		_, err = ds.DeleteStack("test-stack", "delete-stack")
+		assert.NoError(t, err)
+		_, err = ds.CreateStack(&pkgmodel.Stack{Label: "test-stack"}, "recreate-stack")
+		assert.NoError(t, err)
+		mods, err := ds.GetResourceModificationsSinceLastReconcile("test-stack")
+		assert.NoError(t, err)
+		assert.Empty(t, mods, "a new stack incarnation must not inherit an old explicit boundary or ambiguous legacy drift")
+		newStack, err := ds.GetStackByLabel("test-stack")
+		assert.NoError(t, err)
+		newBaseline := reconcileBuilder(forma_command.CommandStateSuccess, pkgmodel.FormaApplyModeReconcile, -3*time.Minute, nil)
+		newBaseline.Stacks = []forma_command.CommandStack{{ID: newStack.ID, Label: newStack.Label}}
+		assert.NoError(t, ds.StoreFormaCommand(newBaseline, newBaseline.ID))
+		newPatch := reconcileBuilder(forma_command.CommandStateSuccess, pkgmodel.FormaApplyModePatch, -time.Minute, nil)
+		newPatch.Stacks = newBaseline.Stacks
+		assert.NoError(t, ds.StoreFormaCommand(newPatch, newPatch.ID))
+		newResource := pkgmodel.Resource{Ksuid: util.NewID(), NativeID: "new-incarnation", Stack: newStack.Label, Type: "Test::Resource", Label: "new-incarnation", Target: "default", Managed: true, Properties: json.RawMessage(`{"x":1}`)}
+		_, err = ds.StoreResource(&newResource, newPatch.ID)
+		assert.NoError(t, err)
+		mods, err = ds.GetResourceModificationsSinceLastReconcile("test-stack")
+		assert.NoError(t, err)
+		if assert.Len(t, mods, 1) {
+			assert.Equal(t, newResource.Ksuid, mods[0].Ksuid)
+		}
+		observation, err := ds.(datastore.ResourceObservationReader).GetResourceObservation(newResource.Ksuid)
+		assert.NoError(t, err)
+		if assert.NotNil(t, observation) {
+			assert.Equal(t, newStack.ID, observation.StackID)
+		}
+
 	})
 
 	t.Run("GetResourceModificationsSinceLastReconcile_UpdateOpHasProperties", func(t *testing.T) {

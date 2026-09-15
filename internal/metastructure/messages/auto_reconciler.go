@@ -18,3 +18,7 @@ type PolicyAttached struct {
 type PolicyRemoved struct {
 	StackLabel string
 }
+
+// RefreshEffectivePolicies is a best-effort postcommit hint with no stale label
+// or policy payload. The receiver reloads currently effective committed state.
+type RefreshEffectivePolicies struct{}
