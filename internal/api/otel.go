@@ -389,6 +389,9 @@ type StatsProvider interface {
 // This should be called after the metastructure is ready.
 func StartFormaeMetrics(statsProvider StatsProvider) error {
 	meter := otel.Meter("formae/stats")
+	// One datastore reading per minute serves every export in between; the
+	// reader runs far more often than these numbers change.
+	statsProvider = newCachedStatsProvider(statsProvider, time.Minute, time.Now)
 
 	// Client connections
 	clientsConnected, err := meter.Int64ObservableGauge(
