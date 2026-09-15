@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"ergo.services/actor/statemachine"
 	"ergo.services/ergo/gen"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -142,6 +143,7 @@ func TestDiscoverChildrenOnce_DoesNotMarkDoneWhenQueueingFails(t *testing.T) {
 	// The retry succeeds once the mailbox recovers, which is only reachable
 	// because the marker was left unset.
 	require.NoError(t, discoverChildrenOnce(op, data, &stubProcess{}))
+	assert.Len(t, data.queuedListOperations[childNamespace], 1, "retry must not duplicate an already queued child operation")
 	_, marked = data.typesWithChildrenQueued[key]
 	assert.True(t, marked)
 }
@@ -176,4 +178,77 @@ func TestDiscoverChildrenOnce_MarksDoneAfterQueueing(t *testing.T) {
 	// A second call is a no-op rather than a duplicate queue entry.
 	require.NoError(t, discoverChildrenOnce(op, data, &stubProcess{}))
 	assert.Len(t, data.queuedListOperations[childNamespace], 1)
+}
+
+// With no other messages in flight, retaining a child operation after its
+// scanner wakeup fails strands the cycle in Discovering. Both completion paths
+// must instead finish and arm the next periodic pass.
+func TestChildDiscovery_WakeupFailureCompletesCycle(t *testing.T) {
+	for _, completion := range []string{"listing", "sync-success", "sync-partial-failure"} {
+		t.Run(completion, func(t *testing.T) {
+			ds := &stubChildDatastore{parents: []*pkgmodel.Resource{childParent("rg-a"), childParent("rg-b")}}
+			data := newChildDiscoveryData(ds)
+			op := ListOperation{ResourceType: childParentType, TargetLabel: childTarget}
+			proc := &failingSendProcess{&stubProcess{}}
+			var state gen.Atom
+			var actions []statemachine.Action
+			var err error
+			if completion == "listing" {
+				data.outstandingListOperations[listOperationMapKey(childParentType, childTarget, "")] = op
+				state, data, actions, err = processListing(gen.PID{}, StateDiscovering, data, plugin.Listing{
+					ResourceType: childParentType, TargetLabel: childTarget,
+				}, proc)
+			} else {
+				data.outstandingSyncCommands["cmd-1"] = op
+				data.nativeIDsByCommand["cmd-1"] = []string{"rg-a", "rg-b"}
+				syncState := changeset.ChangeSetStateFinishedSuccessfully
+				if completion == "sync-partial-failure" {
+					syncState = changeset.ChangeSetStateFinishedWithErrors
+				}
+				state, data, actions, err = syncCompleted(gen.PID{}, StateDiscovering, data, changeset.ChangesetCompleted{
+					CommandID: "cmd-1", State: syncState,
+				}, proc)
+			}
+			require.NoError(t, err)
+			assert.False(t, data.HasOutstandingWork(), "a failed wakeup must not leave unreachable queued work")
+			assert.Equal(t, StateIdle, state, "without another callback, Discovering would never finish")
+			require.Len(t, actions, 1, "the next discovery cycle must be scheduled")
+			tick, ok := actions[0].(statemachine.GenericTimeout)
+			require.True(t, ok)
+			assert.Equal(t, Discover{}, tick.Message)
+			assert.Equal(t, 20*time.Second, tick.Duration)
+
+			// On a later successful attempt, both saved parents are still
+			// eligible and each contributes exactly one child operation.
+			require.NoError(t, discoverChildrenOnce(op, data, &stubProcess{}))
+			queued := data.queuedListOperations[childNamespace]
+			require.Len(t, queued, 2)
+			assert.Equal(t, "ksuid-rg-a", queued[0].ParentKSUID)
+			assert.Equal(t, "ksuid-rg-b", queued[1].ParentKSUID)
+		})
+	}
+}
+
+func TestDiscoverChildren_WakeupFailurePreservesExistingQueue(t *testing.T) {
+	data := newChildDiscoveryData(&stubChildDatastore{})
+	existing := ListOperation{ResourceType: childChildType, TargetLabel: childTarget, ParentKSUID: "existing"}
+	data.queuedListOperations[childNamespace] = []ListOperation{existing}
+
+	err := discoverChildren([]*pkgmodel.Resource{childParent("rg-a"), childParent("rg-b")},
+		ListOperation{ResourceType: childParentType, TargetLabel: childTarget}, data, &failingSendProcess{&stubProcess{}})
+	require.Error(t, err)
+	assert.Equal(t, []ListOperation{existing}, data.queuedListOperations[childNamespace],
+		"a failed batch must neither append partial work nor discard earlier queued work")
+}
+
+func TestDiscoverChildren_UsesPendingScannerWakeup(t *testing.T) {
+	data := newChildDiscoveryData(&stubChildDatastore{})
+	data.hasPendingResumeScan = true
+
+	// Immediate sends fail, but the existing delayed wakeup will drain this
+	// batch: no additional send is needed to accept all of its children.
+	err := discoverChildren([]*pkgmodel.Resource{childParent("rg-a"), childParent("rg-b")},
+		ListOperation{ResourceType: childParentType, TargetLabel: childTarget}, data, &failingSendProcess{&stubProcess{}})
+	require.NoError(t, err)
+	assert.Len(t, data.queuedListOperations[childNamespace], 2)
 }

@@ -875,6 +875,7 @@ func discoverChildren(parents []*pkgmodel.Resource, op ListOperation, data Disco
 		return nil
 	}
 
+	var operations []ListOperation
 	for _, parent := range parents {
 		for childNode, mappingProps := range parentNode.children {
 			listParams := make(map[string]plugin.ListParam)
@@ -895,22 +896,30 @@ func discoverChildren(parents []*pkgmodel.Resource, op ListOperation, data Disco
 					proc.Log().Error("Missing parent property property=%s parent_id=%s", param.ParentProperty, parent.NativeID)
 				}
 			}
-			data.queuedListOperations[data.targets[op.TargetLabel].Namespace] = append(data.queuedListOperations[data.targets[op.TargetLabel].Namespace], ListOperation{
+			operations = append(operations, ListOperation{
 				ResourceType: childNode.resourceType,
 				TargetLabel:  op.TargetLabel,
 				ParentKSUID:  parent.Ksuid,
 				ListParams:   util.MapToString(listParams),
 			})
-			// Only send immediate ResumeScanning if no delayed message is pending.
-			// If a delayed message is pending, it will process the queued work when it arrives.
-			if !data.hasPendingResumeScan {
-				if err := proc.Send(proc.PID(), ResumeScanning{}); err != nil {
-					proc.Log().Error("Failed to send ResumeScanning: %v", err)
-					return fmt.Errorf("failed to send ResumeScanning: %w", err)
-				}
-			}
 		}
 	}
+
+	if len(operations) == 0 {
+		return nil
+	}
+	// Arrange a wakeup before committing the batch. A failed send must not
+	// leave queued work keeping discovery busy forever, or a partial batch
+	// that a later attempt queues again. The actor handles the wakeup only
+	// after this handler returns, so it will see the whole batch.
+	if !data.hasPendingResumeScan {
+		if err := proc.Send(proc.PID(), ResumeScanning{}); err != nil {
+			proc.Log().Error("Failed to send ResumeScanning: %v", err)
+			return fmt.Errorf("failed to send ResumeScanning: %w", err)
+		}
+	}
+	namespace := data.targets[op.TargetLabel].Namespace
+	data.queuedListOperations[namespace] = append(data.queuedListOperations[namespace], operations...)
 
 	return nil
 }
