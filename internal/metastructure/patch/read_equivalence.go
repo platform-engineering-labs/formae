@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"reflect"
 
 	"github.com/platform-engineering-labs/jsonpatch"
 
@@ -27,6 +28,11 @@ import (
 // handle is reported as an error, never as equal.
 func ReadEquivalent(stored, read json.RawMessage, schema pkgmodel.Schema) (equal bool, err error) {
 	a, b := emptyAsObject(stored), emptyAsObject(read)
+	if identical, err := structurallyEqual(a, b); err != nil {
+		return false, err
+	} else if identical {
+		return true, nil
+	}
 	collections := collectionSemanticsFromFieldHints(schema.Hints)
 	defer func() {
 		if r := recover(); r != nil {
@@ -45,6 +51,21 @@ func ReadEquivalent(stored, read json.RawMessage, schema pkgmodel.Schema) (equal
 		return false, err
 	}
 	return len(backward) == 0, nil
+}
+
+// structurallyEqual is the fast path for the common case of an unchanged
+// read, and the authority for values the diff does not compare the way
+// equality requires: the diff reports two nulls as different, so an atomic
+// field carrying a null would otherwise count as changed on every read.
+func structurallyEqual(a, b []byte) (bool, error) {
+	var va, vb any
+	if err := json.Unmarshal(a, &va); err != nil {
+		return false, err
+	}
+	if err := json.Unmarshal(b, &vb); err != nil {
+		return false, err
+	}
+	return reflect.DeepEqual(va, vb), nil
 }
 
 func emptyAsObject(doc json.RawMessage) []byte {

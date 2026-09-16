@@ -19,6 +19,7 @@ func TestReadEquivalent(t *testing.T) {
 	plain := pkgmodel.Schema{}
 	ordered := pkgmodel.Schema{Hints: map[string]pkgmodel.FieldHint{"Items": {UpdateMethod: pkgmodel.FieldUpdateMethodArray}}}
 	keyed := pkgmodel.Schema{Hints: map[string]pkgmodel.FieldHint{"Items": {UpdateMethod: pkgmodel.FieldUpdateMethodEntitySet, IndexField: "Key"}}}
+	atomic := pkgmodel.Schema{Hints: map[string]pkgmodel.FieldHint{"Doc": {UpdateMethod: pkgmodel.FieldUpdateMethodAtomic}}}
 
 	cases := []struct {
 		name         string
@@ -37,6 +38,11 @@ func TestReadEquivalent(t *testing.T) {
 		{"key added", `{}`, `{"Endpoint":"new"}`, plain, false},
 		{"nested key removed", `{"O":{"a":1,"b":2}}`, `{"O":{"a":1}}`, plain, false},
 		{"empty and null are empty objects", ``, `null`, plain, true},
+		{"atomic object with null unchanged", `{"Doc":{"Value":null}}`, `{"Doc":{"Value":null}}`, atomic, true},
+		{"atomic array with null unchanged", `{"Doc":[null,1]}`, `{"Doc":[null,1]}`, atomic, true},
+		{"atomic null unchanged", `{"Doc":null}`, `{"Doc":null}`, atomic, true},
+		{"atomic object with null changed", `{"Doc":{"Value":null}}`, `{"Doc":{"Value":1}}`, atomic, false},
+		{"null member unchanged in unkeyed list", `{"S":[null,"a"]}`, `{"S":[null,"a"]}`, plain, true},
 		{"empty versus populated", ``, `{"a":1}`, plain, false},
 	}
 	for _, tc := range cases {
