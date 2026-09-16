@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"reflect"
 
 	"github.com/platform-engineering-labs/formae/internal/datastore"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/transformations"
@@ -45,7 +46,7 @@ import (
 //
 // Idempotent: transformations.PersistValueTransformer skips values already
 // carrying $hashed:true, and this function only re-stores a row when hashing
-// actually changed its bytes.
+// actually changed a value.
 func BackfillHashedSecrets(ds datastore.Datastore) error {
 	t := transformations.NewPersistValueTransformer()
 
@@ -213,7 +214,7 @@ func hashPropsInPlace(t *transformations.PersistValueTransformer, label string, 
 		return false, err
 	}
 	logOpaqueDiagnostics(label, resourceType, diagnostics)
-	if bytes.Equal(out.Properties, *props) {
+	if jsonEquivalent(out.Properties, *props) {
 		return false, nil
 	}
 	*props = out.Properties
@@ -234,7 +235,21 @@ func logOpaqueDiagnostics(label, resourceType string, diagnostics []transformati
 // resourceChanged reports whether any of the transformable fields differ
 // between before and after applying the transformer.
 func resourceChanged(before, after *pkgmodel.Resource) bool {
-	return !bytes.Equal(before.Properties, after.Properties) ||
-		!bytes.Equal(before.ReadOnlyProperties, after.ReadOnlyProperties) ||
-		!bytes.Equal(before.PatchDocument, after.PatchDocument)
+	return !jsonEquivalent(before.Properties, after.Properties) ||
+		!jsonEquivalent(before.ReadOnlyProperties, after.ReadOnlyProperties) ||
+		!jsonEquivalent(before.PatchDocument, after.PatchDocument)
+}
+
+// jsonEquivalent reports whether two JSON documents encode the same value.
+// Stored bytes come back in the datastore's own formatting (Postgres jsonb
+// re-serializes with its own spacing and key order) while the transformer
+// re-marshals through encoding/json, so comparing bytes reports every row as
+// changed and the sweep rewrites the whole table on every boot. Documents that
+// do not parse fall back to a byte comparison.
+func jsonEquivalent(a, b json.RawMessage) bool {
+	var va, vb any
+	if json.Unmarshal(a, &va) != nil || json.Unmarshal(b, &vb) != nil {
+		return bytes.Equal(a, b)
+	}
+	return reflect.DeepEqual(va, vb)
 }
