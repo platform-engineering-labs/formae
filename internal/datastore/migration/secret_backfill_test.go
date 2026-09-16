@@ -416,3 +416,59 @@ func TestBackfillHashedSecrets_PagesAllResourceVersionsAtVolume(t *testing.T) {
 	}
 	require.Equal(t, total, seen, "every stored SecretsManager version must be present and hashed")
 }
+
+// TestBackfillHashedSecrets_LeavesRowsWithoutSecretsUntouched stores a resource
+// whose properties carry no secret but are formatted differently from how
+// encoding/json would re-marshal them (non-lexical key order, a number that
+// float64 re-marshals in exponent notation). The sweep must not re-store the
+// row: the stored bytes have to come back exactly as written.
+func TestBackfillHashedSecrets_LeavesRowsWithoutSecretsUntouched(t *testing.T) {
+	ds := newTestDatastore(t)
+
+	props := `{"Zeta":1000000,"Alpha":"x"}`
+	readOnly := `{"Omega":{"Beta":2,"Alpha":1}}`
+	resource := &pkgmodel.Resource{
+		Label:              "plain-resource",
+		Type:               "test-type",
+		Stack:              "test-stack",
+		NativeID:           "native-plain",
+		Managed:            true,
+		Schema:             testSchema(),
+		Properties:         json.RawMessage(props),
+		ReadOnlyProperties: json.RawMessage(readOnly),
+	}
+	_, err := ds.StoreResource(resource, "seed-command")
+	require.NoError(t, err)
+
+	require.NoError(t, BackfillHashedSecrets(ds))
+
+	resources, err := ds.LoadAllResources()
+	require.NoError(t, err)
+	require.Len(t, resources, 1)
+	assert.Equal(t, props, string(resources[0].Properties))
+	assert.Equal(t, readOnly, string(resources[0].ReadOnlyProperties))
+}
+
+func TestJSONEquivalent(t *testing.T) {
+	cases := []struct {
+		name string
+		a, b string
+		want bool
+	}{
+		{"identical", `{"a":1}`, `{"a":1}`, true},
+		{"key order", `{"b":1,"a":2}`, `{"a":2,"b":1}`, true},
+		{"whitespace", `{"a": 1, "b": [1, 2]}`, `{"a":1,"b":[1,2]}`, true},
+		{"number notation", `{"a":1000000}`, `{"a":1e+06}`, true},
+		{"nested order", `{"o":{"y":1,"x":2}}`, `{"o":{"x":2,"y":1}}`, true},
+		{"value differs", `{"a":1}`, `{"a":2}`, false},
+		{"hashed envelope", `{"s":"plain"}`, `{"s":{"$hashed":true,"value":"abc"}}`, false},
+		{"array order", `{"a":[1,2]}`, `{"a":[2,1]}`, false},
+		{"both empty", ``, ``, true},
+		{"empty vs object", ``, `{}`, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, jsonEquivalent(json.RawMessage(tc.a), json.RawMessage(tc.b)))
+		})
+	}
+}
