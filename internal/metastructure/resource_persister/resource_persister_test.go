@@ -3139,3 +3139,30 @@ func TestResourcePersister_SyncRead_OrderedArrayReorderIsAChange(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, versions, 2, "reordering an ordered array must store a new version")
 }
+
+// TestResourcePersister_SyncRead_RemovedPropertyIsAChange delivers a sync read
+// that no longer carries a property the stored row has. A deletion is a change
+// and must store a new version.
+func TestResourcePersister_SyncRead_RemovedPropertyIsAChange(t *testing.T) {
+	persister, sender, ds, err := newResourcePersisterForTest(t)
+	require.NoError(t, err)
+
+	_, err = ds.CreateTarget(&pkgmodel.Target{Label: "test-target", Namespace: "aws"})
+	require.NoError(t, err)
+
+	ksuid := util.NewID()
+	seedUnmanagedRow(t, ds, ksuid, json.RawMessage(`{"Name":"n","Endpoint":"old"}`), true)
+
+	removed := syncReadUpdate(ksuid, json.RawMessage(`{"Name":"n"}`), nil, nil)
+	result := persister.Call(sender, resource_update.PersistResourceUpdate{
+		CommandID:         "sync-removed",
+		ResourceOperation: resource_update.OperationRead,
+		PluginOperation:   resource.OperationRead,
+		ResourceUpdate:    removed,
+	})
+	require.NoError(t, result.Error)
+
+	versions, err := ds.LoadAllResourceVersions()
+	require.NoError(t, err)
+	assert.Len(t, versions, 2, "a removed property must store a new version")
+}
