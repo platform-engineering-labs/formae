@@ -54,7 +54,36 @@ func TestReadEquivalent(t *testing.T) {
 	}
 }
 
-func TestReadEquivalent_ShapeTheDiffCannotHandleIsAnErrorNotEqual(t *testing.T) {
+func TestReadEquivalent_NestedHintsApplyInsideCollections(t *testing.T) {
+	keyedWithSteps := pkgmodel.Schema{Hints: map[string]pkgmodel.FieldHint{
+		"Items":       {UpdateMethod: pkgmodel.FieldUpdateMethodEntitySet, IndexField: "Key"},
+		"Items.Steps": {UpdateMethod: pkgmodel.FieldUpdateMethodArray},
+	}}
+	unkeyedWithSteps := pkgmodel.Schema{Hints: map[string]pkgmodel.FieldHint{
+		"Rules.Steps": {UpdateMethod: pkgmodel.FieldUpdateMethodArray},
+	}}
+	cases := []struct {
+		name         string
+		stored, read string
+		schema       pkgmodel.Schema
+		want         bool
+	}{
+		{"ordered list inside entity-set element reordered", `{"Items":[{"Key":"k","Steps":["a","b"]}]}`, `{"Items":[{"Key":"k","Steps":["b","a"]}]}`, keyedWithSteps, false},
+		{"ordered list inside entity-set element unchanged, elements reordered", `{"Items":[{"Key":"k1","Steps":["a","b"]},{"Key":"k2","Steps":["c"]}]}`, `{"Items":[{"Key":"k2","Steps":["c"]},{"Key":"k1","Steps":["a","b"]}]}`, keyedWithSteps, true},
+		{"ordered list inside unkeyed element reordered", `{"Rules":[{"Steps":["a","b"]}]}`, `{"Rules":[{"Steps":["b","a"]}]}`, unkeyedWithSteps, false},
+		{"unkeyed elements reordered with ordered inner lists unchanged", `{"Rules":[{"Steps":["a"]},{"Steps":["b"]}]}`, `{"Rules":[{"Steps":["b"]},{"Steps":["a"]}]}`, unkeyedWithSteps, true},
+		{"unhinted nested list reordered is a set", `{"Rules":[{"Tags":["a","b"]}]}`, `{"Rules":[{"Tags":["b","a"]}]}`, pkgmodel.Schema{}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ReadEquivalent(json.RawMessage(tc.stored), json.RawMessage(tc.read), tc.schema)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestReadEquivalent_UnexpectedShapesAreChangesNotErrors(t *testing.T) {
 	ordered := pkgmodel.Schema{Hints: map[string]pkgmodel.FieldHint{"Items": {UpdateMethod: pkgmodel.FieldUpdateMethodArray}}}
 	keyed := pkgmodel.Schema{Hints: map[string]pkgmodel.FieldHint{"Items": {UpdateMethod: pkgmodel.FieldUpdateMethodEntitySet, IndexField: "Key"}}}
 
@@ -62,14 +91,17 @@ func TestReadEquivalent_ShapeTheDiffCannotHandleIsAnErrorNotEqual(t *testing.T) 
 		stored, read string
 		schema       pkgmodel.Schema
 	}{
-		"null member in ordered array": {`{"Items":[{"x":1}]}`, `{"Items":[null]}`, ordered},
-		"null member in entity set":    {`{"Items":[{"Key":"k"}]}`, `{"Items":[null]}`, keyed},
-		"invalid json":                 {`{"a":1}`, `{"a":`, pkgmodel.Schema{}},
+		"null member replaces object in ordered array": {`{"Items":[{"x":1}]}`, `{"Items":[null]}`, ordered},
+		"null member replaces object in entity set":    {`{"Items":[{"Key":"k"}]}`, `{"Items":[null]}`, keyed},
+		"object replaces list":                         {`{"Items":[1]}`, `{"Items":{"a":1}}`, ordered},
 	} {
 		t.Run(name, func(t *testing.T) {
 			equal, err := ReadEquivalent(json.RawMessage(tc.stored), json.RawMessage(tc.read), tc.schema)
-			require.Error(t, err)
+			require.NoError(t, err)
 			assert.False(t, equal)
 		})
 	}
+
+	_, err := ReadEquivalent(json.RawMessage(`{"a":1}`), json.RawMessage(`{"a":`), pkgmodel.Schema{})
+	require.Error(t, err, "invalid JSON is an error")
 }

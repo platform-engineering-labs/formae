@@ -509,11 +509,11 @@ func (rp *ResourcePersister) recordMovedSinceGenerated(resourceUpdate *resource_
 }
 
 // syncReadChanged reports whether a sync read differs from the stored row
-// under the schema's collection semantics (see patch.ReadEquivalent): an
-// unkeyed collection is a set, so a provider returning it in a different
-// order does not produce a new version on every sync, while a field hinted
-// as an ordered array still does. A document that fails to parse counts as
-// changed and is re-stored as it was before.
+// under the schema's collection semantics, applied at every depth (see
+// patch.ReadEquivalent): an unkeyed collection is a set, so a provider
+// returning it in a different order does not produce a new version on every
+// sync, while a field hinted as an ordered array still does. A document that
+// fails to parse counts as changed and is re-stored as it was before.
 func syncReadChanged(current, read *pkgmodel.Resource) bool {
 	propsEqual, err := patch.ReadEquivalent(current.Properties, read.Properties, read.Schema)
 	if err != nil {
