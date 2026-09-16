@@ -20,6 +20,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/generator_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/patch"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/policy_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/stack_update"
@@ -507,6 +508,24 @@ func (rp *ResourcePersister) recordMovedSinceGenerated(resourceUpdate *resource_
 	return !util.JsonEqualRaw(current.ReadOnlyProperties, generated.ReadOnlyProperties)
 }
 
+// syncReadChanged reports whether a sync read differs from the stored row
+// under the schema's collection semantics, applied at every depth (see
+// patch.ReadEquivalent): an unkeyed collection is a set, so a provider
+// returning it in a different order does not produce a new version on every
+// sync, while a field hinted as an ordered array still does. A document that
+// fails to parse counts as changed and is re-stored as it was before.
+func syncReadChanged(current, read *pkgmodel.Resource) bool {
+	propsEqual, err := patch.ReadEquivalent(current.Properties, read.Properties, read.Schema)
+	if err != nil {
+		return true
+	}
+	readOnlyEqual, err := patch.ReadEquivalent(current.ReadOnlyProperties, read.ReadOnlyProperties, read.Schema)
+	if err != nil {
+		return true
+	}
+	return !propsEqual || !readOnlyEqual
+}
+
 func resourceOperationFromPluginOperation(resourceOperation resource_update.OperationType, pluginOperation pkgresource.Operation, progress *plugin.TrackedProgress) resource_update.OperationType {
 	switch pluginOperation {
 	case pkgresource.OperationCreate:
@@ -661,8 +680,7 @@ func (rp *ResourcePersister) processResourceUpdate(commandID string, rc resource
 			// Compare against the hashed copy (secretSafeResource) — the same
 			// representation we store — so read-back secrets converge hash-vs-hash
 			// instead of showing perpetual drift against the stored hash.
-			if !util.JsonEqualRaw(currentResource.Properties, secretSafeResource.Properties) ||
-				!util.JsonEqualRaw(currentResource.ReadOnlyProperties, secretSafeResource.ReadOnlyProperties) {
+			if syncReadChanged(currentResource, secretSafeResource) {
 
 				// Preserve the current stack and managed state during sync READ operations
 				// to prevent stale sync data from overwriting recent stack changes
