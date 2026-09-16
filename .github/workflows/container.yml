@@ -8,9 +8,18 @@ on:
         required: false
         type: string
         default: ''
+      tag:
+        description: 'Exact release tag to build (X.Y.Z or X.Y.Z-dev.N). Leave empty to take the tag of the ref being built.'
+        required: false
+        type: string
+        default: ''
   workflow_call:
     inputs:
       pel_n:
+        type: string
+        required: false
+        default: ''
+      tag:
         type: string
         required: false
         default: ''
@@ -52,7 +61,18 @@ jobs:
         # rejects ("No install candidates found").
         shell: bash
         run: |
-          tag=$(git describe --tags --abbrev=0 --match "[0-9]*" --match "v[0-9]*")
+          # The tag names the release. When the ref being built is itself a
+          # tag, that tag is the release; `git describe` is only for builds
+          # from a branch, and it is ambiguous when several tags point at the
+          # same commit (a stable tag cut on a commit that already carries its
+          # last dev tag).
+          tag="${{ inputs.tag }}"
+          if [[ -z "$tag" && "${{ github.ref_type }}" == "tag" ]]; then
+            tag="${{ github.ref_name }}"
+          fi
+          if [[ -z "$tag" ]]; then
+            tag=$(git describe --tags --abbrev=0 --match "[0-9]*" --match "v[0-9]*")
+          fi
           version="${tag#v}"
           if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "CHANNEL=stable" >> "$GITHUB_ENV"
