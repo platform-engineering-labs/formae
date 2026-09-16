@@ -3108,3 +3108,34 @@ func TestResourcePersister_SyncRead_OrderOnlyCollectionDifferenceIsNotAChange(t 
 	require.NoError(t, err)
 	assert.Len(t, versionsChanged, 2, "a member change must store a new version")
 }
+
+// TestResourcePersister_SyncRead_OrderedArrayReorderIsAChange seeds a row whose
+// list field is hinted as an ordered array and delivers a sync read with the
+// same members reordered. Order is meaning for such a field, so a new version
+// must be stored.
+func TestResourcePersister_SyncRead_OrderedArrayReorderIsAChange(t *testing.T) {
+	persister, sender, ds, err := newResourcePersisterForTest(t)
+	require.NoError(t, err)
+
+	_, err = ds.CreateTarget(&pkgmodel.Target{Label: "test-target", Namespace: "aws"})
+	require.NoError(t, err)
+
+	ksuid := util.NewID()
+	seedUnmanagedRow(t, ds, ksuid, json.RawMessage(`{"Topics":["arn:a","arn:b"]}`), true)
+
+	reordered := syncReadUpdate(ksuid, json.RawMessage(`{"Topics":["arn:b","arn:a"]}`), nil, nil)
+	reordered.DesiredState.Schema = pkgmodel.Schema{
+		Hints: map[string]pkgmodel.FieldHint{"Topics": {UpdateMethod: pkgmodel.FieldUpdateMethodArray}},
+	}
+	result := persister.Call(sender, resource_update.PersistResourceUpdate{
+		CommandID:         "sync-reordered-array",
+		ResourceOperation: resource_update.OperationRead,
+		PluginOperation:   resource.OperationRead,
+		ResourceUpdate:    reordered,
+	})
+	require.NoError(t, result.Error)
+
+	versions, err := ds.LoadAllResourceVersions()
+	require.NoError(t, err)
+	assert.Len(t, versions, 2, "reordering an ordered array must store a new version")
+}
