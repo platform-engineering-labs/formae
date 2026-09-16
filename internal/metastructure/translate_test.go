@@ -43,6 +43,16 @@ func TestTranslateToAPICommand_IncludesMode(t *testing.T) {
 	assert.Equal(t, "patch", apiCmd.Mode)
 }
 
+func TestTranslateToAPICommand_Message(t *testing.T) {
+	fa := &forma_command.FormaCommand{
+		ID: "cmd-message", Command: pkgmodel.CommandApply,
+		Message: "add the production bucket",
+	}
+
+	api := translateToAPICommand(fa)
+	assert.Equal(t, "add the production bucket", api.Message)
+}
+
 func TestTranslateToAPICommand_Source(t *testing.T) {
 	fa := forma_command.NewFormaCommand(
 		&pkgmodel.Forma{}, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModePatch},

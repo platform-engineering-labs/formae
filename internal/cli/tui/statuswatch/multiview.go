@@ -30,6 +30,7 @@ const (
 	colStatus = iota
 	colID
 	colCommand
+	colMessage
 	colMode
 	colUser
 	colProgress
@@ -67,6 +68,7 @@ var multiCols = [colCount]colSpec{
 	colStatus:   {"", 5, 0, true},
 	colID:       {"ID", 28, 0, true},
 	colCommand:  {"Command", 10, 1, true},
+	colMessage:  {"Message", 32, 3, false},
 	colMode:     {"Mode", 12, 2, true},
 	colUser:     {"User", 0, 3, true},
 	colProgress: {"Progress", 0, 0, true},
@@ -244,6 +246,8 @@ func lessRows(a, b row, col int, now time.Time) bool {
 		return a.cmd.CommandID < b.cmd.CommandID
 	case colCommand:
 		return a.cmd.Command < b.cmd.Command
+	case colMessage:
+		return a.cmd.Message < b.cmd.Message
 	case colMode:
 		return a.cmd.Mode < b.cmd.Mode
 	case colUser:
@@ -585,6 +589,10 @@ func (v multiView) renderRows(maxRows int) []string {
 				sb.WriteString(idStyle.Render(pad(components.Truncate(r.cmd.CommandID, w-1), w)))
 			case colCommand:
 				sb.WriteString(textStyle.Render(pad(r.cmd.Command, w)))
+			case colMessage:
+				// Messages are optional and user-authored. Keep the history table
+				// single-line and bounded so a long message cannot widen or wrap it.
+				sb.WriteString(textStyle.Render(pad(components.Truncate(r.cmd.Message, w-1), w)))
 			case colMode:
 				sb.WriteString(textStyle.Render(pad(modeLabel(r.cmd), w)))
 			case colUser:

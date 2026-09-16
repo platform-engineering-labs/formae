@@ -42,6 +42,7 @@ func makeStatusFixture() *apimodel.ListCommandStatusResponse {
 			{
 				CommandID: "cmd-abc123",
 				Command:   "apply",
+				Message:   "add the production bucket and configure access logging",
 				Mode:      "reconcile",
 				State:     "Success",
 				StartTs:   start,
@@ -102,7 +103,7 @@ func TestRenderStatusList_Summary_Styled(t *testing.T) {
 func TestRenderStatusList_Summary_Piped(t *testing.T) {
 	th := theme.New("formae")
 	resp := makeStatusFixture()
-	out := renderStatusListAt(th, resp, false /*detailed*/, 100, fixedNow)
+	out := renderStatusListAt(th, resp, false /*detailed*/, 180, fixedNow)
 	plain := stripANSI(out)
 
 	// Content checks on the plain text
@@ -110,6 +111,8 @@ func TestRenderStatusList_Summary_Piped(t *testing.T) {
 	assert.Contains(t, plain, "cmd-def456", "must contain second command ID")
 	assert.Contains(t, plain, "apply", "must contain command type")
 	assert.Contains(t, plain, "reconcile", "must contain mode")
+	assert.Contains(t, plain, "add the production bucket", "must contain command message")
+	assert.Contains(t, plain, "…", "long command messages must be truncated")
 }
 
 // TestRenderStatusList_Detailed_Styled pins the styled output of the detailed layout.
