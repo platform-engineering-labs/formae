@@ -126,7 +126,7 @@ func TestHeaderCommand_EmptyOptionFallsBackToARealVerb(t *testing.T) {
 
 func TestVisibleColumns_DropTiers(t *testing.T) {
 	uw := userColWidth(nil) // no rows: User collapses to its header width
-	wide := visibleColumns(120, uw)
+	wide := visibleColumns(170, uw)
 	for c := 0; c < colCount; c++ {
 		assert.True(t, wide[c], "wide terminal shows all columns")
 	}
@@ -187,6 +187,23 @@ func TestMultiView_RowContent(t *testing.T) {
 	assert.Contains(t, out, "00:42")         // duration MM:SS
 	assert.Contains(t, out, "10m")           // age
 	assert.Contains(t, out, "✓")
+}
+
+func TestMultiView_MessageKeepsListRowsSingleLine(t *testing.T) {
+	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
+	withMessage := apimodel.Command{CommandID: "cmd-message", Command: "apply", State: "Success", Message: "Create 桶\n\x1b\u0085" + strings.Repeat(" bucket", 10)}
+	withoutMessage := apimodel.Command{CommandID: "cmd-empty", Command: "apply", State: "Success"}
+	v := multiView{th: theme.New("formae"), rows: buildRows([]apimodel.Command{withMessage, withoutMessage}), width: 180, now: now}
+	out := plain(strings.Join(v.renderRows(10), "\n"))
+	assert.Len(t, strings.Split(out, "\n"), 2)
+	assert.NotContains(t, out, "Message:")
+	assert.Contains(t, out, "Create 桶")
+	assert.Contains(t, out, "…")
+	assert.NotContains(t, out, "\x1b")
+	assert.NotContains(t, out, "\u0085")
+	for _, line := range strings.Split(out, "\n") {
+		assert.Equal(t, 180, lipgloss.Width(line))
+	}
 }
 
 func TestMultiView_RunningCommandShowsSegmentedBar(t *testing.T) {

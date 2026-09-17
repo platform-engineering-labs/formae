@@ -42,6 +42,7 @@ func makeStatusFixture() *apimodel.ListCommandStatusResponse {
 			{
 				CommandID: "cmd-abc123",
 				Command:   "apply",
+				Message:   "add the production bucket and configure access logging",
 				Mode:      "reconcile",
 				State:     "Success",
 				StartTs:   start,
@@ -102,7 +103,7 @@ func TestRenderStatusList_Summary_Styled(t *testing.T) {
 func TestRenderStatusList_Summary_Piped(t *testing.T) {
 	th := theme.New("formae")
 	resp := makeStatusFixture()
-	out := renderStatusListAt(th, resp, false /*detailed*/, 100, fixedNow)
+	out := renderStatusListAt(th, resp, false /*detailed*/, 180, fixedNow)
 	plain := stripANSI(out)
 
 	// Content checks on the plain text
@@ -110,6 +111,8 @@ func TestRenderStatusList_Summary_Piped(t *testing.T) {
 	assert.Contains(t, plain, "cmd-def456", "must contain second command ID")
 	assert.Contains(t, plain, "apply", "must contain command type")
 	assert.Contains(t, plain, "reconcile", "must contain mode")
+	assert.Contains(t, plain, "add the production bucket", "must contain command message")
+	assert.Contains(t, plain, "…", "long command messages must be truncated")
 }
 
 // TestRenderStatusList_Detailed_Styled pins the styled output of the detailed layout.
@@ -172,6 +175,29 @@ func TestRenderCommandHeader_Attribution(t *testing.T) {
 		plain := stripANSI(renderCommandHeader(th, base, 120, fixedNow))
 		assert.Equal(t, "✓  cmd-abc123  apply  reconcile  01:30\n", plain)
 	})
+
+	t.Run("message appears below properties and wraps to width", func(t *testing.T) {
+		c := base
+		c.Message = "Add the production bucket and configure access logging"
+		plain := stripANSI(renderCommandHeader(th, c, 32, fixedNow))
+		assert.Contains(t, plain, "Message: Add the production")
+		assert.Contains(t, plain, "bucket and configure access")
+		assert.Contains(t, plain, "logging")
+	})
+}
+
+func TestRenderStatusList_Detailed_HidesInternalAcceptanceAccounting(t *testing.T) {
+	th := theme.New("formae")
+	resp := &apimodel.ListCommandStatusResponse{Commands: []apimodel.Command{{
+		CommandID: "cmd-accept", Command: "apply", Mode: "reconcile", State: "Success",
+		StartTs: fixedNow.Add(-time.Minute), EndTs: fixedNow,
+		Message:         "Keep the externally added tag",
+		ResourceUpdates: []apimodel.ResourceUpdate{{Operation: "accept", State: "Success", ResourceLabel: "storage"}},
+	}}}
+	plain := stripANSI(renderStatusListAt(th, resp, true, 100, fixedNow))
+	assert.Contains(t, plain, "Message: Keep the externally added tag")
+	assert.NotContains(t, plain, "Drift acceptance records")
+	assert.NotContains(t, plain, "provider resource operations")
 }
 
 // TestRenderStatusList_Empty renders an empty response (no commands).

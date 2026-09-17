@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
@@ -30,6 +31,7 @@ const (
 	colStatus = iota
 	colID
 	colCommand
+	colMessage
 	colMode
 	colUser
 	colProgress
@@ -67,6 +69,7 @@ var multiCols = [colCount]colSpec{
 	colStatus:   {"", 5, 0, true},
 	colID:       {"ID", 28, 0, true},
 	colCommand:  {"Command", 10, 1, true},
+	colMessage:  {"Message", 32, 4, false},
 	colMode:     {"Mode", 12, 2, true},
 	colUser:     {"User", 0, 3, true},
 	colProgress: {"Progress", 0, 0, true},
@@ -145,7 +148,8 @@ func buildRows(cmds []apimodel.Command) []row {
 	return rows
 }
 
-// visibleColumns drops priority-3 columns first (User — supplementary
+// visibleColumns drops the optional Message preview (priority 4) first,
+// then priority-3 columns (User — supplementary
 // attribution, never at the cost of operational columns a narrower terminal
 // already showed), then priority-2 (Mode, ◐, ○, Age), then priority-1
 // (Command), until the fixed columns plus the bar floor fit. userWidth is
@@ -157,7 +161,7 @@ func visibleColumns(termWidth, userWidth int) map[int]bool {
 	for c := 0; c < colCount; c++ {
 		vis[c] = true
 	}
-	for _, dropTier := range []int{3, 2, 1} {
+	for _, dropTier := range []int{4, 3, 2, 1} {
 		if fixedWidth(vis, userWidth)+minBarWidth > termWidth {
 			for c := 0; c < colCount; c++ {
 				if multiCols[c].priority == dropTier {
@@ -288,6 +292,9 @@ type multiView struct {
 // when hideAge is set.
 func (v multiView) visibleCols() map[int]bool {
 	vis := visibleColumns(v.width, userColWidth(v.rows))
+	if v.pinned {
+		vis[colMessage] = false
+	}
 	if v.hideAge {
 		vis[colAge] = false
 	}
@@ -585,6 +592,11 @@ func (v multiView) renderRows(maxRows int) []string {
 				sb.WriteString(idStyle.Render(pad(components.Truncate(r.cmd.CommandID, w-1), w)))
 			case colCommand:
 				sb.WriteString(textStyle.Render(pad(r.cmd.Command, w)))
+			case colMessage:
+				// Messages are optional and user-authored. Keep the history table
+				// single-line and bounded so a long message cannot widen or wrap it.
+				message := ansi.Truncate(components.CommandMessageText(r.cmd.Message), w-1, "…")
+				sb.WriteString(textStyle.Render(message + strings.Repeat(" ", max(0, w-ansi.StringWidth(message)))))
 			case colMode:
 				sb.WriteString(textStyle.Render(pad(modeLabel(r.cmd), w)))
 			case colUser:

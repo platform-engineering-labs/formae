@@ -56,9 +56,12 @@ func TestLogExplicitEmptyAndClassifiedInputs(t *testing.T) {
 	if err := renderCommandLog(&out, entries, false); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Input properties: unavailable", "Input properties: none (explicit empty)", "redacted", "supplied", "declaration", "9007199254740993", "Drift acceptance records: 1; provider resource operations: 1"} {
+	for _, want := range []string{"Input properties: unavailable", "Input properties: none (explicit empty)", "redacted", "supplied", "declaration", "9007199254740993"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("missing %q in %s", want, out.String())
 		}
+	}
+	if strings.Contains(out.String(), "Drift acceptance records") || strings.Contains(out.String(), "provider resource operations") {
+		t.Errorf("internal acceptance accounting leaked into command log: %s", out.String())
 	}
 }

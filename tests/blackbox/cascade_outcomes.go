@@ -38,6 +38,13 @@ func planDeletes(op *Operation, model *StateModel, roots []int, cascade bool) ca
 			return succeeded[ref]
 		}
 		visited[ref] = true
+		// The live dependency graph has no node for an absent resource.
+		// Do not traverse the pool's static descendants through that gap.
+		res := model.Resource(ref.StackIndex, ref.SlotIndex)
+		if res == nil || res.State != StateExists {
+			succeeded[ref] = true
+			return true
+		}
 		dependenciesOK := true
 		if model.Pool != nil {
 			for _, child := range model.Pool.Slots[ref.SlotIndex].ChildIndices {
@@ -56,11 +63,6 @@ func planDeletes(op *Operation, model *StateModel, roots []int, cascade bool) ca
 			}
 		}
 		if !cascade && !selected[ref] {
-			succeeded[ref] = dependenciesOK
-			return dependenciesOK
-		}
-		res := model.Resource(ref.StackIndex, ref.SlotIndex)
-		if res == nil || res.State != StateExists {
 			succeeded[ref] = dependenciesOK
 			return dependenciesOK
 		}
