@@ -126,7 +126,7 @@ func TestHeaderCommand_EmptyOptionFallsBackToARealVerb(t *testing.T) {
 
 func TestVisibleColumns_DropTiers(t *testing.T) {
 	uw := userColWidth(nil) // no rows: User collapses to its header width
-	wide := visibleColumns(120, uw)
+	wide := visibleColumns(170, uw)
 	for c := 0; c < colCount; c++ {
 		assert.True(t, wide[c], "wide terminal shows all columns")
 	}

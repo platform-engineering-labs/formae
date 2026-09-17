@@ -68,7 +68,7 @@ var multiCols = [colCount]colSpec{
 	colStatus:   {"", 5, 0, true},
 	colID:       {"ID", 28, 0, true},
 	colCommand:  {"Command", 10, 1, true},
-	colMessage:  {"Message", 32, 3, false},
+	colMessage:  {"Message", 32, 4, false},
 	colMode:     {"Mode", 12, 2, true},
 	colUser:     {"User", 0, 3, true},
 	colProgress: {"Progress", 0, 0, true},
@@ -159,7 +159,7 @@ func visibleColumns(termWidth, userWidth int) map[int]bool {
 	for c := 0; c < colCount; c++ {
 		vis[c] = true
 	}
-	for _, dropTier := range []int{3, 2, 1} {
+	for _, dropTier := range []int{4, 3, 2, 1} {
 		if fixedWidth(vis, userWidth)+minBarWidth > termWidth {
 			for c := 0; c < colCount; c++ {
 				if multiCols[c].priority == dropTier {

@@ -122,3 +122,19 @@ func TestImplicitDeleteWithCrossStackDependentUsesDrawnOutcome(t *testing.T) {
 		h.DrainPendingCommands(t, model, 30*time.Second)
 	})
 }
+
+// A synchronized outside deletion breaks the path from a root to its
+// grandchild. The agent cannot cascade through that absent intermediate node.
+func TestCascadePlanStopsAtMissingParent(t *testing.T) {
+	model := NewStateModel(1, 10)
+	model.Pool = NewResourcePool(10)
+	model.ApplyCreated(0, []int{0, 2}, "")
+	op := Operation{StackIndex: 0}
+	plan := planCascadeDeletes(&op, model, []int{0})
+	require.Equal(t, []ResourceSlotRef{{0, 0}}, plan.successful)
+	plan.apply(model)
+	require.Equal(t, StateExists, model.Resource(0, 2).State)
+	// An explicitly selected grandchild is still deleted.
+	plan = planCascadeDeletes(&op, model, []int{2})
+	require.Equal(t, []ResourceSlotRef{{0, 2}}, plan.successful)
+}
