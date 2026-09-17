@@ -175,6 +175,29 @@ func TestRenderCommandHeader_Attribution(t *testing.T) {
 		plain := stripANSI(renderCommandHeader(th, base, 120, fixedNow))
 		assert.Equal(t, "✓  cmd-abc123  apply  reconcile  01:30\n", plain)
 	})
+
+	t.Run("message appears below properties and wraps to width", func(t *testing.T) {
+		c := base
+		c.Message = "Add the production bucket and configure access logging"
+		plain := stripANSI(renderCommandHeader(th, c, 32, fixedNow))
+		assert.Contains(t, plain, "Message: Add the production")
+		assert.Contains(t, plain, "bucket and configure access")
+		assert.Contains(t, plain, "logging")
+	})
+}
+
+func TestRenderStatusList_Detailed_HidesInternalAcceptanceAccounting(t *testing.T) {
+	th := theme.New("formae")
+	resp := &apimodel.ListCommandStatusResponse{Commands: []apimodel.Command{{
+		CommandID: "cmd-accept", Command: "apply", Mode: "reconcile", State: "Success",
+		StartTs: fixedNow.Add(-time.Minute), EndTs: fixedNow,
+		Message:         "Keep the externally added tag",
+		ResourceUpdates: []apimodel.ResourceUpdate{{Operation: "accept", State: "Success", ResourceLabel: "storage"}},
+	}}}
+	plain := stripANSI(renderStatusListAt(th, resp, true, 100, fixedNow))
+	assert.Contains(t, plain, "Message: Keep the externally added tag")
+	assert.NotContains(t, plain, "Drift acceptance records")
+	assert.NotContains(t, plain, "provider resource operations")
 }
 
 // TestRenderStatusList_Empty renders an empty response (no commands).

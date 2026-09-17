@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/statuswatch"
@@ -120,5 +121,22 @@ func renderCommandHeader(th *theme.Theme, c apimodel.Command, width int, now tim
 	}
 	parts = append(parts, dimSt.Render(components.FormatDuration(dur)))
 
-	return strings.Join(parts, "  ") + "\n"
+	header := strings.Join(parts, "  ") + "\n"
+	if c.Message != "" {
+		// Keep the detail view readable on narrow terminals while preserving the
+		// complete, user-authored message. Control characters are flattened so
+		// a recorded message cannot alter the terminal layout.
+		message := strings.Map(func(r rune) rune {
+			if r < 0x20 || r == 0x7f {
+				return ' '
+			}
+			return r
+		}, c.Message)
+		if width < 1 {
+			width = 1
+		}
+		wrapped := ansi.Wrap("Message: "+message, width, " \t")
+		header += dimSt.Render(wrapped) + "\n"
+	}
+	return header
 }

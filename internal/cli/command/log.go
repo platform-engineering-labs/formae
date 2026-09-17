@@ -14,7 +14,6 @@ import (
 
 	"github.com/platform-engineering-labs/formae/internal/cli/cmd"
 	"github.com/platform-engineering-labs/formae/internal/cli/printer"
-	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
 	"github.com/platform-engineering-labs/formae/internal/datastore"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	"github.com/spf13/cobra"
@@ -104,9 +103,6 @@ func renderCommandLog(w io.Writer, commands []apimodel.Command, oneline bool) er
 				return fmt.Errorf("invalid recorded inputs for command %s: %w", command.CommandID, err)
 			}
 			fmt.Fprintf(&out, "Input properties: %s\n", pretty.String())
-		}
-		if summary := components.AcceptanceSummary(&command); summary != "" {
-			fmt.Fprintln(&out, summary)
 		}
 		fmt.Fprintf(&out, "Outcome: %s\n\n", logText(command.State))
 	}

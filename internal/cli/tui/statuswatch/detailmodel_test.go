@@ -820,3 +820,29 @@ func TestDetailCard_ElapsedFallsBackToCommandStart(t *testing.T) {
 	v := plain(dm.View(40, false))
 	assert.Contains(t, v, "00:52", "in-progress elapsed should fall back to now − command start when per-resource start is missing")
 }
+
+func TestDetailModel_MessageBelowProperties(t *testing.T) {
+	for _, message := range []string{"", "Create a temporary bucket with a 15-minute expiry", strings.Repeat("Keep the external tag and update the bucket. ", 4)} {
+		c := makeTerminalCmd()
+		c.Message = message
+		r := buildRows([]apimodel.Command{c})[0]
+		d := newDetailModel(theme.New("formae"), 80, 40).SetCommand(c, r, "", time.Now(), nil)
+		out := plain(d.View(40, false))
+		require.Contains(t, out, "\n"+strings.Repeat("─", 80)+"\n", "separator must occupy its own full-width line")
+		require.NotContains(t, plain(d.pinnedHeader), "Message")
+		require.NotContains(t, d.pinnedRow, "\n")
+		if message == "" {
+			require.NotContains(t, out, "Message:")
+		} else {
+			require.Contains(t, out, "\n"+strings.Repeat(" ", 7)+"Message:")
+			start := strings.Index(out, "Message:")
+			require.Greater(t, start, strings.Index(out, c.CommandID))
+			end := strings.Index(out[start:], "─") + start
+			require.Greater(t, end, start)
+			require.Equal(t, strings.Fields("Message: "+message), strings.Fields(out[start:end]))
+			for _, line := range strings.Split(out[start:end], "\n") {
+				require.LessOrEqual(t, lipgloss.Width(line), 80)
+			}
+		}
+	}
+}

@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	tui "github.com/platform-engineering-labs/formae/internal/cli/tui"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
@@ -362,11 +364,6 @@ func (d detailModel) View(height int, showQueryBar bool) string {
 	// and rows in the same order navLines builds them (one nav entry per row), so
 	// a per-row counter matches the nav index without an O(n) lookup per row.
 	navIdx := 0
-	if summary := components.AcceptanceSummary(&d.pinnedSrc.cmd); summary != "" {
-		body.WriteString(summary + "\n")
-		lineCount++
-	}
-
 	for _, g := range d.groups {
 		shown := g.rows
 
@@ -418,7 +415,22 @@ func (d detailModel) View(height int, showQueryBar bool) string {
 	// Viewport height from the detail view's own chrome (a plain two-line header,
 	// the pinned command row + separator, and the footer) — independent of the
 	// multi view's chromeLines, which now includes a taller header banner.
-	vpHeight := height - detailChromeLines
+	messageRow := ""
+	if message := d.pinnedSrc.cmd.Message; message != "" {
+		message = strings.Map(func(r rune) rune {
+			if unicode.IsControl(r) {
+				return ' '
+			}
+			return r
+		}, message)
+		indent := strings.Repeat(" ", 2+multiCols[colStatus].width)
+		label := lipgloss.NewStyle().Foreground(p.TextSecondary).Bold(true).Render("Message:")
+		text := lipgloss.NewStyle().Foreground(p.TextPrimary).Render(message)
+		wrapped := ansi.Wrap(label+" "+text, max(1, w-len(indent)), "")
+		// Keep spacing outside styled text so the separator starts at column zero.
+		messageRow = "\n" + indent + strings.ReplaceAll(wrapped, "\n", "\n"+indent) + "\n\n"
+	}
+	vpHeight := height - detailChromeLines - strings.Count(messageRow, "\n")
 	if showQueryBar {
 		vpHeight -= 2
 	}
@@ -438,7 +450,7 @@ func (d detailModel) View(height int, showQueryBar bool) string {
 	}
 
 	return d.pinnedHeader + "\n" +
-		d.pinnedRow + "\n" +
+		d.pinnedRow + "\n" + messageRow +
 		sep + "\n" +
 		d.vp.View()
 }

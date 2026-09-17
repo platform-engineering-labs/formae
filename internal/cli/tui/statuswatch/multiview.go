@@ -292,6 +292,9 @@ type multiView struct {
 // when hideAge is set.
 func (v multiView) visibleCols() map[int]bool {
 	vis := visibleColumns(v.width, userColWidth(v.rows))
+	if v.pinned {
+		vis[colMessage] = false
+	}
 	if v.hideAge {
 		vis[colAge] = false
 	}
