@@ -126,12 +126,7 @@ func renderCommandHeader(th *theme.Theme, c apimodel.Command, width int, now tim
 		// Keep the detail view readable on narrow terminals while preserving the
 		// complete, user-authored message. Control characters are flattened so
 		// a recorded message cannot alter the terminal layout.
-		message := strings.Map(func(r rune) rune {
-			if r < 0x20 || r == 0x7f {
-				return ' '
-			}
-			return r
-		}, c.Message)
+		message := components.CommandMessageText(c.Message)
 		if width < 1 {
 			width = 1
 		}

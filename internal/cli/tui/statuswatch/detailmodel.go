@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -417,12 +416,7 @@ func (d detailModel) View(height int, showQueryBar bool) string {
 	// multi view's chromeLines, which now includes a taller header banner.
 	messageRow := ""
 	if message := d.pinnedSrc.cmd.Message; message != "" {
-		message = strings.Map(func(r rune) rune {
-			if unicode.IsControl(r) {
-				return ' '
-			}
-			return r
-		}, message)
+		message = components.CommandMessageText(message)
 		indent := strings.Repeat(" ", 2+multiCols[colStatus].width)
 		label := lipgloss.NewStyle().Foreground(p.TextSecondary).Bold(true).Render("Message:")
 		text := lipgloss.NewStyle().Foreground(p.TextPrimary).Render(message)

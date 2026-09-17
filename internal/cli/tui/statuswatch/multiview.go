@@ -12,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/components"
 	"github.com/platform-engineering-labs/formae/internal/cli/tui/theme"
@@ -147,7 +148,8 @@ func buildRows(cmds []apimodel.Command) []row {
 	return rows
 }
 
-// visibleColumns drops priority-3 columns first (User — supplementary
+// visibleColumns drops the optional Message preview (priority 4) first,
+// then priority-3 columns (User — supplementary
 // attribution, never at the cost of operational columns a narrower terminal
 // already showed), then priority-2 (Mode, ◐, ○, Age), then priority-1
 // (Command), until the fixed columns plus the bar floor fit. userWidth is
@@ -246,8 +248,6 @@ func lessRows(a, b row, col int, now time.Time) bool {
 		return a.cmd.CommandID < b.cmd.CommandID
 	case colCommand:
 		return a.cmd.Command < b.cmd.Command
-	case colMessage:
-		return a.cmd.Message < b.cmd.Message
 	case colMode:
 		return a.cmd.Mode < b.cmd.Mode
 	case colUser:
@@ -595,7 +595,8 @@ func (v multiView) renderRows(maxRows int) []string {
 			case colMessage:
 				// Messages are optional and user-authored. Keep the history table
 				// single-line and bounded so a long message cannot widen or wrap it.
-				sb.WriteString(textStyle.Render(pad(components.Truncate(r.cmd.Message, w-1), w)))
+				message := ansi.Truncate(components.CommandMessageText(r.cmd.Message), w-1, "…")
+				sb.WriteString(textStyle.Render(message + strings.Repeat(" ", max(0, w-ansi.StringWidth(message)))))
 			case colMode:
 				sb.WriteString(textStyle.Render(pad(modeLabel(r.cmd), w)))
 			case colUser:

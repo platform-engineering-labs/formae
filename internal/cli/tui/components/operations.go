@@ -7,6 +7,7 @@ package components
 import (
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/charmbracelet/lipgloss"
 
@@ -356,4 +357,14 @@ func AcceptanceSummary(command *apimodel.Command) string {
 	}
 	parts = append(parts, fmt.Sprintf("provider resource operations: %d", provider))
 	return strings.Join(parts, "; ")
+}
+
+// CommandMessageText flattens terminal control characters in recorded intent.
+func CommandMessageText(message string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, message)
 }

@@ -128,7 +128,8 @@ func TestImplicitDeleteWithCrossStackDependentUsesDrawnOutcome(t *testing.T) {
 func TestCascadePlanStopsAtMissingParent(t *testing.T) {
 	model := NewStateModel(1, 10)
 	model.Pool = NewResourcePool(10)
-	model.ApplyCreated(0, []int{0, 2}, "")
+	model.ApplyCreated(0, []int{0, 1, 2}, "")
+	model.ApplyDestroyed(0, []int{1})
 	op := Operation{StackIndex: 0}
 	plan := planCascadeDeletes(&op, model, []int{0})
 	require.Equal(t, []ResourceSlotRef{{0, 0}}, plan.successful)
