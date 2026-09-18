@@ -1,0 +1,6 @@
+open module testOidcBroker.Config
+extends "formae:/Config.pkl"
+class TestOidcBrokerConfig extends BaseOidcCredentialPluginConfig {
+  type = "test-oidc-broker"
+  controlUrl: String
+}

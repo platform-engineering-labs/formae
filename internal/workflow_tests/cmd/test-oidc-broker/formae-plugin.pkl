@@ -1,0 +1,6 @@
+name = "test-oidc-broker"
+type = "oidc-credential"
+version = "0.0.1"
+minFormaeVersion = "0.89.0"
+namespaces { "K8S" }
+output { renderer = new JsonRenderer {} }

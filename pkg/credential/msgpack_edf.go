@@ -24,6 +24,11 @@ func (m *OidcIdentityTokenRequest) UnmarshalEDF(data []byte) error {
 	return decodeMsgpack(data, m)
 }
 
+func (m OidcBoundedIdentityTokenRequest) MarshalEDF(w io.Writer) error { return encodeMsgpack(w, &m) }
+func (m *OidcBoundedIdentityTokenRequest) UnmarshalEDF(data []byte) error {
+	return decodeMsgpack(data, m)
+}
+
 func (m IdentityTokenResponse) MarshalEDF(w io.Writer) error { return encodeMsgpack(w, &m) }
 func (m *IdentityTokenResponse) UnmarshalEDF(data []byte) error {
 	return decodeMsgpack(data, m)
