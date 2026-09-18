@@ -50,6 +50,8 @@ github.com/masterminds/semver v1.5.0 h1:hTxJTTY7tjvnWMrl08O6u3G6BLlKVwxSz01lVac9
 github.com/masterminds/semver v1.5.0/go.mod h1:s7KNT9fnd7edGzwwP7RBX4H0v/CYd5qdOLfkL1V75yg=
 github.com/mitchellh/go-wordwrap v1.0.1 h1:TLuKupo69TCn6TQSyGxwI1EblZZEsQ0vMlAFQflz0v0=
 github.com/mitchellh/go-wordwrap v1.0.1/go.mod h1:R62XHJLzvMFRBbcrT7m7WgmE1eOyTSsCt+hzestvNj0=
+github.com/platform-engineering-labs/formae/pkg/credential v0.1.1-0.20260918154753-1ddaf2b87619 h1:Sl704/HzMDZXJLADGJfLROO85te9eihTiD42EBfKmmQ=
+github.com/platform-engineering-labs/formae/pkg/credential v0.1.1-0.20260918154753-1ddaf2b87619/go.mod h1:VS9hO24cYUcGYao9nfPb41HBfE2hF4WMrIS2fZwRwzM=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 h1:o4JXh1EVt9k/+g42oCprj/FisM4qX9L3sZB3upGN2ZU=
