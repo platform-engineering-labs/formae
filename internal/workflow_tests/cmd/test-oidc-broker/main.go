@@ -44,7 +44,7 @@ func (b *broker) Configure(raw json.RawMessage) error {
 		if err != nil {
 			return errors.New("startup controller unavailable")
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
 			return errors.New("startup controller denied launch")
 		}
@@ -72,7 +72,7 @@ func (b *broker) IdentityToken(ctx context.Context, req *credential.OidcIdentity
 			client := &http.Client{Timeout: 200 * time.Millisecond, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 			response, err := client.Post(b.completionURL, "application/json", bytes.NewReader(body))
 			if err == nil {
-				response.Body.Close()
+				_ = response.Body.Close()
 			}
 		}()
 	}
@@ -85,7 +85,7 @@ func (b *broker) IdentityToken(ctx context.Context, req *credential.OidcIdentity
 	if err != nil {
 		return nil, errors.New("test controller unavailable")
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, errors.New("test controller denied mint")
 	}

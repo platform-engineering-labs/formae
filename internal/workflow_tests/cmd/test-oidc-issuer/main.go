@@ -59,7 +59,7 @@ func main() {
 	public := http.NewServeMux()
 	public.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, r *http.Request) {
 		discovery.Add(1)
-		json.NewEncoder(w).Encode(map[string]any{"issuer": "https://oidc.cloud.formae.ai", "jwks_uri": "https://oidc.cloud.formae.ai/keys", "response_types_supported": []string{"id_token"}, "subject_types_supported": []string{"public"}, "id_token_signing_alg_values_supported": []string{"RS256"}})
+		_ = json.NewEncoder(w).Encode(map[string]any{"issuer": "https://oidc.cloud.formae.ai", "jwks_uri": "https://oidc.cloud.formae.ai/keys", "response_types_supported": []string{"id_token"}, "subject_types_supported": []string{"public"}, "id_token_signing_alg_values_supported": []string{"RS256"}})
 	})
 	public.HandleFunc("/keys", func(w http.ResponseWriter, r *http.Request) {
 		jwks.Add(1)
@@ -69,14 +69,14 @@ func main() {
 			k := key(name)
 			keys = append(keys, map[string]string{"kty": "RSA", "use": "sig", "alg": "RS256", "kid": name, "n": base64.RawURLEncoding.EncodeToString(k.N.Bytes()), "e": "AQAB"})
 		}
-		json.NewEncoder(w).Encode(map[string]any{"keys": keys})
+		_ = json.NewEncoder(w).Encode(map[string]any{"keys": keys})
 	})
 	controller := http.NewServeMux()
 	controller.HandleFunc("/mint", func(w http.ResponseWriter, r *http.Request) {
 		mints.Add(1)
 		c := load()
 		if c.Denied {
-			http.Error(w, "denied", 403)
+			http.Error(w, "denied", http.StatusForbidden)
 			return
 		}
 		var request struct{ Audience string }
@@ -100,10 +100,10 @@ func main() {
 			http.Error(w, "sign failed", 500)
 			return
 		}
-		json.NewEncoder(w).Encode(map[string]any{"Token": unsigned + "." + base64.RawURLEncoding.EncodeToString(sig), "ExpiresAt": expiry})
+		_ = json.NewEncoder(w).Encode(map[string]any{"Token": unsigned + "." + base64.RawURLEncoding.EncodeToString(sig), "ExpiresAt": expiry})
 	})
 	controller.HandleFunc("/counts", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]int64{"discovery": discovery.Load(), "jwks": jwks.Load(), "mints": mints.Load()})
+		_ = json.NewEncoder(w).Encode(map[string]int64{"discovery": discovery.Load(), "jwks": jwks.Load(), "mints": mints.Load()})
 	})
 	go func() { log.Fatal(http.ListenAndServe(":8080", controller)) }()
 	fmt.Println("local issuer ready")
