@@ -137,3 +137,41 @@ func TestCtxSource_TransportFailureNamesTheNamespace(t *testing.T) {
 	require.ErrorIs(t, err, callErr)
 	assert.Contains(t, err.Error(), "AWS")
 }
+
+func TestCtxSource_CanceledWaiterNeverMintsAndLaterCallSucceeds(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	calls := 0
+	c := &oidcBrokerClient{namespace: "K8S", call: func(credential.OidcIdentityTokenRequest) (credential.IdentityTokenResponse, error) {
+		calls++
+		if calls == 1 {
+			close(entered)
+			<-release
+		}
+		return credential.IdentityTokenResponse{Result: &credential.OidcIdentityTokenResult{Token: "jwt", ExpiresAt: time.Now().Add(time.Hour)}}, nil
+	}}
+	ctx := withOidcBrokerClient(context.Background(), c)
+	source := NewOidcTokenSource()
+	first := make(chan error, 1)
+	go func() { _, err := source.IdentityToken(ctx, "audience"); first <- err }()
+	<-entered
+	canceled, cancel := context.WithCancel(ctx)
+	waiter := make(chan error, 1)
+	go func() { _, err := source.IdentityToken(canceled, "audience"); waiter <- err }()
+	cancel()
+	select {
+	case err := <-waiter:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		close(release)
+		<-first
+		t.Fatal("canceled waiter remained blocked behind in-flight mint")
+	}
+	close(release)
+	require.NoError(t, <-first)
+	_, err := source.IdentityToken(ctx, "audience")
+	require.NoError(t, err)
+	require.Equal(t, 2, calls)
+	_, err = source.IdentityToken(canceled, "audience")
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, 2, calls)
+}

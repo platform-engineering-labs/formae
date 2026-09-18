@@ -8,7 +8,10 @@ package plugin
 
 import (
 	"context"
+	"fmt"
+	"github.com/platform-engineering-labs/formae/pkg/credential"
 	"testing"
+	"time"
 
 	"ergo.services/ergo/gen"
 	"github.com/stretchr/testify/assert"
@@ -33,8 +36,13 @@ func operatorEnvWithBroker(extra map[gen.Env]any) map[gen.Env]any {
 func TestOperatorInit_PairedBrokerReachesEveryCallPath(t *testing.T) {
 	operator := &PluginOperator{}
 	proc := newOperatorProcess(operatorEnvWithBroker(map[gen.Env]any{
-		"OidcCredentialBrokerNode": "fai@localhost",
-		"OidcCredentialBrokerName": "oidc_credential_server",
+		"OidcCredentialBrokerNode":      "fai@localhost",
+		"OidcCredentialBrokerName":      "oidc_credential_server",
+		"OidcOperationBindingID":        "opaque-binding",
+		"OidcOperationPollInterval":     7 * time.Second,
+		"OidcOperationCallTimeout":      60 * time.Second,
+		"OidcOperationRetryDelay":       11 * time.Second,
+		"OidcOperationThrottleMaxDelay": 30 * time.Second,
 	}), nil)
 	proc.behavior = operator
 
@@ -69,6 +77,9 @@ func TestOperatorInit_PairedBrokerReachesEveryCallPath(t *testing.T) {
 	} {
 		_, ok := oidcBrokerClientFrom(plugin.contextFor(t, operation))
 		assert.True(t, ok, "the %s call context must carry the broker client", operation)
+		info, ok := OidcOperationMetadata(plugin.contextFor(t, operation))
+		require.True(t, ok)
+		assert.Equal(t, OidcOperationInfo{"opaque-binding", 7 * time.Second, 60 * time.Second, 11 * time.Second, 30 * time.Second}, info)
 	}
 }
 
@@ -139,4 +150,70 @@ func TestOperatorInit_UnusableBrokerPairFailsInit(t *testing.T) {
 			assert.Contains(t, err.Error(), "oidc-credential broker")
 		})
 	}
+}
+
+func TestOperatorMetadata_RequiresCompleteProcessEnv(t *testing.T) {
+	valid := map[gen.Env]any{
+		"OidcOperationBindingID": "opaque-binding", "OidcOperationPollInterval": 7 * time.Second,
+		"OidcOperationCallTimeout": 60 * time.Second, "OidcOperationRetryDelay": 0 * time.Second,
+		"OidcOperationThrottleMaxDelay": 30 * time.Second,
+	}
+	for _, key := range []gen.Env{"OidcOperationBindingID", "OidcOperationPollInterval", "OidcOperationCallTimeout", "OidcOperationRetryDelay", "OidcOperationThrottleMaxDelay"} {
+		invalid := []any{nil, "wrong type", -time.Second}
+		if key == "OidcOperationCallTimeout" {
+			invalid = append(invalid, time.Duration(0))
+		}
+		for i, bad := range invalid {
+			t.Run(fmt.Sprintf("%s-invalid-%d", key, i), func(t *testing.T) {
+				env := map[gen.Env]any{"OidcCredentialBrokerNode": "broker@localhost", "OidcCredentialBrokerName": "broker"}
+				for k, v := range valid {
+					if !(bad == nil && k == key) {
+						env[k] = v
+					}
+				}
+				if bad != nil {
+					if key == "OidcOperationBindingID" && i == 1 {
+						env[key] = ""
+					} else {
+						env[key] = bad
+					}
+				}
+				// Node environment must never repair missing or malformed process metadata.
+				o := &PluginOperator{}
+				p := newOperatorProcess(operatorEnvWithBroker(env), valid)
+				p.behavior = o
+				require.NoError(t, o.ProcessInit(p))
+				_, ok := OidcOperationMetadata(o.Data().context)
+				require.False(t, ok)
+				_, ok = oidcBrokerClientFrom(o.Data().context)
+				require.True(t, ok, "ordinary OIDC remains available")
+			})
+		}
+	}
+	for _, env := range []map[gen.Env]any{nil, valid} {
+		o := &PluginOperator{}
+		p := newOperatorProcess(operatorEnvWithBroker(env), valid)
+		p.behavior = o
+		require.NoError(t, o.ProcessInit(p))
+		_, ok := OidcOperationMetadata(o.Data().context)
+		require.False(t, ok, "metadata requires pairing and process env")
+	}
+	_, ok := OidcOperationMetadata(context.WithValue(context.Background(), "OidcOperationBindingID", "forged"))
+	require.False(t, ok)
+}
+
+func TestOperatorMetadata_OlderAgentStillMints(t *testing.T) {
+	o := &PluginOperator{}
+	proc := newOperatorProcess(operatorEnvWithBroker(map[gen.Env]any{"OidcCredentialBrokerNode": "broker@localhost", "OidcCredentialBrokerName": "broker"}), nil)
+	proc.behavior = o
+	require.NoError(t, o.ProcessInit(proc))
+	_, ok := OidcOperationMetadata(o.Data().context)
+	require.False(t, ok)
+	client, ok := oidcBrokerClientFrom(o.Data().context)
+	require.True(t, ok)
+	client.call = func(credential.OidcIdentityTokenRequest) (credential.IdentityTokenResponse, error) {
+		return credential.IdentityTokenResponse{Result: &credential.OidcIdentityTokenResult{Token: "jwt", ExpiresAt: time.Now().Add(time.Minute)}}, nil
+	}
+	_, err := NewOidcTokenSource().IdentityToken(o.Data().context, "audience")
+	require.NoError(t, err)
 }

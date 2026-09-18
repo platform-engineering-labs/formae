@@ -208,7 +208,7 @@ const (
 // PluginOperationCallTimeout is the maximum time (in seconds) to wait for a
 // plugin operator to respond to a resource operation. Exposed as a variable so
 // tests can reduce it.
-var PluginOperationCallTimeout = 60
+var PluginOperationCallTimeout = int(plugin.OperationCallTimeout / time.Second)
 
 // PluginCallAllowance is how long a single plugin call may take before the
 // watchdog stops treating an operator's silence as work in progress. Nothing
@@ -216,7 +216,7 @@ var PluginOperationCallTimeout = 60
 // process, so this is the silence the agent tolerates, not a bound on the call.
 // It matches the outer call timeout above, which is the longest the updater
 // itself waits for a reply. Exposed as a variable so tests can reduce it.
-var PluginCallAllowance = 60 * time.Second
+var PluginCallAllowance = plugin.OperationCallTimeout
 
 type ResourceUpdateData struct {
 	resourceUpdate  *ResourceUpdate

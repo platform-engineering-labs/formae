@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"ergo.services/ergo/act"
@@ -21,6 +22,10 @@ const ServerActorName = "oidc_credential_server"
 // requestTimeout bounds how long the server waits for the plugin to answer
 // an IdentityToken call before giving up on it.
 const requestTimeout = 10 * time.Second
+
+// The ref's Unix-second deadline is already rounded down by Ergo. Leave an
+// additional response margin before the caller's fixed synchronous wait ends.
+const boundedResponseMargin = 250 * time.Millisecond
 
 // CredentialActor serves IdentityToken requests over Ergo's synchronous
 // call. Request and response are the registered wire types themselves
@@ -72,6 +77,31 @@ func (a *CredentialActor) HandleCall(from gen.PID, ref gen.Ref, request any) (an
 	switch req := request.(type) {
 	case OidcIdentityTokenRequest:
 		return handle(context.Background(), a.plugin, req, requestTimeout, a.log), nil
+	case OidcBoundedIdentityTokenRequest:
+		seconds := ref.Deadline()
+		if seconds == 0 || seconds > math.MaxInt64 {
+			return IdentityTokenResponse{ErrorCode: ErrCodeInternal}, nil
+		}
+		deadline := time.Unix(int64(seconds), 0).Add(-boundedResponseMargin)
+		if !time.Now().Before(deadline) {
+			return IdentityTokenResponse{ErrorCode: ErrCodeInternal}, nil
+		}
+		if maximum := time.Now().Add(requestTimeout); deadline.After(maximum) {
+			deadline = maximum
+		}
+		ctx, cancel := context.WithDeadline(context.Background(), deadline)
+		defer cancel()
+		if ctx.Err() != nil {
+			return IdentityTokenResponse{ErrorCode: ErrCodeInternal}, nil
+		}
+		// The bounded path must not reply while the credential method is still
+		// unwinding. Plugins must honor the supplied context; synchronous
+		// invocation orders the response after their cooperative completion.
+		result, err := a.plugin.IdentityToken(ctx, &req.Request)
+		if ctx.Err() != nil {
+			return IdentityTokenResponse{ErrorCode: ErrCodeInternal}, nil
+		}
+		return identityTokenResponse(req.Request, result, err, a.log), nil
 
 	default:
 		return nil, fmt.Errorf("unknown request: %T", request)
@@ -106,7 +136,10 @@ type errorLogger interface {
 // string to the caller.
 func handle(ctx context.Context, plugin OidcCredentialPlugin, req OidcIdentityTokenRequest, timeout time.Duration, log errorLogger) IdentityTokenResponse {
 	result, err := callWithTimeout(ctx, plugin, &req, timeout)
+	return identityTokenResponse(req, result, err, log)
+}
 
+func identityTokenResponse(req OidcIdentityTokenRequest, result *OidcIdentityTokenResult, err error, log errorLogger) IdentityTokenResponse {
 	switch {
 	case err != nil:
 		code := ErrCodeMintFailed

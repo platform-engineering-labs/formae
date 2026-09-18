@@ -6,6 +6,8 @@ package plugin_coordinator
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -21,6 +23,7 @@ import (
 	"github.com/platform-engineering-labs/formae/pkg/credential"
 	"github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/platform-engineering-labs/formae/pkg/plugin"
+	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 )
 
 // PluginCoordinator maintains a registry of all available resource plugins (local and remote).
@@ -39,12 +42,14 @@ type PluginCoordinator struct {
 	// oidcCredentialBrokers pairs an oidc-credential broker to every
 	// namespace it serves, keyed by strings.ToUpper(namespace).
 	oidcCredentialBrokers map[string]*RegisteredOidcBroker
+	oidcLaunches          map[string]messages.RegisterOidcCredentialLaunch
 }
 
 // RegisteredOidcBroker is the oidc-credential broker paired to a namespace:
 // the process a PluginOperator for that namespace should call into for
 // identity tokens.
 type RegisteredOidcBroker struct {
+	BindingID    string
 	Name         string
 	NodeName     gen.Atom
 	SpawnToken   string
@@ -158,6 +163,7 @@ func (c *PluginCoordinator) Init(args ...any) error {
 	c.plugins = make(map[string]*RegisteredPlugin)
 	c.registeredLocalNamespaces = make(map[string]bool)
 	c.oidcCredentialBrokers = make(map[string]*RegisteredOidcBroker)
+	c.oidcLaunches = make(map[string]messages.RegisterOidcCredentialLaunch)
 
 	// Test-only: check for directly injected test plugin (e.g. FakeAWS for workflow tests)
 	if tp, ok := c.Env("TestResourcePlugin"); ok {
@@ -287,6 +293,19 @@ func (c *PluginCoordinator) HandleMessage(from gen.PID, message any) error {
 			c.Log().Debug("Plugin unregistered: namespace=%s reason=%s", msg.Namespace, msg.Reason)
 		}
 
+	case messages.RegisterOidcCredentialLaunch:
+		supervisor, err := c.Node().ProcessPID("PluginProcessSupervisor")
+		if err != nil || from != supervisor || msg.SpawnToken == "" || msg.Name == "" || msg.Version == "" || msg.NodeName == "" || msg.ConfigIdentity == "" {
+			c.Log().Error("Rejected untrusted or incomplete oidc-credential launch registration")
+			break
+		}
+		for token, launch := range c.oidcLaunches {
+			if launch.Name == msg.Name {
+				delete(c.oidcLaunches, token)
+			}
+		}
+		c.oidcLaunches[msg.SpawnToken] = msg
+
 	case messages.OidcCredentialPluginAnnouncement:
 		c.handleOidcCredentialAnnouncement(from, msg)
 
@@ -326,7 +345,14 @@ func (c *PluginCoordinator) handleOidcCredentialAnnouncement(from gen.PID, msg m
 			continue
 		}
 
+		bindingID := ""
+		if launch, ok := c.oidcLaunches[msg.SpawnToken]; ok && launch.Name == msg.Name && launch.NodeName == from.Node && slices.Contains(launch.Namespaces, key) {
+			// Length-delimited JSON avoids ambiguities between identity fields.
+			identity, _ := json.Marshal([]string{key, launch.Name, launch.Version, launch.ConfigIdentity})
+			bindingID = fmt.Sprintf("%x", sha256.Sum256(identity))
+		}
 		c.oidcCredentialBrokers[key] = &RegisteredOidcBroker{
+			BindingID:    bindingID,
 			Name:         msg.Name,
 			NodeName:     from.Node,
 			SpawnToken:   msg.SpawnToken,
@@ -347,6 +373,7 @@ func (c *PluginCoordinator) handleOidcCredentialAnnouncement(from gen.PID, msg m
 // stored SpawnToken equals msg.SpawnToken. A stale token (superseded by a
 // later announcement) matches nothing and is a no-op.
 func (c *PluginCoordinator) handleUnregisterOidcCredentialPlugin(msg messages.UnregisterOidcCredentialPlugin) {
+	delete(c.oidcLaunches, msg.SpawnToken)
 	for namespace, broker := range c.oidcCredentialBrokers {
 		if broker.SpawnToken == msg.SpawnToken {
 			delete(c.oidcCredentialBrokers, namespace)
@@ -429,6 +456,15 @@ func (c *PluginCoordinator) pluginOperatorEnv(retryConfig model.RetryConfig, req
 	if broker, ok := c.oidcBrokerFor(namespace); ok {
 		env[gen.Env("OidcCredentialBrokerNode")] = string(broker.NodeName)
 		env[gen.Env("OidcCredentialBrokerName")] = credential.ServerActorName
+		if broker.BindingID != "" {
+			// Only old-SDK EDF types cross the process boundary. The SDK
+			// assembles its operation info privately from these values.
+			env["OidcOperationBindingID"] = broker.BindingID
+			env["OidcOperationPollInterval"] = retryConfig.StatusCheckInterval
+			env["OidcOperationCallTimeout"] = plugin.OperationCallTimeout
+			env["OidcOperationRetryDelay"] = retryConfig.RetryDelay
+			env["OidcOperationThrottleMaxDelay"] = resource.DefaultMaxBackoff
+		}
 	}
 
 	return env
