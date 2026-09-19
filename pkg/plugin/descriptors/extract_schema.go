@@ -356,7 +356,19 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer out.Close()
-	_, err = io.Copy(out, in)
+	return copyAndClose(out, in)
+}
+
+// copyAndClose copies src into dst and closes dst, returning the copy error
+// if one occurred. A failing flush on Close (e.g. ENOSPC) is otherwise
+// silently discarded, which would let a truncated file report success, so
+// the close error is returned when the copy itself succeeded.
+func copyAndClose(dst io.WriteCloser, src io.Reader) (err error) {
+	defer func() {
+		if closeErr := dst.Close(); err == nil {
+			err = closeErr
+		}
+	}()
+	_, err = io.Copy(dst, src)
 	return err
 }
