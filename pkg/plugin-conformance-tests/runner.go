@@ -1604,7 +1604,7 @@ func runCRUDTest(t *testing.T, tc TestCase, rc *ResultCollector, sweep *provider
 		if err != nil {
 			rc.CRUDFatalf(t, idx, PhaseExtract, "Failed to create temp directory for extraction: %v", err)
 		}
-		defer os.RemoveAll(extractDir)
+		defer func() { _ = os.RemoveAll(extractDir) }()
 		t.Logf("Created extract directory: %s", extractDir)
 
 		// Extract the resource

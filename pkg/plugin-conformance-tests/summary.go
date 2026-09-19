@@ -17,7 +17,7 @@ import (
 type StepStatus int
 
 const (
-	StepNotRun  StepStatus = iota
+	StepNotRun StepStatus = iota
 	StepPassed
 	StepFailed
 	StepSkipped
@@ -27,7 +27,7 @@ const (
 type CRUDPhase int
 
 const (
-	PhaseCreate  CRUDPhase = iota
+	PhaseCreate CRUDPhase = iota
 	PhaseVerify
 	PhaseExtract
 	PhaseSync
@@ -69,12 +69,12 @@ func (p CRUDPhase) String() string {
 type DiscoveryPhase int
 
 const (
-	PhaseCreateOOB      DiscoveryPhase = iota
+	PhaseCreateOOB DiscoveryPhase = iota
 	PhaseRegister
 	PhaseDiscover
 	PhaseDiscoveryVerify
 	discoveryPhaseSentinel // used to count the number of discovery phases
-)	
+)
 
 // discoveryPhaseCount is the total number of discovery phases, derived from the sentinel
 const discoveryPhaseCount = int(discoveryPhaseSentinel)
@@ -323,13 +323,6 @@ func (rc *ResultCollector) crudCounts() (passed, failed, skipped int) {
 	return countResults(rc.crudResults, numCRUDPhases)
 }
 
-// discoveryCounts returns resource-level counts: passed, failed, skipped.
-func (rc *ResultCollector) discoveryCounts() (passed, failed, skipped int) {
-	rc.mu.Lock()
-	defer rc.mu.Unlock()
-	return countResults(rc.discoveryResults, discoveryPhaseCount)
-}
-
 // statusMarker returns the display string for a StepStatus.
 func statusMarker(s StepStatus) string {
 	switch s {
@@ -350,9 +343,9 @@ func (rc *ResultCollector) renderSummary(w io.Writer) {
 	defer rc.mu.Unlock()
 
 	banner := "================================================================================"
-	fmt.Fprintf(w, "%s\n", banner)
-	fmt.Fprintf(w, "%s\n", "                        CONFORMANCE TEST RESULTS")
-	fmt.Fprintf(w, "%s\n\n", banner)
+	_, _ = fmt.Fprintf(w, "%s\n", banner)
+	_, _ = fmt.Fprintf(w, "%s\n", "                        CONFORMANCE TEST RESULTS")
+	_, _ = fmt.Fprintf(w, "%s\n\n", banner)
 
 	// CRUD section
 	if len(rc.crudResults) > 0 {
@@ -365,21 +358,21 @@ func (rc *ResultCollector) renderSummary(w io.Writer) {
 			}
 		}
 
-		fmt.Fprintf(w, "CRUD Tests:\n")
-		fmt.Fprintf(w, "%-*s", nameWidth+2, "Resource")
+		_, _ = fmt.Fprintf(w, "CRUD Tests:\n")
+		_, _ = fmt.Fprintf(w, "%-*s", nameWidth+2, "Resource")
 		for _, h := range crudHeaders {
-			fmt.Fprintf(w, "  %-8s", h)
+			_, _ = fmt.Fprintf(w, "  %-8s", h)
 		}
-		fmt.Fprintf(w, "  Duration\n")
+		_, _ = fmt.Fprintf(w, "  Duration\n")
 
 		for _, r := range rc.crudResults {
-			fmt.Fprintf(w, "%-*s", nameWidth+2, r.Name)
+			_, _ = fmt.Fprintf(w, "%-*s", nameWidth+2, r.Name)
 			for i := 0; i < numCRUDPhases; i++ {
-				fmt.Fprintf(w, "  %-8s", statusMarker(r.Phases[i]))
+				_, _ = fmt.Fprintf(w, "  %-8s", statusMarker(r.Phases[i]))
 			}
-			fmt.Fprintf(w, "  %s\n", formatDuration(r.Duration))
+			_, _ = fmt.Fprintf(w, "  %s\n", formatDuration(r.Duration))
 		}
-		fmt.Fprintln(w)
+		_, _ = fmt.Fprintln(w)
 	}
 
 	// Discovery section
@@ -393,25 +386,25 @@ func (rc *ResultCollector) renderSummary(w io.Writer) {
 			}
 		}
 
-		fmt.Fprintf(w, "Discovery Tests:\n")
-		fmt.Fprintf(w, "%-*s", nameWidth+2, "Resource")
+		_, _ = fmt.Fprintf(w, "Discovery Tests:\n")
+		_, _ = fmt.Fprintf(w, "%-*s", nameWidth+2, "Resource")
 		for _, h := range discHeaders {
-			fmt.Fprintf(w, "  %-10s", h)
+			_, _ = fmt.Fprintf(w, "  %-10s", h)
 		}
-		fmt.Fprintf(w, "  Duration\n")
+		_, _ = fmt.Fprintf(w, "  Duration\n")
 
 		for _, r := range rc.discoveryResults {
-			fmt.Fprintf(w, "%-*s", nameWidth+2, r.Name)
+			_, _ = fmt.Fprintf(w, "%-*s", nameWidth+2, r.Name)
 			for i := 0; i < discoveryPhaseCount; i++ {
-				fmt.Fprintf(w, "  %-10s", statusMarker(r.Phases[i]))
+				_, _ = fmt.Fprintf(w, "  %-10s", statusMarker(r.Phases[i]))
 			}
-			fmt.Fprintf(w, "  %s\n", formatDuration(r.Duration))
+			_, _ = fmt.Fprintf(w, "  %s\n", formatDuration(r.Duration))
 		}
-		fmt.Fprintln(w)
+		_, _ = fmt.Fprintln(w)
 	}
 
 	// Legend
-	fmt.Fprintf(w, "Legend: [+] passed  [X] FAILED  [-] not run  [~] skipped\n\n")
+	_, _ = fmt.Fprintf(w, "Legend: [+] passed  [X] FAILED  [-] not run  [~] skipped\n\n")
 
 	// Failure details
 	allResults := make([]TestResult, 0, len(rc.crudResults)+len(rc.discoveryResults))
@@ -427,17 +420,17 @@ func (rc *ResultCollector) renderSummary(w io.Writer) {
 	}
 
 	if hasErrors {
-		fmt.Fprintf(w, "Failure Details:\n")
+		_, _ = fmt.Fprintf(w, "Failure Details:\n")
 		for _, r := range allResults {
 			if len(r.Errors) == 0 {
 				continue
 			}
-			fmt.Fprintf(w, "  %s\n", r.Name)
+			_, _ = fmt.Fprintf(w, "  %s\n", r.Name)
 			for _, e := range r.Errors {
-				fmt.Fprintf(w, "    [%s] %s\n", e.Phase, e.Msg)
+				_, _ = fmt.Fprintf(w, "    [%s] %s\n", e.Phase, e.Msg)
 			}
 		}
-		fmt.Fprintln(w)
+		_, _ = fmt.Fprintln(w)
 	}
 
 	// Summary line — count CRUD and discovery results separately to avoid
@@ -454,8 +447,8 @@ func (rc *ResultCollector) renderSummary(w io.Writer) {
 
 	mins := int(totalDuration.Minutes())
 	secs := int(totalDuration.Seconds()) % 60
-	fmt.Fprintf(w, "%d passed, %d failed, %d skipped (%dm %02ds)\n", totalPassed, totalFailed, totalSkipped, mins, secs)
-	fmt.Fprintf(w, "%s\n", banner)
+	_, _ = fmt.Fprintf(w, "%d passed, %d failed, %d skipped (%dm %02ds)\n", totalPassed, totalFailed, totalSkipped, mins, secs)
+	_, _ = fmt.Fprintf(w, "%s\n", banner)
 }
 
 // formatDuration formats a duration as "Xm XXs".
