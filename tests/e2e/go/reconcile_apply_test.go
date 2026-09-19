@@ -254,4 +254,3 @@ func testReconcileApplyAzure(t *testing.T, cli *FormaeCLI) {
 	// Step 9: Verify the resource group is actually gone in Azure.
 	verifyAzureResourceGroupDeleted(t, subscriptionID, "formae-e2e-reconcile-rg")
 }
-

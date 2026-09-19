@@ -19,10 +19,10 @@ import (
 
 // TestPluginConfig verifies the full per-plugin configuration flow:
 //
-// 1. Typed PKL config with plugin import → agent translation → coordinator merge
-// 2. Base-class overrides (rate limit, resourceTypesToDiscover) visible in stats API
-// 3. Plugin-specific custom fields (defaultTimeoutSeconds, defaultFilePermissions)
-//    reach the plugin binary via the Configurable interface
+//  1. Typed PKL config with plugin import → agent translation → coordinator merge
+//  2. Base-class overrides (rate limit, resourceTypesToDiscover) visible in stats API
+//  3. Plugin-specific custom fields (defaultTimeoutSeconds, defaultFilePermissions)
+//     reach the plugin binary via the Configurable interface
 func TestPluginConfig(t *testing.T) {
 	bin := FormaeBinary(t)
 
@@ -73,7 +73,7 @@ func TestPluginConfig(t *testing.T) {
 			Namespace               string   `json:"Namespace"`
 			MaxRequestsPerSecond    int      `json:"MaxRequestsPerSecond"`
 			ResourceTypesToDiscover []string `json:"ResourceTypesToDiscover"`
-			LabelConfig *struct {
+			LabelConfig             *struct {
 				DefaultQuery string `json:"DefaultQuery"`
 			} `json:"LabelConfig"`
 			DiscoveryFilters []struct {
