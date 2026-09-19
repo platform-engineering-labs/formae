@@ -24,6 +24,8 @@ current_test_failed=0
 script_stdout=""
 script_stderr=""
 script_status=0
+make_output=""
+make_status=0
 
 # ── 1. Assertions ───────────────────────────────────────────────────────────
 fail() {
@@ -45,6 +47,22 @@ assert_status_nonzero() {
   local description="$1"
   if [[ "$script_status" == "0" ]]; then
     fail "$description (want a non-zero exit status, got 0)"
+  fi
+}
+
+# assert_make_status_nonzero <description>
+assert_make_status_nonzero() {
+  local description="$1"
+  if [[ "$make_status" == "0" ]]; then
+    fail "$description (want a non-zero exit status, got 0)"
+  fi
+}
+
+# assert_make_output_lacks_line <line> <description>
+assert_make_output_lacks_line() {
+  local line="$1" description="$2"
+  if grep -qxF "$line" <<< "$make_output"; then
+    fail "$description (found a line equal to '$line')"
   fi
 }
 
@@ -336,6 +354,61 @@ test_linter_workflow_has_no_hand_written_module_list() {
   done < <(real_module_paths)
 }
 
+# ── 3c. `make lint` versus a broken enumeration ─────────────────────────────
+# The lint recipe reads the enumeration into a temp file with a plain `;`
+# rather than `&&`, so a naive recipe keeps going even when the enumeration
+# fails or comes back empty, reports zero failures, and prints its success
+# line having linted nothing. These run the real recipe against a stubbed
+# scripts/go_modules.sh, so no Go toolchain or golangci-lint install is
+# needed: with a stub that fails or prints nothing, the recipe never reaches
+# the point of invoking golangci-lint at all.
+
+# make_lint_fixture <go-modules-sh-body>: creates a throwaway directory
+# holding the Makefile under test and a stub scripts/go_modules.sh with the
+# given body, and prints the directory's path.
+make_lint_fixture() {
+  local stub_body="$1" repo
+  repo=$(mktemp -d "$TMP_ROOT/lint.XXXXXX")
+  cp "$MAKEFILE" "$repo/Makefile"
+  echo "v0.0.0" > "$repo/.golangci-version"
+  mkdir -p "$repo/scripts"
+  {
+    echo "#!/usr/bin/env bash"
+    echo "$stub_body"
+  } > "$repo/scripts/go_modules.sh"
+  chmod +x "$repo/scripts/go_modules.sh"
+  echo "$repo"
+}
+
+# run_lint <repo>: runs the lint target in the fixture repo, capturing its
+# combined output and exit status.
+run_lint() {
+  local repo="$1"
+  make_output=""
+  make_status=0
+  make_output=$(make -C "$repo" lint 2>&1) || make_status=$?
+}
+
+test_lint_aborts_when_enumeration_fails() {
+  local repo
+  repo=$(make_lint_fixture 'echo "boom" >&2; exit 1')
+  run_lint "$repo"
+  assert_make_status_nonzero \
+    "make lint must fail when scripts/go_modules.sh fails"
+  assert_make_output_lacks_line "Linting completed successfully." \
+    "a failed enumeration must not print the success line"
+}
+
+test_lint_aborts_when_enumeration_is_empty() {
+  local repo
+  repo=$(make_lint_fixture 'true')
+  run_lint "$repo"
+  assert_make_status_nonzero \
+    "make lint must fail when scripts/go_modules.sh reports no modules"
+  assert_make_output_lacks_line "Linting completed successfully." \
+    "an empty enumeration must not print the success line"
+}
+
 # ── 4. Runner ───────────────────────────────────────────────────────────────
 run_test() {
   local test_name="$1"
@@ -366,6 +439,8 @@ main() {
   run_test test_linter_workflow_calls_the_enumeration_script
   run_test test_make_lint_recipe_has_no_hand_written_module_list
   run_test test_linter_workflow_has_no_hand_written_module_list
+  run_test test_lint_aborts_when_enumeration_fails
+  run_test test_lint_aborts_when_enumeration_is_empty
 
   echo ""
   if [[ "$tests_failed" -gt 0 ]]; then

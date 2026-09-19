@@ -392,7 +392,14 @@ lint:
 	fi; \
 	tmp=$$(mktemp); \
 	trap 'rm -f "$$tmp"' EXIT; \
-	scripts/go_modules.sh > "$$tmp"; \
+	if ! scripts/go_modules.sh > "$$tmp"; then \
+		echo "error: scripts/go_modules.sh failed to enumerate Go modules" >&2; \
+		exit 1; \
+	fi; \
+	if [ ! -s "$$tmp" ]; then \
+		echo "error: scripts/go_modules.sh enumerated no Go modules" >&2; \
+		exit 1; \
+	fi; \
 	status=0; \
 	while IFS= read -r module; do \
 		echo "Linting $$module"; \
