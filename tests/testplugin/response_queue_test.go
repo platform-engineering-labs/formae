@@ -428,9 +428,9 @@ func TestResponseQueue_MultiStepSequence(t *testing.T) {
 			MatchKey:  "multi-step",
 			Operation: "Create",
 			Steps: []testcontrol.ResponseStep{
-				{ErrorCode: "Throttling"},  // 1st call: error
-				{ErrorCode: "Throttling"},  // 2nd call: error
-				{ErrorCode: ""},            // 3rd call: success
+				{ErrorCode: "Throttling"}, // 1st call: error
+				{ErrorCode: "Throttling"}, // 2nd call: error
+				{ErrorCode: ""},           // 3rd call: success
 			},
 		},
 	})

@@ -87,16 +87,16 @@ func main() {
 
 	// Set environment for PluginActor, TestController, and remotely spawned PluginOperators
 	options.Env = map[gen.Env]any{
-		gen.Env("Context"):        context.Background(),
-		gen.Env("Plugin"):         plugin.FullResourcePlugin(p),
-		gen.Env("Namespace"):      p.Namespace(),
-		gen.Env("AgentNode"):      gen.Atom(agentNode),
-		gen.Env("CloudState"):     cs,
-		gen.Env("InjectionState"): inj,
-		gen.Env("OperationLog"):   ol,
-		gen.Env("ResponseQueue"):  rq,
-		gen.Env("Gate"):             gate,
-		gen.Env("NativeIDCounter"):  &p.nativeIDCounter,
+		gen.Env("Context"):         context.Background(),
+		gen.Env("Plugin"):          plugin.FullResourcePlugin(p),
+		gen.Env("Namespace"):       p.Namespace(),
+		gen.Env("AgentNode"):       gen.Atom(agentNode),
+		gen.Env("CloudState"):      cs,
+		gen.Env("InjectionState"):  inj,
+		gen.Env("OperationLog"):    ol,
+		gen.Env("ResponseQueue"):   rq,
+		gen.Env("Gate"):            gate,
+		gen.Env("NativeIDCounter"): &p.nativeIDCounter,
 		gen.Env("RetryConfig"): model.RetryConfig{
 			StatusCheckInterval: 5 * time.Second,
 			MaxRetries:          3,
