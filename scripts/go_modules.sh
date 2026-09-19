@@ -11,6 +11,14 @@ set -euo pipefail
 
 REPO_ROOT=$(git rev-parse --show-toplevel)
 
+# Holds the NUL-delimited listing so it can be read with a plain redirect: a
+# process substitution would let a failure of the command feeding it pass
+# unnoticed under `pipefail`.
+tmp=$(mktemp)
+trap 'rm -f "$tmp"' EXIT
+
+git -C "$REPO_ROOT" ls-files -z -- ':(glob)go.mod' ':(glob)**/go.mod' > "$tmp"
+
 while IFS= read -r -d '' go_mod; do
   dir="${go_mod%/go.mod}"
   if [[ "$dir" == "go.mod" ]]; then
@@ -25,5 +33,5 @@ while IFS= read -r -d '' go_mod; do
   esac
 
   printf '%s\n' "$dir"
-done < <(git -C "$REPO_ROOT" ls-files -z -- ':(glob)go.mod' ':(glob)**/go.mod') \
+done < "$tmp" \
   | LC_ALL=C sort -u

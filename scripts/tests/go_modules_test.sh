@@ -257,6 +257,21 @@ test_outside_a_git_repository_fails_cleanly() {
   assert_stderr_nonempty "a failed run must explain itself on stderr"
 }
 
+# A corrupted index makes `git ls-files` itself fail; the script must not
+# mistake that failure for "no modules" and report an empty list with a
+# zero exit status.
+test_a_corrupted_index_aborts_instead_of_reporting_an_empty_list() {
+  local repo
+  repo=$(make_fixture_repo)
+  add_module "$repo" "pkg/a"
+  head -c 64 /dev/urandom > "$repo/.git/index"
+
+  run_script "$repo"
+  assert_status_nonzero \
+    "a corrupted index must abort rather than report an empty list"
+  assert_stdout_empty "an aborted run must not print a partial list"
+}
+
 test_real_repo_smoke() {
   run_script "$REPO_ROOT"
   assert_status 0 "enumerating the real repository must succeed"
@@ -291,6 +306,7 @@ main() {
   run_test test_output_is_sorted_deduplicated_and_locale_independent
   run_test test_invoked_from_a_subdirectory
   run_test test_outside_a_git_repository_fails_cleanly
+  run_test test_a_corrupted_index_aborts_instead_of_reporting_an_empty_list
   run_test test_real_repo_smoke
 
   echo ""
