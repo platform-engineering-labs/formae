@@ -39,16 +39,16 @@ func ExtractSchemaFromDependencies(ctx context.Context, dependencies []Dependenc
 
 // ExtractSchema extracts ResourceDescriptors from PKL schema packages.
 // It orchestrates the PKL evaluation pipeline:
-// 1. Stages each plugin dependency into a temp dir with its formae dep
-//    rewritten to the agent-supplied formae URL/path. Without this step
-//    PKL would resolve `@formae` references inside plugin source files
-//    via the plugin's own PklProject pin, leading to two formae packages
-//    in scope (the agent's and the plugin's) and type-identity mismatches
-//    on every annotation. Schema additions like AttachesTo would only
-//    work after a coordinated cross-repo bump of every plugin's pin.
-// 2. Generates a wrapper PklProject importing the staged plugin projects.
-// 3. Generates the imports.pkl file.
-// 4. Runs Extractor.pkl to extract ResourceDescriptors.
+//  1. Stages each plugin dependency into a temp dir with its formae dep
+//     rewritten to the agent-supplied formae URL/path. Without this step
+//     PKL would resolve `@formae` references inside plugin source files
+//     via the plugin's own PklProject pin, leading to two formae packages
+//     in scope (the agent's and the plugin's) and type-identity mismatches
+//     on every annotation. Schema additions like AttachesTo would only
+//     work after a coordinated cross-repo bump of every plugin's pin.
+//  2. Generates a wrapper PklProject importing the staged plugin projects.
+//  3. Generates the imports.pkl file.
+//  4. Runs Extractor.pkl to extract ResourceDescriptors.
 func ExtractSchema(ctx context.Context, dependencies []Dependency) ([]plugin.ResourceTypeDescriptor, error) {
 	if len(dependencies) == 0 {
 		return nil, fmt.Errorf("at least one dependency is required")
@@ -59,7 +59,7 @@ func ExtractSchema(ctx context.Context, dependencies []Dependency) ([]plugin.Res
 	if err != nil {
 		return nil, fmt.Errorf("failed to create temp directory: %w", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() { _ = os.RemoveAll(tempDir) }()
 
 	// Copy embedded PKL files to temp directory
 	if err := copyEmbeddedPklFiles(tempDir); err != nil {
@@ -147,7 +147,7 @@ func generatePklProject(ctx context.Context, workDir string, dependencies []Depe
 	if err != nil {
 		return fmt.Errorf("failed to create evaluator: %w", err)
 	}
-	defer evaluator.Close()
+	defer func() { _ = evaluator.Close() }()
 
 	generatorPath := filepath.Join(workDir, "PklProjectGenerator.pkl")
 	result, err := evaluator.EvaluateOutputText(ctx, pkl.FileSource(generatorPath))
@@ -348,7 +348,7 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer in.Close()
+	defer func() { _ = in.Close() }()
 	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
 		return err
 	}

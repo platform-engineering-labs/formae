@@ -20,7 +20,7 @@ func TestFindNamespace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() { _ = os.RemoveAll(tempDir) }()
 
 	// Create plugin directory structure: plugin/schema/pkl
 	schemaDir := filepath.Join(tempDir, "schema", "pkl")
@@ -60,7 +60,7 @@ func TestFindNamespace_NotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() { _ = os.RemoveAll(tempDir) }()
 
 	_, err = findNamespace(tempDir)
 	if err == nil {
@@ -73,7 +73,7 @@ func TestCopyEmbeddedFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() { _ = os.RemoveAll(tempDir) }()
 
 	if err := copyEmbeddedFiles(tempDir); err != nil {
 		t.Fatalf("copyEmbeddedFiles failed: %v", err)
