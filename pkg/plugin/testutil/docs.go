@@ -29,9 +29,9 @@ type ResourceDoc struct {
 	Discoverable bool    `json:"discoverable"`
 	Extractable  bool    `json:"extractable"`
 	Identifier   string  `json:"identifier"`
-	DocComment       *string `json:"docComment"`
-	ModuleName       string  `json:"moduleName"`
-	ClassName        string  `json:"className"`
+	DocComment   *string `json:"docComment"`
+	ModuleName   string  `json:"moduleName"`
+	ClassName    string  `json:"className"`
 }
 
 // GenerateDocs generates documentation for a plugin schema.
@@ -67,7 +67,7 @@ func GenerateDocsWithNamespace(schemaDir, namespace string) (*DocsResult, error)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create temp directory: %w", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() { _ = os.RemoveAll(tempDir) }()
 
 	// Copy embedded PKL files to temp directory
 	if err := copyEmbeddedFiles(tempDir); err != nil {

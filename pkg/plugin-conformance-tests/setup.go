@@ -50,7 +50,7 @@ func EnsureFormaeBinary(t *testing.T) (binaryPath string, cleanup func()) {
 		t.Fatalf("failed to create temp dir for formae binary: %v", err)
 	}
 
-	cleanup = func() { os.RemoveAll(tmpDir) }
+	cleanup = func() { _ = os.RemoveAll(tmpDir) }
 
 	// Each channel gets its own orbital tree so the stable and dev
 	// repositories don't clobber each other. Managers are built lazily so the

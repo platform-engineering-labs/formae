@@ -376,7 +376,7 @@ func (f *FormaeCLI) ForceDiscover(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to trigger discovery: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("force discover returned status %d", resp.StatusCode)
 	}
@@ -390,7 +390,7 @@ func (f *FormaeCLI) ForceSync(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to trigger sync: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("force sync returned status %d", resp.StatusCode)
 	}
@@ -465,7 +465,7 @@ func (f *FormaeCLI) Cancel(t *testing.T, query string) []string {
 	if err != nil {
 		t.Fatalf("failed to cancel commands: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusNotFound {
 		t.Log("no in-progress commands found to cancel")

@@ -20,12 +20,12 @@ import (
 type TestController struct {
 	act.Actor
 
-	cloudState       *CloudState
-	injections       *InjectionState
-	opLog            *OperationLog
-	responseQueue    *ResponseQueue
-	gate             chan struct{}
-	nativeIDCounter  *atomic.Int64
+	cloudState      *CloudState
+	injections      *InjectionState
+	opLog           *OperationLog
+	responseQueue   *ResponseQueue
+	gate            chan struct{}
+	nativeIDCounter *atomic.Int64
 }
 
 // NewTestController is the factory function for the TestController actor.

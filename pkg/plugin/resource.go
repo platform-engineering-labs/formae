@@ -84,7 +84,7 @@ type PluginInfo interface {
 	LabelConfig() pkgmodel.LabelConfig
 }
 
-// used in tests to simulate testable behaviour
+// ResourcePluginOverridesContextKey is used in tests to simulate testable behaviour.
 const ResourcePluginOverridesContextKey = "resource-plugin-overrides"
 
 type ResourcePluginOverrides struct {

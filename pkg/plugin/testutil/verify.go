@@ -85,7 +85,7 @@ func VerifySchemaWithNamespace(schemaDir, namespace string) (*VerifyResult, erro
 	if err != nil {
 		return nil, fmt.Errorf("failed to create temp directory: %w", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() { _ = os.RemoveAll(tempDir) }()
 
 	// Copy embedded PKL files to temp directory
 	if err := copyEmbeddedFiles(tempDir); err != nil {
@@ -185,7 +185,7 @@ func generatePklProject(ctx context.Context, workDir, namespace, schemaPath stri
 	if err != nil {
 		return fmt.Errorf("failed to create evaluator: %w", err)
 	}
-	defer evaluator.Close()
+	defer func() { _ = evaluator.Close() }()
 
 	generatorPath := filepath.Join(workDir, "PklProjectGenerator.pkl")
 	result, err := evaluator.EvaluateOutputText(ctx, pkl.FileSource(generatorPath))

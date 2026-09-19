@@ -378,9 +378,34 @@ api-docs:
 	@swag init -d internal/api -g server.go --parseInternal --parseDependency --quiet
 	@echo "API documentation generated successfully."
 
+# lint runs golangci-lint in every Go module tracked in the repo. It writes
+# the enumeration to a temp file instead of piping it into the while loop, so
+# the loop runs in the current shell rather than a subshell and its `status`
+# accumulation survives; this Makefile sets no SHELL, so recipes run under
+# /bin/sh, where process substitution (`<(...)`) is unavailable.
 lint:
 	@echo "Running linter..."
-	@golangci-lint run
+	@installed_version=$$(golangci-lint version --short 2>/dev/null || echo unknown); \
+	pinned_version=$$(cat $(CURDIR)/.golangci-version); \
+	if [ "v$$installed_version" != "$$pinned_version" ]; then \
+		echo "warning: installed golangci-lint v$$installed_version does not match the pinned $$pinned_version" >&2; \
+	fi; \
+	tmp=$$(mktemp); \
+	trap 'rm -f "$$tmp"' EXIT; \
+	if ! scripts/go_modules.sh > "$$tmp"; then \
+		echo "error: scripts/go_modules.sh failed to enumerate Go modules" >&2; \
+		exit 1; \
+	fi; \
+	if [ ! -s "$$tmp" ]; then \
+		echo "error: scripts/go_modules.sh enumerated no Go modules" >&2; \
+		exit 1; \
+	fi; \
+	status=0; \
+	while IFS= read -r module; do \
+		echo "Linting $$module"; \
+		(cd "$$module" && golangci-lint run --config=$(CURDIR)/.golangci.yml ./...) || status=1; \
+	done < "$$tmp"; \
+	exit $$status
 	@echo "Linting completed successfully."
 
 lint-reuse:

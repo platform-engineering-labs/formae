@@ -6,7 +6,6 @@ package conformance
 
 import (
 	"errors"
-	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -103,13 +102,9 @@ func TestFilterTestCases(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Set environment variable
-			if tt.filter != "" {
-				os.Setenv("FORMAE_TEST_FILTER", tt.filter)
-				defer os.Unsetenv("FORMAE_TEST_FILTER")
-			} else {
-				os.Unsetenv("FORMAE_TEST_FILTER")
-			}
+			// Set environment variable (empty value reads the same as
+			// unset via os.Getenv, which is what filterTestCases uses).
+			t.Setenv("FORMAE_TEST_FILTER", tt.filter)
 
 			// Run filter
 			filtered := filterTestCases(t, testCases)
@@ -194,8 +189,7 @@ func TestFilterTestCases_Regex(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			os.Setenv("FORMAE_TEST_FILTER", tt.filter)
-			defer os.Unsetenv("FORMAE_TEST_FILTER")
+			t.Setenv("FORMAE_TEST_FILTER", tt.filter)
 
 			filtered := filterTestCases(t, testCases)
 
@@ -226,8 +220,7 @@ func TestFilterTestCases_InvalidRegex(t *testing.T) {
 		{Name: "AWS::s3-bucket", ResourceType: "s3-bucket", PKLFile: "/path/s3-bucket.pkl", PluginName: "aws"},
 	}
 
-	os.Setenv("FORMAE_TEST_FILTER", "/[invalid/")
-	defer os.Unsetenv("FORMAE_TEST_FILTER")
+	t.Setenv("FORMAE_TEST_FILTER", "/[invalid/")
 
 	// filterTestCases calls t.Fatalf on invalid regex — we can't easily
 	// capture that in a unit test without a subprocess, so we document
@@ -320,13 +313,9 @@ func TestFilterTestCases_ExactMatchPriority(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Set environment variable
-			if tt.filter != "" {
-				os.Setenv("FORMAE_TEST_FILTER", tt.filter)
-				defer os.Unsetenv("FORMAE_TEST_FILTER")
-			} else {
-				os.Unsetenv("FORMAE_TEST_FILTER")
-			}
+			// Set environment variable (empty value reads the same as
+			// unset via os.Getenv, which is what filterTestCases uses).
+			t.Setenv("FORMAE_TEST_FILTER", tt.filter)
 
 			// Run filter
 			filtered := filterTestCases(t, testCases)
@@ -363,8 +352,7 @@ func TestFilterTestCases_NoMatch(t *testing.T) {
 		},
 	}
 
-	os.Setenv("FORMAE_TEST_FILTER", "nonexistent")
-	defer os.Unsetenv("FORMAE_TEST_FILTER")
+	t.Setenv("FORMAE_TEST_FILTER", "nonexistent")
 
 	// Create a sub-test to capture the fatal
 	subT := &testing.T{}
@@ -1367,12 +1355,9 @@ func TestGetTestType(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if tt.envValue != "" {
-				os.Setenv("FORMAE_TEST_TYPE", tt.envValue)
-				defer os.Unsetenv("FORMAE_TEST_TYPE")
-			} else {
-				os.Unsetenv("FORMAE_TEST_TYPE")
-			}
+			// Empty value reads the same as unset via os.Getenv, which
+			// is what getTestType uses.
+			t.Setenv("FORMAE_TEST_TYPE", tt.envValue)
 
 			result := getTestType()
 			if result != tt.expected {

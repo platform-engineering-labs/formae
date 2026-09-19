@@ -16,7 +16,6 @@ import (
 type fakePlugin struct {
 	initCalled       bool
 	receivedCfg      json.RawMessage
-	validateUsers    map[string]string // username -> password (plaintext for testing)
 	lastForceRefresh bool
 }
 
@@ -85,7 +84,7 @@ func TestServerAndClient_Init(t *testing.T) {
 
 	// Create rpc client
 	client := rpc.NewClient(clientConn)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	cfg := json.RawMessage(`{"users":[{"username":"admin"}]}`)
 	var resp InitResponse
@@ -114,7 +113,7 @@ func TestServerAndClient_Validate(t *testing.T) {
 	go Serve(plugin, serverConn)
 
 	client := rpc.NewClient(clientConn)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	t.Run("valid request", func(t *testing.T) {
 		var resp ValidateResponse
@@ -159,7 +158,7 @@ func TestServerAndClient_GetAuthHeader(t *testing.T) {
 	go Serve(plugin, serverConn)
 
 	client := rpc.NewClient(clientConn)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	var resp GetAuthHeaderResponse
 	err := client.Call("AuthPlugin.GetAuthHeader", &GetAuthHeaderRequest{ForceRefresh: true}, &resp)
@@ -184,7 +183,7 @@ func TestServerAndClient_LoginStart(t *testing.T) {
 	go Serve(plugin, serverConn)
 
 	client := rpc.NewClient(clientConn)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	var resp LoginStartResponse
 	err := client.Call("AuthPlugin.LoginStart", &LoginStartRequest{Mode: "browser"}, &resp)
@@ -206,7 +205,7 @@ func TestServerAndClient_LoginWait(t *testing.T) {
 	go Serve(plugin, serverConn)
 
 	client := rpc.NewClient(clientConn)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	var resp LoginWaitResponse
 	err := client.Call("AuthPlugin.LoginWait", &LoginWaitRequest{SessionID: "s-1"}, &resp)
@@ -228,7 +227,7 @@ func TestServerAndClient_Logout(t *testing.T) {
 	go Serve(plugin, serverConn)
 
 	client := rpc.NewClient(clientConn)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	var resp LogoutResponse
 	err := client.Call("AuthPlugin.Logout", &LogoutRequest{}, &resp)

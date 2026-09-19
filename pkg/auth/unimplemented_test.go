@@ -34,7 +34,7 @@ func TestUnimplementedAuthPlugin_StubsReturnUnsupported(t *testing.T) {
 	go Serve(plugin, serverConn)
 
 	client := rpc.NewClient(clientConn)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	tests := []struct {
 		name string
@@ -112,7 +112,7 @@ func TestUnimplementedAuthPlugin_GetAuthHeaderFailsClosed(t *testing.T) {
 	go Serve(plugin, serverConn)
 
 	client := rpc.NewClient(clientConn)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	var resp GetAuthHeaderResponse
 	err := client.Call("AuthPlugin.GetAuthHeader", &GetAuthHeaderRequest{}, &resp)

@@ -267,7 +267,7 @@ func setupPluginOTel(name string, config model.OTelConfig) func() {
 		),
 	)
 	if err != nil {
-		fmt.Fprintf(os.Stdout, "Warning: failed to create OTel resource: %v\n", err)
+		_, _ = fmt.Fprintf(os.Stdout, "Warning: failed to create OTel resource: %v\n", err)
 		return func() {}
 	}
 
@@ -291,12 +291,12 @@ func setupPluginOTel(name string, config model.OTelConfig) func() {
 		}
 		exporter, err = otlpmetrichttp.New(context.Background(), opts...)
 	default:
-		fmt.Fprintf(os.Stdout, "Warning: unknown OTLP protocol: %s, skipping OTel setup\n", protocol)
+		_, _ = fmt.Fprintf(os.Stdout, "Warning: unknown OTLP protocol: %s, skipping OTel setup\n", protocol)
 		return func() {}
 	}
 
 	if err != nil {
-		fmt.Fprintf(os.Stdout, "Warning: failed to create OTLP exporter: %v\n", err)
+		_, _ = fmt.Fprintf(os.Stdout, "Warning: failed to create OTLP exporter: %v\n", err)
 		return func() {}
 	}
 
@@ -314,22 +314,22 @@ func setupPluginOTel(name string, config model.OTelConfig) func() {
 		runtime.WithMinimumReadMemStatsInterval(time.Second),
 		runtime.WithMeterProvider(meterProvider),
 	); err != nil {
-		fmt.Fprintf(os.Stdout, "Warning: failed to start Go runtime metrics: %v\n", err)
+		_, _ = fmt.Fprintf(os.Stdout, "Warning: failed to start Go runtime metrics: %v\n", err)
 	}
 
 	// Start host/process metrics collection (CPU, network, etc.)
 	if err := host.Start(host.WithMeterProvider(meterProvider)); err != nil {
-		fmt.Fprintf(os.Stdout, "Warning: failed to start host metrics: %v\n", err)
+		_, _ = fmt.Fprintf(os.Stdout, "Warning: failed to start host metrics: %v\n", err)
 	}
 
-	fmt.Fprintf(os.Stdout, "OTel metrics enabled for plugin %s (endpoint: %s, protocol: %s)\n", name, endpoint, protocol)
+	_, _ = fmt.Fprintf(os.Stdout, "OTel metrics enabled for plugin %s (endpoint: %s, protocol: %s)\n", name, endpoint, protocol)
 
 	// Return shutdown function
 	return func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := meterProvider.Shutdown(ctx); err != nil {
-			fmt.Fprintf(os.Stdout, "Warning: failed to shutdown meter provider: %v\n", err)
+			_, _ = fmt.Fprintf(os.Stdout, "Warning: failed to shutdown meter provider: %v\n", err)
 		}
 	}
 }

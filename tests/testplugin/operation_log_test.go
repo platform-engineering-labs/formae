@@ -65,6 +65,12 @@ func TestOperationLog_SnapshotIsIsolated(t *testing.T) {
 		NativeID:     "fake-1",
 		Timestamp:    time.Now(),
 	})
+	if len(snap) != 2 {
+		t.Fatalf("expected 2 entries in mutated snapshot, got %d", len(snap))
+	}
+	if snap[1].Operation != "Injected" {
+		t.Errorf("appended entry Operation: got %q, want %q", snap[1].Operation, "Injected")
+	}
 
 	// Original should be unaffected
 	snap2 := ol.Snapshot()
