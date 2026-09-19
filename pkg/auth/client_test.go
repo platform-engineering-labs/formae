@@ -37,7 +37,7 @@ func newTestClient(t *testing.T, plugin AuthPlugin) *Client {
 func TestClient_Validate(t *testing.T) {
 	plugin := &fakePlugin{}
 	client := newTestClient(t, plugin)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	t.Run("valid headers", func(t *testing.T) {
 		resp, err := client.Validate(&ValidateRequest{
@@ -76,7 +76,7 @@ func TestClient_Validate(t *testing.T) {
 func TestClient_GetAuthHeader(t *testing.T) {
 	plugin := &fakePlugin{}
 	client := newTestClient(t, plugin)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	resp, err := client.GetAuthHeader(false)
 	if err != nil {
@@ -92,7 +92,7 @@ func TestClient_GetAuthHeader(t *testing.T) {
 func TestClient_GetAuthHeader_ForceRefresh(t *testing.T) {
 	plugin := &fakePlugin{}
 	client := newTestClient(t, plugin)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	if _, err := client.GetAuthHeader(true); err != nil {
 		t.Fatalf("GetAuthHeader failed: %v", err)
@@ -106,7 +106,7 @@ func TestClient_GetAuthHeader_ForceRefresh(t *testing.T) {
 func TestClient_LoginStart(t *testing.T) {
 	plugin := &fakePlugin{}
 	client := newTestClient(t, plugin)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	resp, err := client.LoginStart(&LoginStartRequest{Mode: "browser"})
 	if err != nil {
@@ -123,7 +123,7 @@ func TestClient_LoginStart(t *testing.T) {
 func TestClient_LoginWait(t *testing.T) {
 	plugin := &fakePlugin{}
 	client := newTestClient(t, plugin)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	resp, err := client.LoginWait(&LoginWaitRequest{SessionID: "s-1"})
 	if err != nil {
@@ -140,7 +140,7 @@ func TestClient_LoginWait(t *testing.T) {
 func TestClient_Logout(t *testing.T) {
 	plugin := &fakePlugin{}
 	client := newTestClient(t, plugin)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	resp, err := client.Logout()
 	if err != nil {
@@ -197,7 +197,7 @@ func newLegacyTestClient(t *testing.T, plugin any) *Client {
 
 func TestClient_UnsupportedVerbTranslation(t *testing.T) {
 	client := newLegacyTestClient(t, &legacyAuthPlugin{})
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	cases := []struct {
 		name     string
@@ -289,7 +289,7 @@ func (confusingErrorPlugin) LoginStart(req *LoginStartRequest, resp *LoginStartR
 func TestClient_Call_DoesNotMisclassifyDownstreamError(t *testing.T) {
 	plugin := &confusingErrorPlugin{}
 	client := newTestClient(t, plugin)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 
 	var resp LoginStartResponse
 	err := client.call("LoginStart", &LoginStartRequest{Mode: "browser"}, &resp)
@@ -361,8 +361,8 @@ func TestNewClient_ConnectsPluginStderrToHostStderr(t *testing.T) {
 	os.Stderr = w
 	t.Cleanup(func() {
 		os.Stderr = origStderr
-		w.Close()
-		r.Close()
+		_ = w.Close()
+		_ = r.Close()
 	})
 
 	captured := make(chan string, 1)
@@ -375,13 +375,13 @@ func TestNewClient_ConnectsPluginStderrToHostStderr(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	client.Close()
+	_ = client.Close()
 
 	// Restore stderr and close the write end now: the child has already
 	// been reaped by Close, so this is the last writer and the draining
 	// goroutine will observe EOF.
 	os.Stderr = origStderr
-	w.Close()
+	_ = w.Close()
 
 	select {
 	case out := <-captured:

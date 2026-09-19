@@ -50,8 +50,8 @@ func NewClient(binaryPath string, config json.RawMessage) (*Client, error) {
 	// corrupt the RPC stream.
 	var ready [1]byte
 	if _, err := io.ReadFull(stdout, ready[:]); err != nil {
-		cmd.Process.Kill()
-		cmd.Wait()
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
 		return nil, fmt.Errorf("auth client: waiting for ready signal: %w", err)
 	}
 
@@ -85,16 +85,16 @@ func NewClient(binaryPath string, config json.RawMessage) (*Client, error) {
 	select {
 	case r := <-ch:
 		if r.err != nil {
-			c.Close()
+			_ = c.Close()
 			return nil, fmt.Errorf("auth client: init call: %w", r.err)
 		}
 		resp = r.resp
 	case <-time.After(initTimeout):
-		c.Close()
+		_ = c.Close()
 		return nil, fmt.Errorf("auth client: init timed out after %s", initTimeout)
 	}
 	if resp.Error != "" {
-		c.Close()
+		_ = c.Close()
 		return nil, fmt.Errorf("auth client: init: %s", resp.Error)
 	}
 
