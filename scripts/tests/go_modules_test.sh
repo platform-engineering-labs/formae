@@ -282,6 +282,60 @@ test_real_repo_smoke() {
   assert_has_line "pkg/auth" "a known nested module must be reported"
 }
 
+# ── 3b. Wiring-contract assertions ──────────────────────────────────────────
+# The enumeration script is only useful if its consumers keep calling it: a
+# future edit could re-hardcode a module list into the Makefile or the
+# workflow and every assertion above would still pass. These check that the
+# `lint` recipe and the linter workflow both call the script, and neither
+# carries a hand-written list of the modules it would otherwise enumerate.
+
+MAKEFILE="$REPO_ROOT/Makefile"
+LINTER_WORKFLOW="$REPO_ROOT/.github/workflows/linter.yml"
+
+# lint_recipe_block: prints the Makefile's `lint` target recipe up to its
+# closing blank line, so assertions about it never also match `tidy-all`,
+# which legitimately hard-lists four modules and is out of scope here.
+lint_recipe_block() {
+  awk '/^lint:/{flag=1} flag{print} flag && /^$/{exit}' "$MAKEFILE"
+}
+
+test_make_lint_recipe_calls_the_enumeration_script() {
+  if ! grep -qF "scripts/go_modules.sh" <<< "$(lint_recipe_block)"; then
+    fail "the lint recipe must call scripts/go_modules.sh"
+  fi
+}
+
+test_linter_workflow_calls_the_enumeration_script() {
+  if ! grep -qF "scripts/go_modules.sh" "$LINTER_WORKFLOW"; then
+    fail "linter.yml must call scripts/go_modules.sh"
+  fi
+}
+
+# real_module_paths: every module scripts/go_modules.sh reports for this
+# repository, other than the root ("."), which is not a hand-writable path.
+real_module_paths() {
+  "$SCRIPT_UNDER_TEST" | grep -vxF '.'
+}
+
+test_make_lint_recipe_has_no_hand_written_module_list() {
+  local block module
+  block=$(lint_recipe_block)
+  while IFS= read -r module; do
+    if grep -qF "$module" <<< "$block"; then
+      fail "the lint recipe must not hard-list module '$module'; it must come from scripts/go_modules.sh"
+    fi
+  done < <(real_module_paths)
+}
+
+test_linter_workflow_has_no_hand_written_module_list() {
+  local module
+  while IFS= read -r module; do
+    if grep -qF "$module" "$LINTER_WORKFLOW"; then
+      fail "linter.yml must not hard-list module '$module'; it must come from scripts/go_modules.sh"
+    fi
+  done < <(real_module_paths)
+}
+
 # ── 4. Runner ───────────────────────────────────────────────────────────────
 run_test() {
   local test_name="$1"
@@ -308,6 +362,10 @@ main() {
   run_test test_outside_a_git_repository_fails_cleanly
   run_test test_a_corrupted_index_aborts_instead_of_reporting_an_empty_list
   run_test test_real_repo_smoke
+  run_test test_make_lint_recipe_calls_the_enumeration_script
+  run_test test_linter_workflow_calls_the_enumeration_script
+  run_test test_make_lint_recipe_has_no_hand_written_module_list
+  run_test test_linter_workflow_has_no_hand_written_module_list
 
   echo ""
   if [[ "$tests_failed" -gt 0 ]]; then

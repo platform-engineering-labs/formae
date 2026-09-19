@@ -5,8 +5,65 @@ on:
     branches: [ "main" ]
 
 jobs:
-  lint:
-    name: golangci-lint
+  modules:
+    runs-on: ubuntu-latest
+    outputs:
+      modules: ${{ steps.enumerate.outputs.modules }}
+      golangci-lint-version: ${{ steps.enumerate.outputs.golangci-lint-version }}
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Enumerate Go modules and read the golangci-lint pin
+      id: enumerate
+      run: |
+        set -euo pipefail
+
+        raw=$(scripts/go_modules.sh)
+        if [ -z "$raw" ]; then
+          echo "scripts/go_modules.sh reported no modules" >&2
+          exit 1
+        fi
+
+        # These values are interpolated into a matrix and a working-directory
+        # below, so validate them before publishing: every module must be a
+        # plain relative path, and the pin must be a bare semver.
+        while IFS= read -r module; do
+          case "$module" in
+            /*)
+              echo "unsafe module path (absolute): $module" >&2
+              exit 1
+              ;;
+            *..*)
+              echo "unsafe module path (contains ..): $module" >&2
+              exit 1
+              ;;
+          esac
+          if ! [[ "$module" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+            echo "unsafe module path (unexpected characters): $module" >&2
+            exit 1
+          fi
+        done <<< "$raw"
+
+        modules_json=$(jq -Rsc 'split("\n") | map(select(length > 0))' <<< "$raw")
+
+        version=$(<.golangci-version)
+        if ! [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          echo "unexpected .golangci-version format: $version" >&2
+          exit 1
+        fi
+
+        echo "modules=$modules_json" >> "$GITHUB_OUTPUT"
+        echo "golangci-lint-version=$version" >> "$GITHUB_OUTPUT"
+
+  lint-module:
+    needs: modules
+    strategy:
+      fail-fast: false
+      matrix:
+        module: ${{ fromJSON(needs.modules.outputs.modules) }}
+    # Named so its rendered context never begins with "golangci-lint", to
+    # stay unambiguously distinct from the aggregate gate job below.
+    name: lint ${{ matrix.module }}
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -21,8 +78,31 @@ jobs:
     - name: golangci-lint
       uses: golangci/golangci-lint-action@v8.0.0
       with:
-        version: latest
-        args: --config=.golangci.yml -v
+        version: ${{ needs.modules.outputs.golangci-lint-version }}
+        working-directory: ${{ matrix.module }}
+        args: --config=${{ github.workspace }}/.golangci.yml -v
+
+  lint:
+    # The main ruleset's required status checks match on context name and
+    # require one named exactly "golangci-lint". A matrix job can only ever
+    # render a context like "lint (<module>)", which the ruleset would never
+    # see, leaving a required check that never reports and blocking every PR.
+    # This aggregate job exists purely to report that exact context, gated on
+    # the enumeration and every matrix leg having succeeded.
+    name: golangci-lint
+    needs: [modules, lint-module]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+    - name: Check module enumeration and lint results
+      env:
+        MODULES_RESULT: ${{ needs.modules.result }}
+        LINT_MODULE_RESULT: ${{ needs.lint-module.result }}
+      run: |
+        if [ "$MODULES_RESULT" != "success" ] || [ "$LINT_MODULE_RESULT" != "success" ]; then
+          echo "modules: $MODULES_RESULT, lint-module: $LINT_MODULE_RESULT" >&2
+          exit 1
+        fi
 
   reuse-compliance:
     name: REUSE License Compliance

@@ -1,5 +1,11 @@
 version: "2"
 
+run:
+  # tests/e2e/go's files all sit behind `//go:build e2e`; without this tag
+  # golangci-lint sees zero packages there and silently skips the module.
+  build-tags:
+    - e2e
+
 linters:
   enable:
     - errcheck
