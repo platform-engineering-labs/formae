@@ -75,6 +75,53 @@ func RunStackRetirement(t *testing.T, ds, other datastore.Datastore, store datas
 		require.NoError(t, err)
 		return datastore.CommandAdmission{PrincipalScope: "retirement", IdempotencyKey: util.NewID(), RequestDigest: strings.Repeat("a", 64), Receipt: []byte(`{}`), Guards: guards}
 	}
+	t.Run("certified_expired_empty_retirement", func(t *testing.T) {
+		s := newStack(t)
+		deadline := time.Now().UTC().Add(-time.Hour)
+		policy := &pkgmodel.TTLPolicy{Type: "ttl", Label: "expired", StackID: s.ID, ExpiresAt: deadline, OnDependents: "abort"}
+		_, err := ds.CreatePolicy(policy, "setup-expired")
+		require.NoError(t, err)
+		expired, err := ds.GetExpiredStacks()
+		require.NoError(t, err)
+		var candidate datastore.ExpiredStackInfo
+		for _, info := range expired {
+			if info.StackID == s.ID {
+				candidate = info
+			}
+		}
+		require.Equal(t, s.ID, candidate.StackID)
+		guards := admission(t, s).Guards
+		ok, err := ds.(datastore.ExpiredEmptyStackRetirer).TryRetireExpiredEmptyStack(candidate, guards, "")
+		require.NoError(t, err)
+		require.True(t, ok)
+		retired, err := ds.GetStackByLabel(s.Label)
+		require.NoError(t, err)
+		require.Nil(t, retired)
+	})
+	t.Run("certified_expired_empty_retirement_rejects_changed_policy", func(t *testing.T) {
+		s := newStack(t)
+		policy := &pkgmodel.TTLPolicy{Type: "ttl", Label: "expired", StackID: s.ID, ExpiresAt: time.Now().UTC().Add(-time.Hour), OnDependents: "abort"}
+		_, err := ds.CreatePolicy(policy, "setup-expired")
+		require.NoError(t, err)
+		expired, err := ds.GetExpiredStacks()
+		require.NoError(t, err)
+		var candidate datastore.ExpiredStackInfo
+		for _, info := range expired {
+			if info.StackID == s.ID {
+				candidate = info
+			}
+		}
+		guards := admission(t, s).Guards
+		policy.ExpiresAt = time.Now().UTC().Add(time.Hour)
+		_, err = other.UpdatePolicy(policy, "extend-expiry")
+		require.NoError(t, err)
+		ok, err := ds.(datastore.ExpiredEmptyStackRetirer).TryRetireExpiredEmptyStack(candidate, guards, "")
+		require.ErrorIs(t, err, datastore.ErrStaleAdmission)
+		require.False(t, ok)
+		retained, err := ds.GetStackByLabel(s.Label)
+		require.NoError(t, err)
+		require.NotNil(t, retained)
+	})
 	t.Run("admission_before_retirement", func(t *testing.T) {
 		s := newStack(t)
 		c := command(s)

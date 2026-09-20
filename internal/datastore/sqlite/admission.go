@@ -28,6 +28,9 @@ func (d DatastoreSQLite) LookupCommandAdmission(scope, key string) (*datastore.S
 func (d DatastoreSQLite) AdmitFormaCommand(c *forma_command.FormaCommand, a datastore.CommandAdmission) (datastore.AdmissionResult, error) {
 	return d.admissionStore().AdmitFormaCommand(c, a)
 }
+func (d DatastoreSQLite) HasConflictingCommandForStacks(labels []string) (bool, error) {
+	return d.admissionStore().HasConflictingCommandForStacks(labels)
+}
 
 var _ datastore.CommandAdmitter = DatastoreSQLite{}
 
@@ -62,8 +65,12 @@ func (d DatastoreSQLite) PinCommandTargetIncarnation(commandID, target, incarnat
 func (d DatastoreSQLite) TryRetireEmptyStack(expectedStackID, label, cleanupCommandID string) (bool, error) {
 	return d.admissionStore().TryRetireEmptyStack(expectedStackID, label, cleanupCommandID)
 }
+func (d DatastoreSQLite) TryRetireExpiredEmptyStack(candidate datastore.ExpiredStackInfo, expected []datastore.RevisionGuard, cleanupCommandID string) (bool, error) {
+	return d.admissionStore().TryRetireExpiredEmptyStack(candidate, expected, cleanupCommandID)
+}
 
 var _ datastore.EmptyStackRetirer = DatastoreSQLite{}
+var _ datastore.ExpiredEmptyStackRetirer = DatastoreSQLite{}
 
 func (d DatastoreSQLite) HasOnlyExternalChanges(ksuid, baselineCommandID, observedVersion string) (bool, error) {
 	return d.admissionStore().HasOnlyExternalChanges(ksuid, baselineCommandID, observedVersion)

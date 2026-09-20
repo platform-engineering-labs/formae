@@ -403,6 +403,8 @@ func (r CommandPersistResult) CallFailure() error {
 		cause = datastore.ErrAdmissionConflict
 	case "invalid":
 		cause = datastore.ErrInvalidAdmission
+	case "command-conflict":
+		cause = datastore.ErrCommandConflict
 	}
 	if cause != nil {
 		return fmt.Errorf("%s: %w", r.Error, cause)
@@ -535,7 +537,12 @@ func (f *FormaCommandPersister) ack(ok bool, err error) (any, error) {
 		if errors.Is(err, errInvariantViolation) {
 			return nil, err
 		}
-		f.Log().Error("FormaCommandPersister: request failed: %s", err)
+		if errors.Is(err, datastore.ErrStaleAdmission) || errors.Is(err, datastore.ErrAdmissionConflict) ||
+			errors.Is(err, datastore.ErrInvalidAdmission) || errors.Is(err, datastore.ErrCommandConflict) {
+			f.Log().Debug("FormaCommandPersister: request refused: %s", err)
+		} else {
+			f.Log().Error("FormaCommandPersister: request failed: %s", err)
+		}
 		result.Error = err.Error()
 		switch {
 		case errors.Is(err, datastore.ErrStaleAdmission):
@@ -544,6 +551,8 @@ func (f *FormaCommandPersister) ack(ok bool, err error) (any, error) {
 			result.AdmissionErrorCode = "conflict"
 		case errors.Is(err, datastore.ErrInvalidAdmission):
 			result.AdmissionErrorCode = "invalid"
+		case errors.Is(err, datastore.ErrCommandConflict):
+			result.AdmissionErrorCode = "command-conflict"
 		}
 	}
 	return result, nil
@@ -561,6 +570,19 @@ func (f *FormaCommandPersister) storeNewFormaCommandWithAdmission(command *forma
 	if admission == nil {
 		if err := command.ResolveStackIdentities(f.datastore); err != nil {
 			return CommandPersistResult{}, err
+		}
+	}
+	readOnlySync := command.Command == pkgmodel.CommandSync &&
+		(command.Source == forma_command.SourceSynchronizer || command.Source == forma_command.SourceDiscovery)
+	scheduledGuarded := admission != nil && (admission.PrincipalScope == "stack-expirer" ||
+		admission.PrincipalScope == "auto-reconciler" || admission.PrincipalScope == "generator-rotator")
+	if !readOnlySync && (admission == nil || scheduledGuarded) {
+		conflict, err := f.datastore.HasConflictingCommandForStacks(command.GetStackLabels())
+		if err != nil {
+			return CommandPersistResult{}, fmt.Errorf("check conflicting commands: %w", err)
+		}
+		if conflict {
+			return CommandPersistResult{}, datastore.ErrCommandConflict
 		}
 	}
 	for i := range command.ResourceUpdates {
@@ -599,9 +621,9 @@ func (f *FormaCommandPersister) storeNewFormaCommandWithAdmission(command *forma
 		}
 		reply, err := snapshotFormaCommand(command)
 		if err != nil {
-			// Admission is already committed. Returning the failure leaves the
-			// caller to retry its receipt; replay then loads and dispatches the
-			// durable command without caching a partial snapshot here.
+			// Admission is already committed. Caller-key resolutions can retry the
+			// receipt; legacy Apply uses a fresh key, so restart recovery relies on
+			// ReRunIncompleteCommands. Do not cache a partial snapshot here.
 			return CommandPersistResult{}, fmt.Errorf("snapshot admitted command: %w", err)
 		}
 		accepted.Command = reply

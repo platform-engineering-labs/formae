@@ -5,6 +5,7 @@
 package metastructure
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -111,7 +112,12 @@ func (s *StackExpirer) checkExpiredStacks() {
 			stackInfo.Deadline(), stackInfo.StackCreatedAt.UTC().Format(time.RFC3339))
 
 		if err := s.destroyExpiredStack(stackInfo); err != nil {
-			s.Log().Error("Failed to destroy expired stack label=%s: %v", stackInfo.StackLabel, err)
+			if errors.Is(err, datastore.ErrStaleAdmission) || errors.Is(err, datastore.ErrAdmissionConflict) ||
+				errors.Is(err, datastore.ErrCommandConflict) {
+				s.Log().Debug("Expired stack attempt refused label=%s: %v", stackInfo.StackLabel, err)
+			} else {
+				s.Log().Error("Failed to destroy expired stack label=%s: %v", stackInfo.StackLabel, err)
+			}
 			// Continue with other stacks even if one fails
 		}
 	}
@@ -122,18 +128,42 @@ func (s *StackExpirer) checkExpiredStacks() {
 
 // destroyExpiredStack creates and executes a destroy command for an expired stack.
 func (s *StackExpirer) destroyExpiredStack(stackInfo datastore.ExpiredStackInfo) error {
-	result, err := prepareDestroyExpiredStack(s.datastore, stackInfo, "stack-expirer", "stack-expirer-cleanup")
+	certified, err := certifyExpiredStack(s.datastore, stackInfo)
 	if err != nil {
 		return err
 	}
+	if certified == nil {
+		return nil
+	}
+	if certified.empty {
+		retirer, ok := s.datastore.(datastore.ExpiredEmptyStackRetirer)
+		if !ok {
+			return fmt.Errorf("datastore does not support certified expired stack retirement")
+		}
+		_, err = retirer.TryRetireExpiredEmptyStack(stackInfo, certified.guards, "")
+		return err
+	}
+	result := certified.result
 	if result == nil {
 		return nil
+	}
+	digest, err := resolutionHash(struct {
+		StackID, StackLabel, OnDependents, ExpiresAt string
+		StackCreatedAt                               time.Time
+		TTLSeconds                                   *int64
+	}{stackInfo.StackID, stackInfo.StackLabel, stackInfo.OnDependents, stackInfo.ExpiresAt, stackInfo.StackCreatedAt, stackInfo.TTLSeconds})
+	if err != nil {
+		return fmt.Errorf("hash expiry decision: %w", err)
+	}
+	admission := datastore.CommandAdmission{
+		Guards: certified.guards, PrincipalScope: "stack-expirer", IdempotencyKey: result.command.ID,
+		RequestDigest: digest, Receipt: []byte(`{"producer":"stack-expirer"}`),
 	}
 
 	// Store the forma command
 	_, err = messages.UnwrapCall(s.Call(
 		gen.ProcessID{Name: actornames.FormaCommandPersister, Node: s.Node().Name()},
-		forma_persister.StoreNewFormaCommand{Command: *result.command},
+		forma_persister.StoreNewFormaCommand{Command: *result.command, Admission: &admission},
 	))
 	if err != nil {
 		return fmt.Errorf("failed to store destroy command: %w", err)
@@ -158,6 +188,84 @@ func (s *StackExpirer) destroyExpiredStack(stackInfo datastore.ExpiredStackInfo)
 	}
 
 	return nil
+}
+
+type certifiedExpiredStack struct {
+	result *destroyExpiredResult
+	guards []datastore.RevisionGuard
+	empty  bool
+}
+
+type deferredExpiredRetirement struct {
+	*planningDatastore
+	attempted bool
+}
+
+func (d *deferredExpiredRetirement) TryRetireEmptyStack(_, _, _ string) (bool, error) {
+	d.attempted = true
+	return false, nil
+}
+
+func sameExpiredCandidate(left, right datastore.ExpiredStackInfo) bool {
+	if left.StackID != right.StackID || left.StackLabel != right.StackLabel ||
+		left.OnDependents != right.OnDependents || left.ExpiresAt != right.ExpiresAt ||
+		!left.StackCreatedAt.Equal(right.StackCreatedAt) {
+		return false
+	}
+	if left.TTLSeconds == nil || right.TTLSeconds == nil {
+		return left.TTLSeconds == nil && right.TTLSeconds == nil
+	}
+	return *left.TTLSeconds == *right.TTLSeconds
+}
+
+func certifyExpiredStack(ds datastore.Datastore, candidate datastore.ExpiredStackInfo) (*certifiedExpiredStack, error) {
+	scope := newPlanningDatastore(ds, &pkgmodel.Forma{Stacks: []pkgmodel.Stack{{Label: candidate.StackLabel}}})
+	// Resolve the current stack incarnation before taking the first certificate
+	// sample. Preparation reads it again inside the certified interval; this read
+	// only includes its identity guard in the initial sample.
+	if _, err := scope.GetStackByLabel(candidate.StackLabel); err != nil {
+		return nil, err
+	}
+	for attempt := 0; attempt < 16; attempt++ {
+		var result *destroyExpiredResult
+		var empty, eligible bool
+		guards, err := scope.certify(func() error {
+			eligible = false
+			empty = false
+			result = nil
+			current, err := scope.GetExpiredStacks()
+			if err != nil {
+				return err
+			}
+			for _, info := range current {
+				if sameExpiredCandidate(candidate, info) {
+					eligible = true
+					break
+				}
+			}
+			if !eligible {
+				return nil
+			}
+			deferred := &deferredExpiredRetirement{planningDatastore: scope}
+			result, err = prepareDestroyExpiredStack(deferred, candidate, "stack-expirer", "stack-expirer-cleanup")
+			empty = deferred.attempted
+			if err != nil || result == nil {
+				return err
+			}
+			return result.command.ResolveStackIdentities(scope)
+		})
+		if errors.Is(err, errPlanningScopeExpanded) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if !eligible {
+			return nil, nil
+		}
+		return &certifiedExpiredStack{result: result, guards: guards, empty: empty}, nil
+	}
+	return nil, fmt.Errorf("%w: expiry planning scope did not stabilize after 16 attempts", datastore.ErrStaleAdmission)
 }
 
 type destroyExpiredResult struct {

@@ -84,6 +84,9 @@ func (d *DatastoreAuroraDataAPI) LookupCommandAdmission(scope, key string) (*dat
 func (d *DatastoreAuroraDataAPI) AdmitFormaCommand(c *forma_command.FormaCommand, a datastore.CommandAdmission) (datastore.AdmissionResult, error) {
 	return d.admissionStore().AdmitFormaCommand(c, a)
 }
+func (d *DatastoreAuroraDataAPI) HasConflictingCommandForStacks(labels []string) (bool, error) {
+	return d.admissionStore().HasConflictingCommandForStacks(labels)
+}
 
 var _ datastore.CommandAdmitter = (*DatastoreAuroraDataAPI)(nil)
 
@@ -118,8 +121,12 @@ func (d *DatastoreAuroraDataAPI) PinCommandTargetIncarnation(commandID, target, 
 func (d *DatastoreAuroraDataAPI) TryRetireEmptyStack(expectedStackID, label, cleanupCommandID string) (bool, error) {
 	return d.admissionStore().TryRetireEmptyStack(expectedStackID, label, cleanupCommandID)
 }
+func (d *DatastoreAuroraDataAPI) TryRetireExpiredEmptyStack(candidate datastore.ExpiredStackInfo, expected []datastore.RevisionGuard, cleanupCommandID string) (bool, error) {
+	return d.admissionStore().TryRetireExpiredEmptyStack(candidate, expected, cleanupCommandID)
+}
 
 var _ datastore.EmptyStackRetirer = &DatastoreAuroraDataAPI{}
+var _ datastore.ExpiredEmptyStackRetirer = &DatastoreAuroraDataAPI{}
 
 func (d *DatastoreAuroraDataAPI) HasOnlyExternalChanges(ksuid, baselineCommandID, observedVersion string) (bool, error) {
 	return d.admissionStore().HasOnlyExternalChanges(ksuid, baselineCommandID, observedVersion)
