@@ -75,6 +75,30 @@ func RunStackRetirement(t *testing.T, ds, other datastore.Datastore, store datas
 		require.NoError(t, err)
 		return datastore.CommandAdmission{PrincipalScope: "retirement", IdempotencyKey: util.NewID(), RequestDigest: strings.Repeat("a", 64), Receipt: []byte(`{}`), Guards: guards}
 	}
+	ageStack := func(t *testing.T, s *pkgmodel.Stack) {
+		t.Helper()
+		tx, err := store.Begin()
+		require.NoError(t, err)
+		// PostgreSQL stores this column without a zone. A two-day offset keeps the
+		// fixture expired under every supported session timezone.
+		require.NoError(t, tx.Exec("UPDATE stacks SET valid_from=? WHERE id=?", time.Now().UTC().Add(-48*time.Hour), s.ID))
+		require.NoError(t, tx.Commit())
+	}
+	expiredCandidate := func(t *testing.T, s *pkgmodel.Stack, seconds int64) datastore.ExpiredStackInfo {
+		t.Helper()
+		expired, err := ds.GetExpiredStacks()
+		require.NoError(t, err)
+		for _, info := range expired {
+			if info.StackID == s.ID {
+				require.NotZero(t, info.StackCreatedAt)
+				require.NotNil(t, info.TTLSeconds)
+				require.Equal(t, seconds, *info.TTLSeconds)
+				return info
+			}
+		}
+		t.Fatalf("missing expired TTLSeconds candidate for stack %s", s.Label)
+		return datastore.ExpiredStackInfo{}
+	}
 	t.Run("certified_expired_empty_retirement", func(t *testing.T) {
 		s := newStack(t)
 		deadline := time.Now().UTC().Add(-time.Hour)
@@ -124,11 +148,12 @@ func RunStackRetirement(t *testing.T, ds, other datastore.Datastore, store datas
 	})
 	t.Run("certified_ttl_seconds_empty_retirement", func(t *testing.T) {
 		s := newStack(t)
+		ageStack(t, s)
 		seconds := int64(60)
 		policy := &pkgmodel.TTLPolicy{Type: "ttl", Label: "expired-seconds", StackID: s.ID, TTLSeconds: seconds, OnDependents: "abort"}
 		_, err := ds.CreatePolicy(policy, "setup-expired-seconds")
 		require.NoError(t, err)
-		candidate := datastore.ExpiredStackInfo{StackID: s.ID, StackLabel: s.Label, OnDependents: "abort", TTLSeconds: &seconds}
+		candidate := expiredCandidate(t, s, seconds)
 		ok, err := ds.(datastore.ExpiredEmptyStackRetirer).TryRetireExpiredEmptyStack(candidate, admission(t, s).Guards, "")
 		require.NoError(t, err)
 		require.True(t, ok)
@@ -138,16 +163,20 @@ func RunStackRetirement(t *testing.T, ds, other datastore.Datastore, store datas
 	})
 	t.Run("certified_ttl_seconds_empty_retirement_rejects_changed_duration", func(t *testing.T) {
 		s := newStack(t)
+		ageStack(t, s)
 		seconds := int64(60)
 		policy := &pkgmodel.TTLPolicy{Type: "ttl", Label: "expired-seconds", StackID: s.ID, TTLSeconds: seconds, OnDependents: "abort"}
 		_, err := ds.CreatePolicy(policy, "setup-expired-seconds")
 		require.NoError(t, err)
-		candidate := datastore.ExpiredStackInfo{StackID: s.ID, StackLabel: s.Label, OnDependents: "abort", TTLSeconds: &seconds}
+		candidate := expiredCandidate(t, s, seconds)
 		changed := int64(86400)
 		policy.TTLSeconds = changed
 		_, err = other.UpdatePolicy(policy, "extend-duration")
 		require.NoError(t, err)
-		ok, err := ds.(datastore.ExpiredEmptyStackRetirer).TryRetireExpiredEmptyStack(candidate, admission(t, s).Guards, "")
+		// Refresh after the write so this case isolates the certified duration
+		// predicate; the changed-policy case above separately proves stale guards.
+		refreshed := admission(t, s).Guards
+		ok, err := ds.(datastore.ExpiredEmptyStackRetirer).TryRetireExpiredEmptyStack(candidate, refreshed, "")
 		require.NoError(t, err)
 		require.False(t, ok)
 		retained, err := ds.GetStackByLabel(s.Label)
