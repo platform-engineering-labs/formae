@@ -40,6 +40,7 @@ func RunAdmissionCommandLifecycleProperty(t *testing.T, newFixture func(Admissio
 		rt.Cleanup(func() { require.NoError(rt, f.CloseForTest()) })
 		_, err := f.CreateTarget(&pkgmodel.Target{Label: "default-target", Namespace: "AWS", Config: json.RawMessage(`{"region":"baseline"}`)})
 		require.NoError(rt, err)
+		propertyGeneratedLifecycleSchedule(rt, f, before)
 		for _, operation := range order {
 			switch operation {
 			case "modified_ts_only":
@@ -61,6 +62,61 @@ func RunAdmissionCommandLifecycleProperty(t *testing.T, newFixture func(Admissio
 			}
 		}
 	})
+}
+
+func propertyGeneratedLifecycleSchedule(t *rapid.T, f AdmissionCommandLifecycleFixture, baseline string) {
+	stack := lifecyclePropertyStack(t, f, "schedule")
+	resourceID := mksuid.New().String()
+	baseTime := time.Now().UTC().Add(-2 * time.Hour)
+	seed := lifecyclePropertyCommand(stack, resourceID, baseline, forma_command.CommandStateSuccess)
+	seed.StartTs, seed.ModifiedTs = baseTime, baseTime
+	require.NoError(t, f.StoreFormaCommand(seed, seed.ID))
+
+	type lifecycleStep struct {
+		name   string
+		state  forma_command.CommandState
+		mode   pkgmodel.FormaApplyMode
+		source forma_command.Source
+		newer  bool
+	}
+	steps := rapid.Permutation([]lifecycleStep{
+		{name: "success", state: forma_command.CommandStateSuccess, mode: pkgmodel.FormaApplyModeReconcile, source: forma_command.SourceUser, newer: true},
+		{name: "failed", state: forma_command.CommandStateFailed, mode: pkgmodel.FormaApplyModeReconcile, source: forma_command.SourceUser, newer: true},
+		{name: "canceled", state: forma_command.CommandStateCanceled, mode: pkgmodel.FormaApplyModeReconcile, source: forma_command.SourceUser, newer: true},
+		{name: "pending", state: forma_command.CommandStatePending, mode: pkgmodel.FormaApplyModeReconcile, source: forma_command.SourceUser, newer: true},
+		{name: "in_progress", state: forma_command.CommandStateInProgress, mode: pkgmodel.FormaApplyModeReconcile, source: forma_command.SourceUser, newer: true},
+		{name: "patch_mode", state: forma_command.CommandStateSuccess, mode: pkgmodel.FormaApplyModePatch, source: forma_command.SourceUser, newer: true},
+		{name: "excluded_source", state: forma_command.CommandStateSuccess, mode: pkgmodel.FormaApplyModeReconcile, source: forma_command.SourceDiscovery, newer: true},
+		{name: "older_timestamp", state: forma_command.CommandStateSuccess, mode: pkgmodel.FormaApplyModeReconcile, source: forma_command.SourceUser, newer: false},
+	}).Draw(t, "lifecycle_schedule")
+	command := lifecyclePropertyCommand(stack, resourceID, baseline, forma_command.CommandStatePending)
+	for i, step := range steps {
+		value := rapid.StringMatching(`[a-z]{1,8}`).Draw(t, "schedule_value_"+step.name)
+		command.State = step.state
+		command.Config.Mode = step.mode
+		command.Source = step.source
+		command.ResourceUpdates[0].DesiredState.Properties = json.RawMessage(fmt.Sprintf(`{"value":%q}`, value))
+		if step.newer {
+			command.StartTs = baseTime.Add(time.Duration(i+1) * time.Minute)
+		} else {
+			command.StartTs = baseTime.Add(-time.Hour)
+		}
+		command.ModifiedTs = command.StartTs
+		guards := lifecycleGuards(t, f, stack)
+		require.NoError(t, f.StoreFormaCommand(command, command.ID))
+
+		// The current full-row restore replaces this command's prior lifecycle
+		// contribution. If it is ineligible, desired state falls back to the
+		// independent seed command rather than retaining an earlier incarnation.
+		expected := baseline
+		eligibleState := step.state == forma_command.CommandStateSuccess || step.state == forma_command.CommandStateFailed
+		eligibleSource := step.source == forma_command.SourceUser || step.source == forma_command.SourceAutoReconciler || step.source == forma_command.SourceStackExpirer
+		if eligibleState && eligibleSource && step.mode == pkgmodel.FormaApplyModeReconcile && step.newer {
+			expected = value
+		}
+		assertExtractedLifecycleValue(t, f.Datastore, stack.Label, fmt.Sprintf(`{"value":%q}`, expected))
+		assertLifecycleAdmission(t, f, guards, lifecycleCandidate(), lifecycleMustStale)
+	}
 }
 
 func propertyModifiedTimestampOnly(t AdmissionLifecycleTestingT, f AdmissionCommandLifecycleFixture, value string) {
