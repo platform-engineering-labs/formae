@@ -54,7 +54,12 @@ func (d *expiredStackReadBarrier) GetExpiredStacks() ([]datastore.ExpiredStackIn
 	if err != nil {
 		return nil, err
 	}
-	d.observed <- append([]datastore.ExpiredStackInfo(nil), expired...)
+	if d.observed != nil {
+		select {
+		case d.observed <- append([]datastore.ExpiredStackInfo(nil), expired...):
+		default:
+		}
+	}
 	if d.blockNext.CompareAndSwap(true, false) {
 		<-d.release
 	}
@@ -114,7 +119,10 @@ func (d *expiredStackReadBarrier) StackHasActiveCommands(label string) (bool, er
 func (d *expiredStackReadBarrier) GetGeneratorsWithRotation() ([]datastore.GeneratorRotationInfo, error) {
 	infos, err := d.Datastore.GetGeneratorsWithRotation()
 	if d.rotationObserved != nil && d.observeRotations.Load() {
-		d.rotationObserved <- struct{}{}
+		select {
+		case d.rotationObserved <- struct{}{}:
+		default:
+		}
 	}
 	if d.blockRotationNext.CompareAndSwap(true, false) {
 		<-d.rotationRelease
@@ -145,8 +153,8 @@ func stackExpirerCommands(t *testing.T, ds datastore.Datastore) []*forma_command
 	return result
 }
 
-// Removing the final scheduled-command admission check lets a stale expiry
-// candidate store a destroy after a same-stack apply has already started.
+// The certified expired-stack reread must reject a stale candidate after a
+// same-stack apply has already started, then a later sweep may retry it.
 func TestScheduledAdmissionExpiredCandidateWaitsForBusyStackAndRetries(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		path := t.TempDir() + "/ttl-race.db"
