@@ -4241,7 +4241,7 @@ func (d DatastorePostgres) storeResource(ctx context.Context, resource *pkgmodel
 	}
 
 	// Check if this resource already exists by native_id and type
-	query := `SELECT ksuid, data, uri, version, managed FROM resources WHERE native_id = $1 AND type = $2 ORDER BY version COLLATE "C" DESC LIMIT 1`
+	query := `SELECT ksuid, data, uri, version, managed, target, COALESCE(target_incarnation_id, ''), COALESCE(command_id, '') FROM resources WHERE native_id = $1 AND type = $2 ORDER BY version COLLATE "C" DESC LIMIT 1`
 	row := d.pool.QueryRow(ctx, query, resource.NativeID, resource.Type)
 
 	var ksuid string
@@ -4249,7 +4249,10 @@ func (d DatastorePostgres) storeResource(ctx context.Context, resource *pkgmodel
 	var uri string
 	var version string
 	var managed bool
-	err := row.Scan(&ksuid, &existingData, &uri, &version, &managed)
+	var target string
+	var existingIncarnation string
+	var existingCommandID string
+	err := row.Scan(&ksuid, &existingData, &uri, &version, &managed, &target, &existingIncarnation, &existingCommandID)
 
 	if errors.Is(err, pgx.ErrNoRows) {
 		newVersion := mksuid.New().String()
@@ -4333,10 +4336,32 @@ func (d DatastorePostgres) storeResource(ctx context.Context, resource *pkgmodel
 	}
 
 	var newVersion string
-	if readWriteEqual && !readOnlyEqual {
+	if operation != string(resource_update.OperationDelete) && readWriteEqual && !readOnlyEqual {
 		newVersion = version
 	} else {
 		newVersion = mksuid.New().String()
+	}
+
+	// A synchronizer read that changes only provider-observed fields refreshes
+	// the existing physical version. Keep that version owned by the command that
+	// created it so pruning the transient read cannot erase write/drift history.
+	// Other callers, missing commands, and metadata changes keep the incoming
+	// attribution conservatively.
+	if newVersion == version && resource.Ksuid == ksuid && resource.Target == target && resource.Managed == managed {
+		var incomingCommand, incomingSource string
+		lookupErr := d.pool.QueryRow(ctx,
+			`SELECT command, COALESCE(source, '') FROM forma_commands WHERE command_id = $1`,
+			commandID,
+		).Scan(&incomingCommand, &incomingSource)
+		if lookupErr != nil && !errors.Is(lookupErr, pgx.ErrNoRows) {
+			return "", fmt.Errorf("failed to classify resource command: %w", lookupErr)
+		}
+		if lookupErr == nil && incomingCommand == string(pkgmodel.CommandSync) && incomingSource == string(forma_command.SourceSynchronizer) {
+			commandID = existingCommandID
+			if expectedIncarnation == "" {
+				expectedIncarnation = existingIncarnation
+			}
+		}
 	}
 
 	query = `
