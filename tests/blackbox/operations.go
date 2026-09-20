@@ -28,9 +28,10 @@ const (
 
 	// Cloud operations (dispatched via Ergo to TestController)
 
-	OpCloudModify // out-of-band modification of a resource
-	OpCloudDelete // out-of-band deletion of a resource
-	OpCloudCreate // out-of-band creation of a resource
+	OpCloudModify  // out-of-band modification of writable properties
+	OpCloudObserve // out-of-band modification of provider-only observed properties
+	OpCloudDelete  // out-of-band deletion of a resource
+	OpCloudCreate  // out-of-band creation of a resource
 
 	// Policy operations
 
@@ -73,6 +74,9 @@ type Operation struct {
 
 	// For OpCloudModify/OpCloudCreate: the properties JSON to set.
 	Properties string
+
+	// For OpCloudObserve: the provider-only revision to set outside the schema.
+	ObservedRevision string
 
 	// For OpCloudCreate: the resource type.
 	ResourceType string

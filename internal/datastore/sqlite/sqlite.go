@@ -1260,7 +1260,7 @@ func (d DatastoreSQLite) storeResource(resource *pkgmodel.Resource, data []byte,
 	}
 
 	// Check if this resource already exists using native_id and type
-	query := `SELECT ksuid, data, uri, version, managed FROM resources WHERE native_id = ? AND type = ? ORDER BY version DESC LIMIT 1`
+	query := `SELECT ksuid, data, uri, version, managed, target, COALESCE(target_incarnation_id, ''), COALESCE(command_id, '') FROM resources WHERE native_id = ? AND type = ? ORDER BY version DESC LIMIT 1`
 	row := d.conn.QueryRow(query, resource.NativeID, resource.Type)
 
 	var ksuid string
@@ -1268,7 +1268,10 @@ func (d DatastoreSQLite) storeResource(resource *pkgmodel.Resource, data []byte,
 	var uri string
 	var version string
 	var managed int
-	err := row.Scan(&ksuid, &existingData, &uri, &version, &managed)
+	var target string
+	var existingIncarnation string
+	var existingCommandID string
+	err := row.Scan(&ksuid, &existingData, &uri, &version, &managed, &target, &existingIncarnation, &existingCommandID)
 	if err == sql.ErrNoRows {
 		// Resource does not exist, create the initial version
 		newVersion := mksuid.New()
@@ -1349,10 +1352,32 @@ func (d DatastoreSQLite) storeResource(resource *pkgmodel.Resource, data []byte,
 	// We only create a new version if the read-write properties have changed. Read-only property changes do not
 	// trigger a new version but instead update the existing.
 	var newVersion string
-	if readWriteEqual && !readOnlyEqual {
+	if operation != string(resource_update.OperationDelete) && readWriteEqual && !readOnlyEqual {
 		newVersion = version
 	} else {
 		newVersion = mksuid.New().String()
+	}
+
+	// A synchronizer read that changes only provider-observed fields refreshes
+	// the existing physical version. Keep that version owned by the command that
+	// created it so pruning the transient read cannot erase write/drift history.
+	// Other callers, missing commands, and metadata changes keep the incoming
+	// attribution conservatively.
+	if newVersion == version && resource.Ksuid == ksuid && resource.Target == target && datastore.BoolToInt(resource.Managed) == managed {
+		var incomingCommand, incomingSource string
+		lookupErr := d.conn.QueryRow(
+			`SELECT command, COALESCE(source, '') FROM forma_commands WHERE command_id = ?`,
+			commandID,
+		).Scan(&incomingCommand, &incomingSource)
+		if lookupErr != nil && lookupErr != sql.ErrNoRows {
+			return "", lookupErr
+		}
+		if lookupErr == nil && incomingCommand == string(pkgmodel.CommandSync) && incomingSource == string(forma_command.SourceSynchronizer) {
+			commandID = existingCommandID
+			if expectedIncarnation == "" {
+				expectedIncarnation = existingIncarnation
+			}
+		}
 	}
 
 	query = `

@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync/atomic"
 	"time"
@@ -226,7 +227,8 @@ func (p *TestPlugin) Update(_ context.Context, request *resource.UpdateRequest) 
 		}
 	}
 
-	p.cloudState.Put(request.NativeID, request.ResourceType, string(request.DesiredProperties))
+	observedProperties := preserveObservedRevision(p.cloudState, request.NativeID, request.DesiredProperties)
+	p.cloudState.Put(request.NativeID, request.ResourceType, string(observedProperties))
 	p.recordOp("Update", request.ResourceType, request.NativeID)
 
 	return &resource.UpdateResult{
@@ -234,9 +236,35 @@ func (p *TestPlugin) Update(_ context.Context, request *resource.UpdateRequest) 
 			Operation:          resource.OperationUpdate,
 			OperationStatus:    resource.OperationStatusSuccess,
 			NativeID:           request.NativeID,
-			ResourceProperties: request.DesiredProperties,
+			ResourceProperties: observedProperties,
 		},
 	}, nil
+}
+
+// preserveObservedRevision models a provider-owned field that survives a
+// writable update. It is intentionally limited to the one optional fixture
+// field used by the blackbox history tests; resources without that field keep
+// the existing replace-on-update behavior.
+func preserveObservedRevision(cloudState *CloudState, nativeID string, desired json.RawMessage) json.RawMessage {
+	current, ok := cloudState.Get(nativeID)
+	if !ok {
+		return desired
+	}
+	var currentProperties, desiredProperties map[string]json.RawMessage
+	if json.Unmarshal([]byte(current.Properties), &currentProperties) != nil ||
+		json.Unmarshal(desired, &desiredProperties) != nil {
+		return desired
+	}
+	revision, ok := currentProperties["ObservedRevision"]
+	if !ok {
+		return desired
+	}
+	desiredProperties["ObservedRevision"] = revision
+	encoded, err := json.Marshal(desiredProperties)
+	if err != nil {
+		return desired
+	}
+	return encoded
 }
 
 func (p *TestPlugin) Delete(_ context.Context, request *resource.DeleteRequest) (*resource.DeleteResult, error) {
@@ -317,7 +345,13 @@ func (p *TestPlugin) List(_ context.Context, request *resource.ListRequest) (*re
 }
 
 func (p *TestPlugin) DiscoveryFilters() []model.MatchFilter {
-	return nil
+	return []model.MatchFilter{{
+		ResourceTypes: []string{"Test::Generic::Resource"},
+		Conditions: []model.FilterCondition{{
+			PropertyPath:  "$.ExcludeFromDiscovery",
+			PropertyValue: "true",
+		}},
+	}}
 }
 
 func (p *TestPlugin) LabelConfig() model.LabelConfig {

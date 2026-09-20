@@ -67,6 +67,7 @@ func TestGenerator_RespectsConfig_NoCloudChanges(t *testing.T) {
 
 		for _, op := range ops {
 			assert.NotEqual(t, OpCloudModify, op.Kind, "should not generate OpCloudModify when EnableCloudChanges=false")
+			assert.NotEqual(t, OpCloudObserve, op.Kind, "should not generate OpCloudObserve when EnableCloudChanges=false")
 			assert.NotEqual(t, OpCloudDelete, op.Kind, "should not generate OpCloudDelete when EnableCloudChanges=false")
 			assert.NotEqual(t, OpCloudCreate, op.Kind, "should not generate OpCloudCreate when EnableCloudChanges=false")
 		}
@@ -107,6 +108,9 @@ func TestGenerator_WithFailuresEnabled(t *testing.T) {
 }
 
 func TestGenerator_WithCloudChangesEnabled(t *testing.T) {
+	assert.Len(t, allowedKinds(PropertyTestConfig{EnableCloudChanges: true}), 9,
+		"cloud changes include observation-only refreshes")
+
 	rapid.Check(t, func(rt *rapid.T) {
 		config := PropertyTestConfig{
 			ResourceCount:      3,
@@ -118,6 +122,10 @@ func TestGenerator_WithCloudChangesEnabled(t *testing.T) {
 		for _, op := range ops {
 			if op.Kind == OpCloudModify || op.Kind == OpCloudCreate {
 				assert.NotEmpty(t, op.Properties, "cloud modify/create should have properties")
+			}
+			if op.Kind == OpCloudObserve {
+				assert.True(t, op.CloudTargetManaged, "observation-only changes target managed resources")
+				assert.NotEmpty(t, op.ObservedRevision)
 			}
 			if op.Kind == OpCloudCreate {
 				assert.NotEmpty(t, op.NativeID, "cloud create should have a native ID")

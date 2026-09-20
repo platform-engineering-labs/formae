@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/platform-engineering-labs/formae/internal/metastructure/testutil"
 	"pgregory.net/rapid"
 )
@@ -176,6 +178,8 @@ func TestProperty_FullChaos(t *testing.T) {
 
 			h.AssertAllInvariants(t, model)
 		})
+		require.Positive(t, h.ObservationsExecuted,
+			"FullChaos must execute the generated observation-only cloud action")
 	})
 }
 

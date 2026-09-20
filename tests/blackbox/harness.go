@@ -61,6 +61,10 @@ type TestHarness struct {
 	// or no-op rename executes no rename at all).
 	RenamesAccepted int
 
+	// ObservationsExecuted counts generated provider-only cloud changes that
+	// reached a managed resource and completed their sync assertions.
+	ObservationsExecuted int
+
 	// Agent subprocess
 	agentCmd     *exec.Cmd
 	agentLogFile *os.File
@@ -716,7 +720,12 @@ func (h *TestHarness) RestartAgent(t *testing.T, timeout time.Duration) {
 			if res.NativeID == "" {
 				continue
 			}
-			flatProps := flattenPropertiesForCloud(res.Properties)
+			observedProperties, combineErr := combinedInventoryProperties(res)
+			if combineErr != nil {
+				t.Logf("warning: failed to combine inventory properties for %s: %v", res.NativeID, combineErr)
+				continue
+			}
+			flatProps := flattenPropertiesForCloud(json.RawMessage(observedProperties))
 			_, err := h.callTestController(testcontrol.PutCloudStateRequest{
 				NativeID:     res.NativeID,
 				ResourceType: res.Type,
