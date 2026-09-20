@@ -589,14 +589,23 @@ func (f *FormaCommandPersister) storeNewFormaCommandWithAdmission(command *forma
 		if err != nil {
 			return CommandPersistResult{}, err
 		}
-		result.Admission = &accepted
 		if accepted.Replayed {
+			result.Admission = &accepted
 			return result, nil
 		}
 		command = accepted.Command
 		if command == nil {
 			return CommandPersistResult{}, fmt.Errorf("admission did not return committed command")
 		}
+		reply, err := snapshotFormaCommand(command)
+		if err != nil {
+			// Admission is already committed. Returning the failure leaves the
+			// caller to retry its receipt; replay then loads and dispatches the
+			// durable command without caching a partial snapshot here.
+			return CommandPersistResult{}, fmt.Errorf("snapshot admitted command: %w", err)
+		}
+		accepted.Command = reply
+		result.Admission = &accepted
 		// Refresh is a postcommit hint; startup also reloads effective policies.
 		if len(command.StackUpdates) > 0 || len(command.PolicyUpdates) > 0 {
 			if err := f.Send(gen.ProcessID{Name: actornames.AutoReconciler, Node: f.Node().Name()}, messages.RefreshEffectivePolicies{}); err != nil {
@@ -630,7 +639,33 @@ func (f *FormaCommandPersister) loadFormaCommand(commandID string) (*forma_comma
 		f.Log().Error("Failed to load Forma command commandID=%s: %v", commandID, err)
 		return nil, fmt.Errorf("failed to load Forma command: %w", err)
 	}
-	return cached.command, nil
+	command, err := snapshotFormaCommand(cached.command)
+	if err != nil {
+		return nil, fmt.Errorf("snapshot Forma command: %w", err)
+	}
+	return command, nil
+}
+
+// snapshotFormaCommand transfers command ownership out of the persister
+// mailbox. Ordinary JSON owns all public nested values; setup metadata restores
+// the hidden draw intent and generator identities that execution needs.
+func snapshotFormaCommand(command *forma_command.FormaCommand) (*forma_command.FormaCommand, error) {
+	data, err := json.Marshal(command)
+	if err != nil {
+		return nil, err
+	}
+	var snapshot forma_command.FormaCommand
+	if err = json.Unmarshal(data, &snapshot); err != nil {
+		return nil, err
+	}
+	setup, err := command.MarshalSetupMetadata(true)
+	if err != nil {
+		return nil, err
+	}
+	if err = snapshot.UnmarshalSetupMetadata(setup); err != nil {
+		return nil, err
+	}
+	return &snapshot, nil
 }
 
 func (f *FormaCommandPersister) updateCommandFromProgress(progress *messages.UpdateResourceProgress) (bool, error) {
