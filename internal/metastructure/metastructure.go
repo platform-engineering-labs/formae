@@ -952,6 +952,18 @@ func (m *Metastructure) DestroyForma(forma *pkgmodel.Forma, config *config.Forma
 			return nil, fmt.Errorf("failed to persist generator updates: %w", err)
 		}
 		m.Node.Log().Debug("Successfully persisted generator updates count=%d", len(fa.GeneratorUpdates))
+
+		_, err = m.callActor(
+			gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
+			generator_update.UpdateGeneratorStates{
+				CommandID:        fa.ID,
+				GeneratorUpdates: fa.GeneratorUpdates,
+			},
+		)
+		if err != nil {
+			slog.Error("Failed to update forma command with generator states", "error", err)
+			return nil, fmt.Errorf("failed to update forma command with generator states: %w", err)
+		}
 	}
 
 	if fa.HasExecutableChanges() {

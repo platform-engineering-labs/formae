@@ -18,6 +18,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/datastore"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/generator_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
@@ -464,6 +465,8 @@ func (f *FormaCommandPersister) HandleCall(from gen.PID, ref gen.Ref, message an
 		return f.ack(f.updateStackStates(&msg))
 	case messages.UpdatePolicyStates:
 		return f.ack(f.updatePolicyStates(&msg))
+	case generator_update.UpdateGeneratorStates:
+		return f.ack(f.updateGeneratorStates(&msg))
 	case MarkResourcesAsRejected:
 		return f.ack(f.markResourcesAsRejected(&msg))
 	case MarkResourcesAsFailed:
@@ -1019,6 +1022,40 @@ func (f *FormaCommandPersister) updatePolicyStates(msg *messages.UpdatePolicySta
 
 	f.Log().Debug("Successfully updated Forma command with policy states commandID=%s", msg.CommandID)
 	return true, nil
+}
+
+func (f *FormaCommandPersister) updateGeneratorStates(msg *generator_update.UpdateGeneratorStates) (bool, error) {
+	f.Log().Debug("Updating Forma command with generator states commandID=%s generatorCount=%d", msg.CommandID, len(msg.GeneratorUpdates))
+
+	cached, err := f.getOrLoadCommand(msg.CommandID)
+	if err != nil {
+		return false, fmt.Errorf("failed to load Forma command for generator state update: %w", err)
+	}
+
+	updates, err := snapshotGeneratorUpdates(msg.GeneratorUpdates)
+	if err != nil {
+		return false, fmt.Errorf("snapshot generator state update: %w", err)
+	}
+	cached.command.GeneratorUpdates = updates
+	cached.command.State = overallCommandState(cached.command)
+
+	if err = f.persistCommand(cached); err != nil {
+		return false, fmt.Errorf("failed to update Forma command with generator states: %w", err)
+	}
+
+	return true, nil
+}
+
+func snapshotGeneratorUpdates(updates []generator_update.GeneratorUpdate) ([]generator_update.GeneratorUpdate, error) {
+	data, err := json.Marshal(updates)
+	if err != nil {
+		return nil, err
+	}
+	var snapshot []generator_update.GeneratorUpdate
+	if err = json.Unmarshal(data, &snapshot); err != nil {
+		return nil, err
+	}
+	return snapshot, nil
 }
 
 func (f *FormaCommandPersister) markResourcesAsRejected(msg *MarkResourcesAsRejected) (bool, error) {

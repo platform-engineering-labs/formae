@@ -288,6 +288,118 @@ func TestUnguardedPersisterOwnsDetachedCommandAfterStore(t *testing.T) {
 	require.Equal(t, "generator-stack-id", loaded.DrawGeneratorUpdates[0].Generator.GetStackID())
 }
 
+func TestGeneratorStateHandoffOwnsPayloadAndCompletesCommands(t *testing.T) {
+	completedGenerator := func() []generator_update.GeneratorUpdate {
+		generator := &pkgmodel.PasswordGenerator{Label: "credential", Stack: "test-stack", Length: 24, Lowercase: true}
+		generator.SetID("generator-id")
+		generator.SetStackID("generator-stack-id")
+		return []generator_update.GeneratorUpdate{{
+			Generator:  generator,
+			Operation:  generator_update.GeneratorOperationDelete,
+			State:      generator_update.GeneratorUpdateStateSuccess,
+			StackLabel: "test-stack",
+			Version:    "generator-version",
+		}}
+	}
+
+	t.Run("detaches payload while resource work remains", func(t *testing.T) {
+		ds, err := dssqlite.NewDatastoreSQLite(context.Background(), &pkgmodel.DatastoreConfig{Sqlite: pkgmodel.SqliteConfig{FilePath: ":memory:"}}, "test")
+		require.NoError(t, err)
+		defer ds.Close()
+		persister, sender, err := newFormaCommandPersisterWithDatastore(t, ds)
+		require.NoError(t, err)
+
+		command := newFormaCommandWithCreateResourceUpdate()
+		command.ID = util.NewID()
+		command.Command = pkgmodel.CommandDestroy
+		pending := completedGenerator()
+		pending[0].State = generator_update.GeneratorUpdateStateNotStarted
+		pending[0].Version = ""
+		command.GeneratorUpdates = pending
+		stored := persister.Call(sender, StoreNewFormaCommand{Command: *command})
+		require.NoError(t, stored.Error)
+		require.Empty(t, stored.Response.(CommandPersistResult).Error)
+
+		completed := completedGenerator()
+		updated := persister.Call(sender, generator_update.UpdateGeneratorStates{CommandID: command.ID, GeneratorUpdates: completed})
+		require.NoError(t, updated.Error)
+		require.Empty(t, updated.Response.(CommandPersistResult).Error)
+
+		completed[0].State = generator_update.GeneratorUpdateStateFailed
+		completed[0].Version = "caller-corruption"
+		completed[0].Generator.SetID("caller-corruption")
+		completed[0].Generator.SetStackID("caller-corruption")
+
+		loadedResult := persister.Call(sender, LoadFormaCommand{CommandID: command.ID})
+		require.NoError(t, loadedResult.Error)
+		loaded := loadedResult.Response.(LoadFormaCommandResult).Command
+		require.Equal(t, forma_command.CommandStateInProgress, loaded.State)
+		require.Equal(t, resource_update.ResourceUpdateStateNotStarted, loaded.ResourceUpdates[0].State)
+		require.Equal(t, generator_update.GeneratorUpdateStateSuccess, loaded.GeneratorUpdates[0].State)
+		require.Equal(t, "generator-version", loaded.GeneratorUpdates[0].Version)
+		require.Equal(t, "generator-id", loaded.GeneratorUpdates[0].Generator.GetID())
+		require.Equal(t, "generator-stack-id", loaded.GeneratorUpdates[0].Generator.GetStackID())
+	})
+
+	t.Run("finalizes generator-only command", func(t *testing.T) {
+		ds, err := dssqlite.NewDatastoreSQLite(context.Background(), &pkgmodel.DatastoreConfig{Sqlite: pkgmodel.SqliteConfig{FilePath: ":memory:"}}, "test")
+		require.NoError(t, err)
+		defer ds.Close()
+		persister, sender, err := newFormaCommandPersisterWithDatastore(t, ds)
+		require.NoError(t, err)
+
+		command := &forma_command.FormaCommand{
+			ID: util.NewID(), Command: pkgmodel.CommandDestroy, State: forma_command.CommandStateNotStarted,
+			GeneratorUpdates: completedGenerator(),
+		}
+		command.GeneratorUpdates[0].State = generator_update.GeneratorUpdateStateNotStarted
+		command.GeneratorUpdates[0].Version = ""
+		stored := persister.Call(sender, StoreNewFormaCommand{Command: *command})
+		require.NoError(t, stored.Error)
+		require.Empty(t, stored.Response.(CommandPersistResult).Error)
+
+		updated := persister.Call(sender, generator_update.UpdateGeneratorStates{CommandID: command.ID, GeneratorUpdates: completedGenerator()})
+		require.NoError(t, updated.Error)
+		require.Empty(t, updated.Response.(CommandPersistResult).Error)
+		persisted, err := ds.GetFormaCommandByCommandID(command.ID)
+		require.NoError(t, err)
+		require.Equal(t, forma_command.CommandStateSuccess, persisted.State)
+		require.Equal(t, generator_update.GeneratorUpdateStateSuccess, persisted.GeneratorUpdates[0].State)
+		require.Equal(t, "generator-version", persisted.GeneratorUpdates[0].Version)
+		require.Nil(t, persister.Behavior().(*FormaCommandPersister).activeCommands[command.ID])
+	})
+
+	t.Run("reports command persistence failure in-band and retries on touch", func(t *testing.T) {
+		real, err := dssqlite.NewDatastoreSQLite(context.Background(), &pkgmodel.DatastoreConfig{Sqlite: pkgmodel.SqliteConfig{FilePath: ":memory:"}}, "test")
+		require.NoError(t, err)
+		defer real.Close()
+		store := &commandStoreFailingOnce{Datastore: real}
+		persister, sender, err := newFormaCommandPersisterWithDatastore(t, store)
+		require.NoError(t, err)
+
+		command := &forma_command.FormaCommand{
+			ID: util.NewID(), Command: pkgmodel.CommandDestroy, State: forma_command.CommandStateNotStarted,
+			GeneratorUpdates: completedGenerator(),
+		}
+		command.GeneratorUpdates[0].State = generator_update.GeneratorUpdateStateNotStarted
+		command.GeneratorUpdates[0].Version = ""
+		stored := persister.Call(sender, StoreNewFormaCommand{Command: *command})
+		require.NoError(t, stored.Error)
+		require.Empty(t, stored.Response.(CommandPersistResult).Error)
+
+		store.failures = 1
+		updated := persister.Call(sender, generator_update.UpdateGeneratorStates{CommandID: command.ID, GeneratorUpdates: completedGenerator()})
+		require.NoError(t, updated.Error)
+		require.NotEmpty(t, updated.Response.(CommandPersistResult).Error)
+
+		loadedResult := persister.Call(sender, LoadFormaCommand{CommandID: command.ID})
+		require.NoError(t, loadedResult.Error)
+		loaded := loadedResult.Response.(LoadFormaCommandResult).Command
+		require.Equal(t, forma_command.CommandStateSuccess, loaded.State)
+		require.Equal(t, generator_update.GeneratorUpdateStateSuccess, loaded.GeneratorUpdates[0].State)
+	})
+}
+
 func TestOverallStateIncludesIncompleteAndFailedMetadata(t *testing.T) {
 	c := &forma_command.FormaCommand{StackUpdates: []stack_update.StackUpdate{{State: stack_update.StackUpdateStateNotStarted}}}
 	require.NotEqual(t, forma_command.CommandStateSuccess, overallCommandState(c))

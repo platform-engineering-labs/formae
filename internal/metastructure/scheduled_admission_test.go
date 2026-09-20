@@ -281,8 +281,8 @@ func TestScheduledAdmissionExpiredCandidateWaitsForBusyStackAndRetries(t *testin
 	})
 }
 
-// Removing the shared persister exclusion lets a user destroy and a stale
-// scheduled expiry both pass their early checks and admit overlapping deletes.
+// The certified expired-stack reread must reject a stale expiry candidate
+// after a user destroy starts, so the two deletes cannot overlap.
 func TestScheduledAdmissionExpiredCandidateConflictsWithUserDestroy(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		path := t.TempDir() + "/ttl-user-destroy.db"
