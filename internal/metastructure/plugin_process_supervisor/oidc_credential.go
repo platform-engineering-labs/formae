@@ -5,11 +5,14 @@
 package plugin_process_supervisor
 
 import (
+	"bytes"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -44,6 +47,8 @@ func oidcCredentialTagName(tag string) string {
 // coordinator can tell apart from the dead process's.
 type oidcBrokerEntry struct {
 	name          string
+	version       string
+	namespaces    []string
 	binaryPath    string
 	spawnToken    string
 	metaPortAlias gen.Alias
@@ -119,9 +124,10 @@ func buildOidcCredentialEnv(
 		gen.Env("FORMAE_SPAWN_TOKEN"):    spawnToken,
 	}
 
-	if len(cfg) > 0 {
-		env[gen.Env("FORMAE_PLUGIN_CONFIG")] = base64.StdEncoding.EncodeToString(cfg)
-	}
+	// Override even when absent: EnableEnvOS must not let an inherited payload
+	// change the child's identity behind the supervisor's trusted config digest.
+	// credential.readEnv treats an empty value as absent configuration.
+	env[gen.Env("FORMAE_PLUGIN_CONFIG")] = base64.StdEncoding.EncodeToString(cfg)
 
 	return env
 }
@@ -156,6 +162,8 @@ func (p *PluginProcessSupervisor) initOidcCredentialBrokers() {
 	for _, info := range spawn {
 		entry := &oidcBrokerEntry{
 			name:       info.Name,
+			version:    info.Version,
+			namespaces: slices.Clone(info.Namespaces),
 			binaryPath: info.BinaryPath,
 		}
 		p.oidcBrokers[info.Name] = entry
@@ -183,6 +191,26 @@ func (p *PluginProcessSupervisor) spawnOidcCredentialBroker(entry *oidcBrokerEnt
 	env := buildOidcCredentialEnv(
 		serverConfig, entry.name, entry.spawnToken, p.oidcCredentialConfigs[strings.ToLower(entry.name)],
 	)
+
+	// Register before creating the port: a child must never race ahead of
+	// its trusted configuration identity. Failure degrades metadata, not OIDC.
+	configIdentity, err := oidcConfigIdentity(p.oidcCredentialConfigs[strings.ToLower(entry.name)])
+	if err != nil {
+		return fmt.Errorf("invalid oidc-credential broker configuration: %w", err)
+	}
+	namespaces := make([]string, len(entry.namespaces))
+	for i, namespace := range entry.namespaces {
+		namespaces[i] = strings.ToUpper(namespace)
+	}
+	slices.Sort(namespaces)
+	namespaces = slices.Compact(namespaces)
+	if err := p.Send(actornames.PluginCoordinator, messages.RegisterOidcCredentialLaunch{
+		Name: entry.name, Version: entry.version,
+		NodeName:   gen.Atom(oidcBrokerNodeName(serverConfig, entry.name)),
+		SpawnToken: entry.spawnToken, ConfigIdentity: configIdentity, Namespaces: namespaces,
+	}); err != nil {
+		p.Log().Error("Failed to register oidc-credential launch name=%s; operation metadata unavailable: %v", entry.name, err)
+	}
 
 	tag := oidcCredentialTag(entry.name)
 	portOptions := meta.PortOptions{
@@ -266,4 +294,27 @@ func (p *PluginProcessSupervisor) unregisterOidcBroker(entry *oidcBrokerEntry, r
 		// not an error worth alarming on.
 		p.Log().Debug("Failed to send UnregisterOidcCredentialPlugin message name=%s: %v", entry.name, err)
 	}
+}
+
+// Canonicalize the effective JSON payload supplied to the broker. JSON numbers
+// retain precision, object key order and whitespace do not affect identity, and
+// key material behind an unchanged secret reference is never fetched or hashed.
+func oidcConfigIdentity(cfg json.RawMessage) (string, error) {
+	if len(cfg) == 0 {
+		cfg = json.RawMessage("null")
+	}
+	if !json.Valid(cfg) {
+		return "", fmt.Errorf("configuration must be valid JSON")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(cfg))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return "", err
+	}
+	canonical, err := json.Marshal(value)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(canonical)), nil
 }

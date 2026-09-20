@@ -1,0 +1,9 @@
+// © 2026 Platform Engineering Labs Inc.
+// SPDX-License-Identifier: FSL-1.1-ALv2
+
+name = "test-oidc-broker"
+type = "oidc-credential"
+version = "0.0.1"
+minFormaeVersion = "0.89.0"
+namespaces { "K8S" }
+output { renderer = new JsonRenderer {} }

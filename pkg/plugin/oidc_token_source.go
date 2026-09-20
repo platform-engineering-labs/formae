@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"ergo.services/ergo/gen"
 	"github.com/google/uuid"
@@ -17,16 +18,18 @@ import (
 )
 
 // oidcBrokerCallTimeoutSeconds bounds a call to the paired broker. It matches
-// the broker's own request budget, so a slow but successful mint is not
-// truncated: Process.Call's fixed 5s default would abandon a mint the broker is
-// still working on.
+// the broker's maximum request budget. The bounded request makes the receiver
+// stop earlier using the enclosing call reference deadline and response margin.
 const oidcBrokerCallTimeoutSeconds = 10
 
 // OidcTokenSource mints short-lived OIDC identity tokens for the audience a
 // resource plugin needs to authenticate to. A plugin receives one via
 // OidcAware and calls it with the context of the operation it is serving.
 // Concurrent calls within one operation are safe but serialized, so a fan-out
-// that needs several tokens pays for them one at a time.
+// that needs several tokens pays for them one at a time. A deadline must leave
+// the full 10s synchronous broker allowance after serialization; shorter budgets
+// fail with context.DeadlineExceeded before a mint is started.
+// The paired broker must support bounded requests; older receivers fail closed.
 type OidcTokenSource interface {
 	IdentityToken(ctx context.Context, audience string) (string, error)
 }
@@ -56,20 +59,35 @@ type oidcBrokerClient struct {
 	namespace string
 	call      brokerCallFunc
 
-	// callMu serializes calls through this client. Ergo's synchronous call is
-	// single-flight per process: a second call issued while the first is still
-	// waiting for its response is refused outright. The client belongs to one
-	// operator, hence one process, so serializing here is exactly the
-	// granularity the transport requires and a plugin fanning out over several
-	// goroutines still gets a token on each of them.
-	callMu sync.Mutex
+	// gate serializes synchronous Ergo calls. Waiting callers can cancel, but
+	// an in-flight call completes synchronously within the broker call ceiling.
+	gateOnce sync.Once
+	gate     chan struct{}
 }
 
-// invoke carries req to the broker, one call at a time.
-func (c *oidcBrokerClient) invoke(req credential.OidcIdentityTokenRequest) (credential.IdentityTokenResponse, error) {
-	c.callMu.Lock()
-	defer c.callMu.Unlock()
-	return c.call(req)
+func (c *oidcBrokerClient) invoke(ctx context.Context, req credential.OidcIdentityTokenRequest) (credential.IdentityTokenResponse, error) {
+	c.gateOnce.Do(func() { c.gate = make(chan struct{}, 1) })
+	select {
+	case <-ctx.Done():
+		return credential.IdentityTokenResponse{}, ctx.Err()
+	case c.gate <- struct{}{}:
+	}
+	defer func() { <-c.gate }()
+	// Cancellation can race acquisition when both select branches are ready.
+	if err := ctx.Err(); err != nil {
+		return credential.IdentityTokenResponse{}, err
+	}
+	// Reserve the entire synchronous call. The bounded wire request also makes
+	// the receiver include mailbox waiting in its allowance, ending before this
+	// call's timeout instead of starting a fresh mint budget after dequeue.
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < oidcBrokerCallTimeoutSeconds*time.Second {
+		return credential.IdentityTokenResponse{}, fmt.Errorf("insufficient remaining time for the 10s OIDC broker call: %w", context.DeadlineExceeded)
+	}
+	response, err := c.call(req)
+	if canceled := ctx.Err(); canceled != nil {
+		return credential.IdentityTokenResponse{}, canceled
+	}
+	return response, err
 }
 
 // newOidcBrokerClient builds the client for the broker the coordinator paired
@@ -79,7 +97,7 @@ func newOidcBrokerClient(proc gen.Process, namespace, brokerNode, brokerName str
 	return &oidcBrokerClient{
 		namespace: namespace,
 		call: func(req credential.OidcIdentityTokenRequest) (credential.IdentityTokenResponse, error) {
-			response, err := proc.CallWithTimeout(target, req, oidcBrokerCallTimeoutSeconds)
+			response, err := proc.CallWithTimeout(target, credential.OidcBoundedIdentityTokenRequest{Request: req}, oidcBrokerCallTimeoutSeconds)
 			if err != nil {
 				return credential.IdentityTokenResponse{}, err
 			}
@@ -166,7 +184,7 @@ func (s *ctxOidcTokenSource) IdentityToken(ctx context.Context, audience string)
 		return "", fmt.Errorf("%w: no broker is configured for this plugin's namespace, or the call was made outside an operation", ErrNoOidcBroker)
 	}
 
-	response, err := client.invoke(credential.OidcIdentityTokenRequest{
+	response, err := client.invoke(ctx, credential.OidcIdentityTokenRequest{
 		Audience:  audience,
 		RequestID: uuid.NewString(),
 	})
