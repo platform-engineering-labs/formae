@@ -29,18 +29,30 @@ const commandUpdateAdmissionTrigger = "admission_forma_commands_update"
 // real datastore. Trigger changes and event logging live in its disposable DB.
 type AdmissionCommandLifecycleFixture struct {
 	datastore.Datastore
+	AdmissionStore                  datastore.AdmissionStore
 	Backend                         string
+	CloseForTest                    func() error
 	AdmissionTriggerExistsForTest   func(string) (bool, error)
 	DropCommandUpdateTriggerForTest func() error
 	ResetWriterEventsForTest        func() error
 	WriterEventsForTest             func() ([]string, error)
 }
 
+// AdmissionLifecycleTestingT is the common test surface used by testing.T and
+// rapid.T so generated cases can own fixture cleanup during shrinking.
+type AdmissionLifecycleTestingT interface {
+	Cleanup(func())
+	Errorf(string, ...any)
+	FailNow()
+	Helper()
+	Logf(string, ...any)
+}
+
 // RunAdmissionCommandLifecycle characterizes the final resource/command gap
 // through every public command writer. The stale-admission assertion is the
 // safety oracle; revision deltas and event logs only identify which trigger
 // paths supplied that protection.
-func RunAdmissionCommandLifecycle(t *testing.T, newFixture func(*testing.T) AdmissionCommandLifecycleFixture) {
+func RunAdmissionCommandLifecycle(t *testing.T, newFixture func(AdmissionLifecycleTestingT) AdmissionCommandLifecycleFixture) {
 	paths := []struct {
 		name  string
 		write func(*testing.T, AdmissionCommandLifecycleFixture, *forma_command.FormaCommand)
@@ -185,7 +197,7 @@ func lifecycleCommand(stack, resourceID, properties string, state forma_command.
 	return command
 }
 
-func assertExtractedLifecycleValue(t *testing.T, ds datastore.Datastore, stack, properties string) {
+func assertExtractedLifecycleValue(t AdmissionLifecycleTestingT, ds datastore.Datastore, stack, properties string) {
 	t.Helper()
 	desired, err := (&metastructure.Metastructure{Datastore: ds}).ExtractDesiredStacks("stack:" + stack)
 	require.NoError(t, err)

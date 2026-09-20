@@ -38,23 +38,38 @@ func TestAdmissionPrimitive(t *testing.T) {
 }
 
 func TestAdmissionCommandLifecycle(t *testing.T) {
-	dstest.RunAdmissionCommandLifecycle(t, func(t *testing.T) dstest.AdmissionCommandLifecycleFixture {
-		cfg := &pkgmodel.DatastoreConfig{DatastoreType: pkgmodel.PostgresDatastore, Postgres: pkgmodel.PostgresConfig{Host: "localhost", Port: 5432, User: "postgres", Password: "admin", Database: "admission_lifecycle_" + mksuid.New().String()}}
-		ds, err := NewDatastorePostgresEnsureDatabase(context.Background(), cfg, "test")
-		require.NoError(t, err)
-		d := ds.(DatastorePostgres)
-		cleanup := func() error {
-			d.Close()
-			admin, err := pgx.Connect(context.Background(), BuildConnStr(cfg.Postgres.Host, cfg.Postgres.Port, cfg.Postgres.User, cfg.Postgres.Password, "postgres"))
-			if err != nil {
-				return err
-			}
-			defer admin.Close(context.Background()) //nolint:errcheck
-			_, err = admin.Exec(context.Background(), fmt.Sprintf("DROP DATABASE %s", pgx.Identifier{cfg.Postgres.Database}.Sanitize()))
+	dstest.RunAdmissionCommandLifecycle(t, newAdmissionCommandLifecycleFixture)
+}
+
+func TestAdmissionCommandLifecycleProperty(t *testing.T) {
+	dstest.RunAdmissionCommandLifecycleProperty(t, newAdmissionCommandLifecycleFixture)
+}
+
+func newAdmissionCommandLifecycleFixture(t dstest.AdmissionLifecycleTestingT) dstest.AdmissionCommandLifecycleFixture {
+	cfg := &pkgmodel.DatastoreConfig{DatastoreType: pkgmodel.PostgresDatastore, Postgres: pkgmodel.PostgresConfig{Host: "localhost", Port: 5432, User: "postgres", Password: "admin", Database: "admission_lifecycle_" + mksuid.New().String()}}
+	ds, err := NewDatastorePostgresEnsureDatabase(context.Background(), cfg, "test")
+	require.NoError(t, err)
+	d := ds.(DatastorePostgres)
+	cleanup := func() error {
+		d.Close()
+		admin, err := pgx.Connect(context.Background(), BuildConnStr(cfg.Postgres.Host, cfg.Postgres.Port, cfg.Postgres.User, cfg.Postgres.Password, "postgres"))
+		if err != nil {
 			return err
 		}
-		t.Cleanup(func() { require.NoError(t, cleanup()) })
-		_, err = d.Pool().Exec(context.Background(), `
+		defer admin.Close(context.Background()) //nolint:errcheck
+		_, err = admin.Exec(context.Background(), fmt.Sprintf("DROP DATABASE %s", pgx.Identifier{cfg.Postgres.Database}.Sanitize()))
+		return err
+	}
+	closed := false
+	closeOnce := func() error {
+		if closed {
+			return nil
+		}
+		closed = true
+		return cleanup()
+	}
+	t.Cleanup(func() { require.NoError(t, closeOnce()) })
+	_, err = d.Pool().Exec(context.Background(), `
 			CREATE TABLE admission_lifecycle_events (seq BIGSERIAL PRIMARY KEY, event TEXT NOT NULL);
 			CREATE FUNCTION admission_lifecycle_log() RETURNS trigger LANGUAGE plpgsql AS $$
 			BEGIN
@@ -64,39 +79,40 @@ func TestAdmissionCommandLifecycle(t *testing.T) {
 			CREATE TRIGGER admission_lifecycle_fc BEFORE INSERT OR UPDATE ON forma_commands FOR EACH ROW EXECUTE FUNCTION admission_lifecycle_log();
 			CREATE TRIGGER admission_lifecycle_ru BEFORE INSERT OR UPDATE ON resource_updates FOR EACH ROW EXECUTE FUNCTION admission_lifecycle_log();
 		`)
-		require.NoError(t, err)
-		return dstest.AdmissionCommandLifecycleFixture{
-			Datastore: ds,
-			Backend:   "postgres",
-			AdmissionTriggerExistsForTest: func(name string) (bool, error) {
-				var exists bool
-				err := d.Pool().QueryRow(context.Background(), `SELECT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname=$1 AND NOT tgisinternal)`, name).Scan(&exists)
-				return exists, err
-			},
-			DropCommandUpdateTriggerForTest: func() error {
-				_, err := d.Pool().Exec(context.Background(), `DROP TRIGGER admission_forma_commands_update ON forma_commands`)
-				return err
-			},
-			ResetWriterEventsForTest: func() error {
-				_, err := d.Pool().Exec(context.Background(), `TRUNCATE admission_lifecycle_events RESTART IDENTITY`)
-				return err
-			},
-			WriterEventsForTest: func() ([]string, error) {
-				rows, err := d.Pool().Query(context.Background(), `SELECT event FROM admission_lifecycle_events ORDER BY seq`)
-				if err != nil {
+	require.NoError(t, err)
+	return dstest.AdmissionCommandLifecycleFixture{
+		Datastore:      ds,
+		AdmissionStore: d.admissionStore(),
+		Backend:        "postgres",
+		CloseForTest:   closeOnce,
+		AdmissionTriggerExistsForTest: func(name string) (bool, error) {
+			var exists bool
+			err := d.Pool().QueryRow(context.Background(), `SELECT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname=$1 AND NOT tgisinternal)`, name).Scan(&exists)
+			return exists, err
+		},
+		DropCommandUpdateTriggerForTest: func() error {
+			_, err := d.Pool().Exec(context.Background(), `DROP TRIGGER admission_forma_commands_update ON forma_commands`)
+			return err
+		},
+		ResetWriterEventsForTest: func() error {
+			_, err := d.Pool().Exec(context.Background(), `TRUNCATE admission_lifecycle_events RESTART IDENTITY`)
+			return err
+		},
+		WriterEventsForTest: func() ([]string, error) {
+			rows, err := d.Pool().Query(context.Background(), `SELECT event FROM admission_lifecycle_events ORDER BY seq`)
+			if err != nil {
+				return nil, err
+			}
+			defer rows.Close()
+			var events []string
+			for rows.Next() {
+				var event string
+				if err := rows.Scan(&event); err != nil {
 					return nil, err
 				}
-				defer rows.Close()
-				var events []string
-				for rows.Next() {
-					var event string
-					if err := rows.Scan(&event); err != nil {
-						return nil, err
-					}
-					events = append(events, event)
-				}
-				return events, rows.Err()
-			},
-		}
-	})
+				events = append(events, event)
+			}
+			return events, rows.Err()
+		},
+	}
 }

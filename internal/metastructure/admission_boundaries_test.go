@@ -158,7 +158,7 @@ func (d *admissionBoundaryDatastore) AdmitFormaCommand(command *forma_command.Fo
 		for i := range admission.Guards {
 			keys[i] = admission.Guards[i].Key
 		}
-		guards, err := d.CommandAdmitter.ReadAdmissionRevisions(keys)
+		guards, err := d.ReadAdmissionRevisions(keys)
 		if err != nil {
 			return datastore.AdmissionResult{}, err
 		}
