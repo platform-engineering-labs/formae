@@ -50,6 +50,27 @@ func TestSyncReadOnlyHistory_Deterministic(t *testing.T) {
 		require.Len(t, afterRestartObservation.Updates, len(baseline.Updates))
 		require.Len(t, afterRestartObservation.Versions, len(baseline.Versions))
 
+		// A later user write must keep the fresh provider observation and become
+		// the physical row's owner. A subsequent read-only refresh must preserve
+		// that user attribution while updating inventory freshness.
+		beforeUserApply := h.captureHistorySnapshot(t)
+		updated := SimpleForma(2)
+		updated.Resources[0].Properties = json.RawMessage(
+			`{"Name":"res-a","Value":"user-write","SetTags":[],"EntityTags":[],"OrderedItems":[]}`)
+		userApplyID := h.ApplyForma(updated, pkgmodel.FormaApplyModeReconcile)
+		require.Equal(t, "Success", h.WaitForCommandDone(userApplyID, 30*time.Second).State)
+		requireObservedRevision(t, h, observed.NativeID, "revision-3")
+		afterUserApply := h.captureHistorySnapshot(t)
+		userOwned := afterUserApply.LatestByNativeID[observed.NativeID]
+		require.NotEqual(t, beforeUserApply.LatestByNativeID[observed.NativeID].Version, userOwned.Version)
+		require.Equal(t, userApplyID, userOwned.CommandID)
+		require.Equal(t, historyCommandRow{Command: "apply", State: "Success", Source: "user"},
+			afterUserApply.Commands[userApplyID])
+
+		_, afterUserRefresh := h.observeManagedCloudResource(t, nil, observed.NativeID, observed.Type, "revision-4")
+		require.Equal(t, userOwned, afterUserRefresh.LatestByNativeID[observed.NativeID],
+			"read-only refresh preserves the later user write's version and attribution")
+
 		// One synchronizer batch now contains both an observation-only refresh
 		// and a real writable drift. The selected observation must keep its row,
 		// while the batch remains in history because the other resource mints a
@@ -68,7 +89,16 @@ func TestSyncReadOnlyHistory_Deterministic(t *testing.T) {
 		require.Greater(t, len(afterMixed.Commands), len(beforeMixed.Commands))
 		require.Greater(t, len(afterMixed.Updates), len(beforeMixed.Updates))
 		require.Greater(t, len(afterMixed.Versions), len(beforeMixed.Versions))
-		require.NoError(t, newSuccessfulSynchronizerCommandsHaveVersions(beforeMixed, afterMixed))
+		require.NoError(t, newSuccessfulSynchronizerCommandsHaveDurableEvents(beforeMixed, afterMixed))
+		driftOwned := afterMixed.LatestByNativeID[drifted.NativeID]
+		require.NotEqual(t, beforeMixed.LatestByNativeID[drifted.NativeID].Version, driftOwned.Version)
+		require.Equal(t, historyCommandRow{Command: "sync", State: "Success", Source: "synchronizer"},
+			afterMixed.Commands[driftOwned.CommandID])
+
+		_, afterDriftRefresh := h.observeManagedCloudResource(
+			t, nil, drifted.NativeID, drifted.Type, "revision-drift-refresh")
+		require.Equal(t, driftOwned, afterDriftRefresh.LatestByNativeID[drifted.NativeID],
+			"read-only refresh preserves the config-drift version and command owner")
 		delete(h.cloudStateMirror, observed.NativeID)
 		delete(h.cloudStateMirror, drifted.NativeID)
 
@@ -83,7 +113,7 @@ func TestSyncReadOnlyHistory_Deterministic(t *testing.T) {
 		require.Greater(t, len(afterDelete.Updates), len(beforeDelete.Updates))
 		require.Greater(t, len(afterDelete.Versions), len(beforeDelete.Versions))
 		require.Equal(t, "delete", afterDelete.LatestByNativeID[observed.NativeID].Operation)
-		require.NoError(t, newSuccessfulSynchronizerCommandsHaveVersions(beforeDelete, afterDelete))
+		require.NoError(t, newSuccessfulSynchronizerCommandsHaveDurableEvents(beforeDelete, afterDelete))
 
 		// Filter eviction is also a deletion event. Discover an unmanaged row,
 		// make its next Read match the fixture filter, and verify the retained
@@ -103,7 +133,7 @@ func TestSyncReadOnlyHistory_Deterministic(t *testing.T) {
 		require.Greater(t, len(afterFilter.Updates), len(beforeFilter.Updates))
 		require.Greater(t, len(afterFilter.Versions), len(beforeFilter.Versions))
 		require.Equal(t, "delete", afterFilter.LatestByNativeID[filteredID].Operation)
-		require.NoError(t, newSuccessfulSynchronizerCommandsHaveVersions(beforeFilter, afterFilter))
+		require.NoError(t, newSuccessfulSynchronizerCommandsHaveDurableEvents(beforeFilter, afterFilter))
 	})
 }
 

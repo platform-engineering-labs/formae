@@ -583,6 +583,19 @@ func TestEmbed_SyncPreservesEnvelope(t *testing.T) {
 			return len(fas[0].ResourceUpdates) == 2
 		}, 5*time.Second, 100*time.Millisecond, "apply must complete before triggering sync")
 
+		resourcesBeforeSync, err := m.Datastore.LoadResourcesByStack("embed-stack")
+		require.NoError(t, err)
+		var consumerBeforeSync *pkgmodel.Resource
+		for _, persisted := range resourcesBeforeSync {
+			if persisted.Label == "embed-consumer" {
+				consumerBeforeSync = persisted
+				break
+			}
+		}
+		require.NotNil(t, consumerBeforeSync)
+		require.False(t, gjson.GetBytes(consumerBeforeSync.ReadOnlyProperties, "ObservedRevision").Exists(),
+			"the sync observation must not exist before ForceSync")
+
 		// Trigger a manual sync. The Read override returns the assembled plain string
 		// for the consumer — simulating what the cloud returns for a lambda's code.
 		readsBefore := consumerReads.Load()

@@ -120,27 +120,47 @@ func (h *TestHarness) captureHistorySnapshot(t *testing.T) historySnapshot {
 	return snapshot
 }
 
-// newSuccessfulSynchronizerCommandsHaveVersions verifies that every newly
+// newSuccessfulSynchronizerCommandsHaveDurableEvents verifies that every newly
 // retained successful synchronizer batch is justified by a physical history
-// event created in the same observation window.
-func newSuccessfulSynchronizerCommandsHaveVersions(before, after historySnapshot) error {
+// event. Usually the command owns a version created in the observation window.
+// An idempotent delete may instead return a receipt for a tombstone that already
+// existed when the window began.
+func newSuccessfulSynchronizerCommandsHaveDurableEvents(before, after historySnapshot) error {
 	for commandID, command := range after.Commands {
 		if _, existed := before.Commands[commandID]; existed || command.Command != "sync" ||
 			command.Source != "synchronizer" || command.State != "Success" {
 			continue
 		}
-		versioned := false
+		hasDurableEvent := false
 		for key, version := range after.Versions {
 			if _, existed := before.Versions[key]; !existed && version.CommandID == commandID {
-				versioned = true
+				hasDurableEvent = true
 				break
 			}
 		}
-		if !versioned {
-			return fmt.Errorf("successful synchronizer command %s has no new physical resource version", commandID)
+		if !hasDurableEvent {
+			hasDurableEvent = commandHasSuccessfulExistingDeleteReceipt(commandID, before, after)
+		}
+		if !hasDurableEvent {
+			return fmt.Errorf("successful synchronizer command %s has no durable physical resource event", commandID)
 		}
 	}
 	return nil
+}
+
+func commandHasSuccessfulExistingDeleteReceipt(commandID string, before, after historySnapshot) bool {
+	for _, update := range after.Updates {
+		if update.CommandID != commandID || update.Operation != "delete" || update.State != "Success" {
+			continue
+		}
+		for _, version := range before.Versions {
+			if version.Operation == "delete" && version.Ksuid == update.Ksuid &&
+				update.Version == version.Ksuid+"_"+version.Version {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (h *TestHarness) observeManagedCloudResource(
@@ -177,7 +197,7 @@ func (h *TestHarness) observeManagedCloudResource(
 	after := h.captureHistorySnapshot(t)
 	require.Equal(t, beforeResource, after.LatestByNativeID[nativeID],
 		"observation keeps physical version, identity, target, managed state, and command attribution")
-	require.NoError(t, newSuccessfulSynchronizerCommandsHaveVersions(before, after))
+	require.NoError(t, newSuccessfulSynchronizerCommandsHaveDurableEvents(before, after))
 	delete(h.cloudStateMirror, nativeID)
 	return before, after
 }
