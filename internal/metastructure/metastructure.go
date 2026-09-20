@@ -1480,6 +1480,9 @@ func (m *Metastructure) ForceAutoReconcile(stackLabel string, subject string, su
 		forma_persister.StoreNewFormaCommand{Command: *result.command},
 	)
 	if err != nil {
+		if errors.Is(err, datastore.ErrCommandConflict) {
+			return nil, m.commandConflictError(result.command.GetStackLabels())
+		}
 		return nil, fmt.Errorf("failed to store reconcile command: %w", err)
 	}
 
@@ -1535,6 +1538,10 @@ func (m *Metastructure) ForceCheckTTL() (*apimodel.ForceCheckTTLResponse, error)
 			forma_persister.StoreNewFormaCommand{Command: *result.command},
 		)
 		if err != nil {
+			if errors.Is(err, datastore.ErrCommandConflict) {
+				slog.Debug("Force TTL check: destroy command conflicted with active command", "stack", stackInfo.StackLabel)
+				continue
+			}
 			slog.Error("Force TTL check: failed to store destroy command", "stack", stackInfo.StackLabel, "error", err)
 			continue
 		}

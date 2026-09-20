@@ -19,6 +19,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_persister"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/testutil"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
@@ -743,9 +744,18 @@ func TestScheduledAdmissionExpiredCandidateRejectsTTLChangeAfterCertification(t 
 		require.Len(t, <-barrier.observed, 1)
 		require.Len(t, <-barrier.observed, 1)
 		require.NoError(t, m.Node.Send(gen.ProcessID{Name: actornames.StackExpirer, Node: m.Node.Name()}, CheckExpiredStacks{}))
-		for len(<-barrier.observed) != 0 {
-			// Planning may expand resource/target scope and recertify. The first
-			// empty observation is the queued ordinary sweep.
+	queuedSweep:
+		for {
+			select {
+			case observed := <-barrier.observed:
+				if len(observed) == 0 {
+					break queuedSweep
+				}
+				// Planning may expand resource/target scope and recertify. The first
+				// empty observation is the queued ordinary sweep.
+			case <-time.After(5 * time.Second):
+				t.Fatal("queued expiry sweep did not produce an empty observation")
+			}
 		}
 		require.Empty(t, stackExpirerCommands(t, writer))
 		require.Zero(t, deletes.Load())
@@ -861,7 +871,7 @@ func TestScheduledAdmissionExpiryRejectsCrossStackConsumerAddedAfterCertificatio
 }
 
 // A scheduled ReconcileStack can finish its early busy check before a user
-// destroy is admitted. Its final unguarded persister check must reject that
+// destroy is admitted. Its scheduled guarded final check must reject that
 // stale plan, and the ordinary next scheduled attempt must observe the busy
 // command rather than writing concurrently.
 func TestScheduledAdmissionReconcileConflictsWithUserDestroyAfterPlanningStarts(t *testing.T) {
@@ -952,6 +962,76 @@ func TestScheduledAdmissionReconcileConflictsWithUserDestroyAfterPlanningStarts(
 
 		releaseDeleteOnce.Do(func() { close(releaseDelete) })
 		require.Equal(t, forma_command.CommandStateSuccess, waitForAdmissionBoundaryCommand(t, writer, userDestroy.CommandID).State)
+	})
+}
+
+func TestForceAutoReconcileMapsFinalPersisterConflict(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		path := t.TempDir() + "/force-reconcile-final-conflict.db"
+		cfg := &pkgmodel.DatastoreConfig{Sqlite: pkgmodel.SqliteConfig{FilePath: path}}
+		ds, err := dssqlite.NewDatastoreSQLite(context.Background(), cfg, "test")
+		require.NoError(t, err)
+		writer, err := dssqlite.NewDatastoreSQLite(context.Background(), cfg, "writer")
+		require.NoError(t, err)
+		t.Cleanup(func() { writer.Close() })
+		wrapper := &expiredStackReadBarrier{
+			scopedReadBarrier: withScopedBarrier(ds, nil),
+			targetsObserved:   make(chan struct{}, 1),
+			targetsRelease:    make(chan struct{}),
+		}
+		var releaseOnce sync.Once
+		m := startScopedActor(t, wrapper, path, &plugin.ResourcePluginOverrides{
+			Create: func(request *resource.CreateRequest) (*resource.CreateResult, error) {
+				return &resource.CreateResult{ProgressResult: &resource.ProgressResult{Operation: resource.OperationCreate, OperationStatus: resource.OperationStatusSuccess, NativeID: request.Label, ResourceProperties: request.Properties}}, nil
+			},
+		})
+		t.Cleanup(func() { releaseOnce.Do(func() { close(wrapper.targetsRelease) }) })
+		forma := scopedActorForma()
+		forma.Stacks[0].Policies = []json.RawMessage{json.RawMessage(`{"Type":"auto-reconcile","Label":"automatic","IntervalSeconds":86400}`)}
+		initial, err := m.ApplyForma(forma, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile}, "client", "subject", "")
+		require.NoError(t, err)
+		require.Equal(t, forma_command.CommandStateSuccess, waitForAdmissionBoundaryCommand(t, writer, initial.CommandID).State)
+		rows, err := writer.LoadResourcesByStack("scope")
+		require.NoError(t, err)
+		require.Len(t, rows, 1)
+		now := time.Now().UTC()
+		driftID := "force-reconcile-final-conflict-drift"
+		require.NoError(t, writer.StoreFormaCommand(&forma_command.FormaCommand{ID: driftID, Command: pkgmodel.CommandSync, Source: forma_command.SourceSynchronizer, State: forma_command.CommandStateSuccess, StartTs: now, ModifiedTs: now}, driftID))
+		rows[0].Properties = []byte(`{"foo":"drifted"}`)
+		_, err = writer.StoreResource(rows[0], driftID)
+		require.NoError(t, err)
+		stack, err := writer.GetStackByLabel("scope")
+		require.NoError(t, err)
+
+		wrapper.blockTargetsNext.Store(true)
+		result := make(chan error, 1)
+		go func() {
+			_, forceErr := m.ForceAutoReconcile("scope", "subject", "name")
+			result <- forceErr
+		}()
+		select {
+		case <-wrapper.targetsObserved:
+		case <-time.After(5 * time.Second):
+			t.Fatal("force reconcile did not reach the held post-busy planning read")
+		}
+
+		busy := forma_command.FormaCommand{
+			ID: util.NewID(), Command: pkgmodel.CommandDestroy, Source: forma_command.SourceStackExpirer,
+			State: forma_command.CommandStateInProgress, StartTs: now, ModifiedTs: now,
+			Stacks: []forma_command.CommandStack{{ID: stack.ID, Label: stack.Label}},
+		}
+		_, err = m.callActor(
+			gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
+			forma_persister.StoreNewFormaCommand{Command: busy},
+		)
+		require.NoError(t, err)
+		releaseOnce.Do(func() { close(wrapper.targetsRelease) })
+
+		forceErr := <-result
+		var conflict apimodel.FormaConflictingCommandsError
+		require.ErrorAs(t, forceErr, &conflict)
+		require.Len(t, conflict.ConflictingCommands, 1)
+		require.Equal(t, busy.ID, conflict.ConflictingCommands[0].CommandID)
 	})
 }
 
@@ -1104,9 +1184,11 @@ func TestScheduledAdmissionGeneratorRotationWaitsForBusyCrossStackConsumer(t *te
 
 		require.NoError(t, m.Node.Send(gen.ProcessID{Name: actornames.GeneratorRotator, Node: m.Node.Name()}, CheckGeneratorRotations{}))
 		<-wrapper.rotationObserved
-		require.NoError(t, m.Node.Send(gen.ProcessID{Name: actornames.GeneratorRotator, Node: m.Node.Name()}, CheckGeneratorRotations{}))
-		<-wrapper.rotationObserved // queued sweep proves the conflicting attempt completed
 		wrapper.observeRotations.Store(false)
+		rotator, err := m.Node.ProcessPID(gen.Atom(actornames.GeneratorRotator))
+		require.NoError(t, err)
+		_, err = m.Node.Inspect(rotator)
+		require.NoError(t, err, "inspection must run after the current rotation sweep completes")
 		commands, err := writer.LoadFormaCommands()
 		require.NoError(t, err)
 		for _, command := range commands {
@@ -1228,10 +1310,12 @@ func TestScheduledAdmissionGeneratorRotationRefreshesCompletedDrawAfterSweep(t *
 		now := time.Now().UTC()
 		require.NoError(t, writer.StoreFormaCommand(&forma_command.FormaCommand{ID: drawID, Command: pkgmodel.CommandApply, Source: forma_command.SourceUser, State: forma_command.CommandStateSuccess, StartTs: now, ModifiedTs: now}, drawID))
 		require.NoError(t, writer.AdvanceGeneration(info.GeneratorID, util.NewID(), drawID, generatorJSON))
-		require.NoError(t, m.Node.Send(gen.ProcessID{Name: actornames.GeneratorRotator, Node: m.Node.Name()}, CheckGeneratorRotations{}))
+		wrapper.observeRotations.Store(false)
 		releaseOnce.Do(func() { close(wrapper.rotationRelease) })
-		<-wrapper.rotationObserved // certified refresh sees the completed draw
-		<-wrapper.rotationObserved // queued sweep witnesses completion
+		rotator, err := m.Node.ProcessPID(gen.Atom(actornames.GeneratorRotator))
+		require.NoError(t, err)
+		_, err = m.Node.Inspect(rotator)
+		require.NoError(t, err, "inspection must run after the current rotation sweep completes")
 		commands, err := writer.LoadFormaCommands()
 		require.NoError(t, err)
 		for _, command := range commands {

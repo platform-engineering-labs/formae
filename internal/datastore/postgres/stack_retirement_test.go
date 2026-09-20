@@ -8,9 +8,11 @@ package postgres
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/demula/mksuid/v2"
+	"github.com/jackc/pgx/v5"
 	"github.com/platform-engineering-labs/formae/internal/datastore/dstest"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/stretchr/testify/require"
@@ -24,9 +26,15 @@ func TestStackRetirement(t *testing.T) {
 		return ds.(DatastorePostgres)
 	}
 	first := open()
-	defer func() { _ = first.CleanUp() }()
-	defer func() { first.Close() }()
 	second := open()
-	defer second.Close()
+	t.Cleanup(func() {
+		second.Close()
+		first.Close()
+		admin, err := pgx.Connect(context.Background(), BuildConnStr(cfg.Postgres.Host, cfg.Postgres.Port, cfg.Postgres.User, cfg.Postgres.Password, "postgres"))
+		require.NoError(t, err)
+		defer func() { require.NoError(t, admin.Close(context.Background())) }()
+		_, err = admin.Exec(context.Background(), fmt.Sprintf("DROP DATABASE %s", pgx.Identifier{cfg.Postgres.Database}.Sanitize()))
+		require.NoError(t, err)
+	})
 	dstest.RunStackRetirement(t, first, second, first.admissionStore())
 }

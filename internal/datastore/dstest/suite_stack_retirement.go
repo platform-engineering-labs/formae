@@ -122,6 +122,38 @@ func RunStackRetirement(t *testing.T, ds, other datastore.Datastore, store datas
 		require.NoError(t, err)
 		require.NotNil(t, retained)
 	})
+	t.Run("certified_ttl_seconds_empty_retirement", func(t *testing.T) {
+		s := newStack(t)
+		seconds := int64(60)
+		policy := &pkgmodel.TTLPolicy{Type: "ttl", Label: "expired-seconds", StackID: s.ID, TTLSeconds: seconds, OnDependents: "abort"}
+		_, err := ds.CreatePolicy(policy, "setup-expired-seconds")
+		require.NoError(t, err)
+		candidate := datastore.ExpiredStackInfo{StackID: s.ID, StackLabel: s.Label, OnDependents: "abort", TTLSeconds: &seconds}
+		ok, err := ds.(datastore.ExpiredEmptyStackRetirer).TryRetireExpiredEmptyStack(candidate, admission(t, s).Guards, "")
+		require.NoError(t, err)
+		require.True(t, ok)
+		retired, err := ds.GetStackByLabel(s.Label)
+		require.NoError(t, err)
+		require.Nil(t, retired)
+	})
+	t.Run("certified_ttl_seconds_empty_retirement_rejects_changed_duration", func(t *testing.T) {
+		s := newStack(t)
+		seconds := int64(60)
+		policy := &pkgmodel.TTLPolicy{Type: "ttl", Label: "expired-seconds", StackID: s.ID, TTLSeconds: seconds, OnDependents: "abort"}
+		_, err := ds.CreatePolicy(policy, "setup-expired-seconds")
+		require.NoError(t, err)
+		candidate := datastore.ExpiredStackInfo{StackID: s.ID, StackLabel: s.Label, OnDependents: "abort", TTLSeconds: &seconds}
+		changed := int64(86400)
+		policy.TTLSeconds = changed
+		_, err = other.UpdatePolicy(policy, "extend-duration")
+		require.NoError(t, err)
+		ok, err := ds.(datastore.ExpiredEmptyStackRetirer).TryRetireExpiredEmptyStack(candidate, admission(t, s).Guards, "")
+		require.NoError(t, err)
+		require.False(t, ok)
+		retained, err := ds.GetStackByLabel(s.Label)
+		require.NoError(t, err)
+		require.NotNil(t, retained)
+	})
 	t.Run("admission_before_retirement", func(t *testing.T) {
 		s := newStack(t)
 		c := command(s)

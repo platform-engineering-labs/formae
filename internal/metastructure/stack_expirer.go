@@ -140,7 +140,11 @@ func (s *StackExpirer) destroyExpiredStack(stackInfo datastore.ExpiredStackInfo)
 		if !ok {
 			return fmt.Errorf("datastore does not support certified expired stack retirement")
 		}
-		_, err = retirer.TryRetireExpiredEmptyStack(stackInfo, certified.guards, "")
+		var retired bool
+		retired, err = retirer.TryRetireExpiredEmptyStack(stackInfo, certified.guards, "")
+		if err == nil && !retired {
+			s.Log().Debug("Expired empty stack retained label=%s", stackInfo.StackLabel)
+		}
 		return err
 	}
 	result := certified.result
