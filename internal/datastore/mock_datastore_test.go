@@ -191,6 +191,9 @@ func (m *mockDatastore) GetResourcesAtLastReconcile(_ string) ([]ResourceSnapsho
 	return nil, nil
 }
 func (m *mockDatastore) StackHasActiveCommands(_ string) (bool, error) { return false, nil }
+func (m *mockDatastore) HasConflictingCommandForStacks(_ []string) (bool, error) {
+	return false, nil
+}
 func (m *mockDatastore) CreateGenerator(_ pkgmodel.Generator, _ string) (string, error) {
 	return "", nil
 }

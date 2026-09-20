@@ -18,6 +18,7 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/datastore"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/actornames"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/generator_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/target_update"
@@ -403,6 +404,8 @@ func (r CommandPersistResult) CallFailure() error {
 		cause = datastore.ErrAdmissionConflict
 	case "invalid":
 		cause = datastore.ErrInvalidAdmission
+	case "command-conflict":
+		cause = datastore.ErrCommandConflict
 	}
 	if cause != nil {
 		return fmt.Errorf("%s: %w", r.Error, cause)
@@ -462,6 +465,8 @@ func (f *FormaCommandPersister) HandleCall(from gen.PID, ref gen.Ref, message an
 		return f.ack(f.updateStackStates(&msg))
 	case messages.UpdatePolicyStates:
 		return f.ack(f.updatePolicyStates(&msg))
+	case generator_update.UpdateGeneratorStates:
+		return f.ack(f.updateGeneratorStates(&msg))
 	case MarkResourcesAsRejected:
 		return f.ack(f.markResourcesAsRejected(&msg))
 	case MarkResourcesAsFailed:
@@ -535,7 +540,12 @@ func (f *FormaCommandPersister) ack(ok bool, err error) (any, error) {
 		if errors.Is(err, errInvariantViolation) {
 			return nil, err
 		}
-		f.Log().Error("FormaCommandPersister: request failed: %s", err)
+		if errors.Is(err, datastore.ErrStaleAdmission) || errors.Is(err, datastore.ErrAdmissionConflict) ||
+			errors.Is(err, datastore.ErrInvalidAdmission) || errors.Is(err, datastore.ErrCommandConflict) {
+			f.Log().Debug("FormaCommandPersister: request refused: %s", err)
+		} else {
+			f.Log().Error("FormaCommandPersister: request failed: %s", err)
+		}
 		result.Error = err.Error()
 		switch {
 		case errors.Is(err, datastore.ErrStaleAdmission):
@@ -544,6 +554,8 @@ func (f *FormaCommandPersister) ack(ok bool, err error) (any, error) {
 			result.AdmissionErrorCode = "conflict"
 		case errors.Is(err, datastore.ErrInvalidAdmission):
 			result.AdmissionErrorCode = "invalid"
+		case errors.Is(err, datastore.ErrCommandConflict):
+			result.AdmissionErrorCode = "command-conflict"
 		}
 	}
 	return result, nil
@@ -561,6 +573,19 @@ func (f *FormaCommandPersister) storeNewFormaCommandWithAdmission(command *forma
 	if admission == nil {
 		if err := command.ResolveStackIdentities(f.datastore); err != nil {
 			return CommandPersistResult{}, err
+		}
+	}
+	readOnlySync := command.Command == pkgmodel.CommandSync &&
+		(command.Source == forma_command.SourceSynchronizer || command.Source == forma_command.SourceDiscovery)
+	scheduledGuarded := admission != nil && (admission.PrincipalScope == "stack-expirer" ||
+		admission.PrincipalScope == "auto-reconciler" || admission.PrincipalScope == "generator-rotator")
+	if !readOnlySync && (admission == nil || scheduledGuarded) {
+		conflict, err := f.datastore.HasConflictingCommandForStacks(command.GetStackLabels())
+		if err != nil {
+			return CommandPersistResult{}, fmt.Errorf("check conflicting commands: %w", err)
+		}
+		if conflict {
+			return CommandPersistResult{}, datastore.ErrCommandConflict
 		}
 	}
 	for i := range command.ResourceUpdates {
@@ -589,22 +614,42 @@ func (f *FormaCommandPersister) storeNewFormaCommandWithAdmission(command *forma
 		if err != nil {
 			return CommandPersistResult{}, err
 		}
-		result.Admission = &accepted
 		if accepted.Replayed {
+			result.Admission = &accepted
 			return result, nil
 		}
 		command = accepted.Command
 		if command == nil {
 			return CommandPersistResult{}, fmt.Errorf("admission did not return committed command")
 		}
+		reply, err := snapshotFormaCommand(command)
+		if err != nil {
+			// Admission is already committed. Caller-key resolutions can retry the
+			// receipt; legacy Apply uses a fresh key, so restart recovery relies on
+			// ReRunIncompleteCommands. Do not cache a partial snapshot here.
+			return CommandPersistResult{}, fmt.Errorf("snapshot admitted command: %w", err)
+		}
+		accepted.Command = reply
+		result.Admission = &accepted
 		// Refresh is a postcommit hint; startup also reloads effective policies.
 		if len(command.StackUpdates) > 0 || len(command.PolicyUpdates) > 0 {
 			if err := f.Send(gen.ProcessID{Name: actornames.AutoReconciler, Node: f.Node().Name()}, messages.RefreshEffectivePolicies{}); err != nil {
 				f.Log().Warning("Failed to refresh committed policies: %v", err)
 			}
 		}
-	} else if err := f.datastore.StoreFormaCommand(command, command.ID); err != nil {
-		return CommandPersistResult{}, fmt.Errorf("failed to store new Forma command: %w", err)
+	} else {
+		// The mailbox message owns only a shallow copy of the caller's command.
+		// Take ownership after synchronous normalization and before the durable
+		// write, so later progress cannot mutate caller memory and a snapshot
+		// failure cannot leave an unowned committed command.
+		owned, err := snapshotFormaCommand(command)
+		if err != nil {
+			return CommandPersistResult{}, fmt.Errorf("snapshot unguarded command: %w", err)
+		}
+		command = owned
+		if err = f.datastore.StoreFormaCommand(command, command.ID); err != nil {
+			return CommandPersistResult{}, fmt.Errorf("failed to store new Forma command: %w", err)
+		}
 	}
 
 	if command.IsInFinalState() {
@@ -630,7 +675,33 @@ func (f *FormaCommandPersister) loadFormaCommand(commandID string) (*forma_comma
 		f.Log().Error("Failed to load Forma command commandID=%s: %v", commandID, err)
 		return nil, fmt.Errorf("failed to load Forma command: %w", err)
 	}
-	return cached.command, nil
+	command, err := snapshotFormaCommand(cached.command)
+	if err != nil {
+		return nil, fmt.Errorf("snapshot Forma command: %w", err)
+	}
+	return command, nil
+}
+
+// snapshotFormaCommand transfers command ownership out of the persister
+// mailbox. Ordinary JSON owns all public nested values; setup metadata restores
+// the hidden draw intent and generator identities that execution needs.
+func snapshotFormaCommand(command *forma_command.FormaCommand) (*forma_command.FormaCommand, error) {
+	data, err := json.Marshal(command)
+	if err != nil {
+		return nil, err
+	}
+	var snapshot forma_command.FormaCommand
+	if err = json.Unmarshal(data, &snapshot); err != nil {
+		return nil, err
+	}
+	setup, err := command.MarshalSetupMetadata(true)
+	if err != nil {
+		return nil, err
+	}
+	if err = snapshot.UnmarshalSetupMetadata(setup); err != nil {
+		return nil, err
+	}
+	return &snapshot, nil
 }
 
 func (f *FormaCommandPersister) updateCommandFromProgress(progress *messages.UpdateResourceProgress) (bool, error) {
@@ -951,6 +1022,40 @@ func (f *FormaCommandPersister) updatePolicyStates(msg *messages.UpdatePolicySta
 
 	f.Log().Debug("Successfully updated Forma command with policy states commandID=%s", msg.CommandID)
 	return true, nil
+}
+
+func (f *FormaCommandPersister) updateGeneratorStates(msg *generator_update.UpdateGeneratorStates) (bool, error) {
+	f.Log().Debug("Updating Forma command with generator states commandID=%s generatorCount=%d", msg.CommandID, len(msg.GeneratorUpdates))
+
+	cached, err := f.getOrLoadCommand(msg.CommandID)
+	if err != nil {
+		return false, fmt.Errorf("failed to load Forma command for generator state update: %w", err)
+	}
+
+	updates, err := snapshotGeneratorUpdates(msg.GeneratorUpdates)
+	if err != nil {
+		return false, fmt.Errorf("snapshot generator state update: %w", err)
+	}
+	cached.command.GeneratorUpdates = updates
+	cached.command.State = overallCommandState(cached.command)
+
+	if err = f.persistCommand(cached); err != nil {
+		return false, fmt.Errorf("failed to update Forma command with generator states: %w", err)
+	}
+
+	return true, nil
+}
+
+func snapshotGeneratorUpdates(updates []generator_update.GeneratorUpdate) ([]generator_update.GeneratorUpdate, error) {
+	data, err := json.Marshal(updates)
+	if err != nil {
+		return nil, err
+	}
+	var snapshot []generator_update.GeneratorUpdate
+	if err = json.Unmarshal(data, &snapshot); err != nil {
+		return nil, err
+	}
+	return snapshot, nil
 }
 
 func (f *FormaCommandPersister) markResourcesAsRejected(msg *MarkResourcesAsRejected) (bool, error) {

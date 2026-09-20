@@ -8,6 +8,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -354,11 +355,11 @@ func (m *Metastructure) planApplyFormaCore(ds datastore.Datastore, forma *pkgmod
 	// while the conflict check passes (the command already completed). By checking conflicts
 	// first, we guarantee that if no incomplete commands exist, all their resources are already
 	// persisted and visible to subsequent queries.
-	if !config.Simulate {
-		if err := m.checkForConflictingCommands(drift.StackLabelsFromForma(forma)); err != nil {
-			return nil, err
-		}
+	if err := m.checkForConflictingCommands(drift.StackLabelsFromForma(forma)); err != nil {
+		return nil, err
+	}
 
+	if !config.Simulate {
 		// Reject an apply that touches a reaped target without re-declaring it.
 		// A reaped target is a tombstone for a target that stayed unreachable past
 		// its reap threshold; a resource-only or stale apply that references it must
@@ -896,6 +897,9 @@ func (m *Metastructure) DestroyForma(forma *pkgmodel.Forma, config *config.Forma
 		forma_persister.StoreNewFormaCommand{Command: *fa},
 	)
 	if err != nil {
+		if errors.Is(err, datastore.ErrCommandConflict) {
+			return nil, m.commandConflictError(fa.GetStackLabels())
+		}
 		slog.Error("Failed to store forma command", "error", err)
 		return nil, fmt.Errorf("failed to store forma command: %w", err)
 	}
@@ -948,6 +952,18 @@ func (m *Metastructure) DestroyForma(forma *pkgmodel.Forma, config *config.Forma
 			return nil, fmt.Errorf("failed to persist generator updates: %w", err)
 		}
 		m.Node.Log().Debug("Successfully persisted generator updates count=%d", len(fa.GeneratorUpdates))
+
+		_, err = m.callActor(
+			gen.ProcessID{Name: actornames.FormaCommandPersister, Node: m.Node.Name()},
+			generator_update.UpdateGeneratorStates{
+				CommandID:        fa.ID,
+				GeneratorUpdates: fa.GeneratorUpdates,
+			},
+		)
+		if err != nil {
+			slog.Error("Failed to update forma command with generator states", "error", err)
+			return nil, fmt.Errorf("failed to update forma command with generator states: %w", err)
+		}
 	}
 
 	if fa.HasExecutableChanges() {
@@ -1476,6 +1492,9 @@ func (m *Metastructure) ForceAutoReconcile(stackLabel string, subject string, su
 		forma_persister.StoreNewFormaCommand{Command: *result.command},
 	)
 	if err != nil {
+		if errors.Is(err, datastore.ErrCommandConflict) {
+			return nil, m.commandConflictError(result.command.GetStackLabels())
+		}
 		return nil, fmt.Errorf("failed to store reconcile command: %w", err)
 	}
 
@@ -1531,6 +1550,10 @@ func (m *Metastructure) ForceCheckTTL() (*apimodel.ForceCheckTTLResponse, error)
 			forma_persister.StoreNewFormaCommand{Command: *result.command},
 		)
 		if err != nil {
+			if errors.Is(err, datastore.ErrCommandConflict) {
+				slog.Debug("Force TTL check: destroy command conflicted with active command", "stack", stackInfo.StackLabel)
+				continue
+			}
 			slog.Error("Force TTL check: failed to store destroy command", "stack", stackInfo.StackLabel, "error", err)
 			continue
 		}
@@ -1784,6 +1807,29 @@ func (m *Metastructure) checkForConflictingCommands(commandStackLabels []string)
 	}
 
 	return nil
+}
+
+// commandConflictError translates the persister's authoritative final
+// exclusion into the public 409-shaped error. The final check includes command
+// membership after the older resource-update check above has passed, including
+// metadata-only commands and the last-RU-terminal/command-nonterminal window.
+func (m *Metastructure) commandConflictError(commandStackLabels []string) error {
+	incompleteFormaCommands, err := m.Datastore.LoadIncompleteFormaCommands()
+	if err != nil {
+		// Admission already established the conflict. Failure to enrich the
+		// response must not turn that known conflict into an unrelated 500.
+		slog.Error("Failed to load conflicting forma commands", "error", err)
+		return apimodel.FormaConflictingCommandsError{}
+	}
+	conflict := apimodel.FormaConflictingCommandsError{}
+	for _, command := range incompleteFormaCommands {
+		readOnlySync := command.Command == pkgmodel.CommandSync &&
+			(command.Source == forma_command.SourceSynchronizer || command.Source == forma_command.SourceDiscovery)
+		if !readOnlySync && formaTouchesStacks(command, commandStackLabels) {
+			conflict.ConflictingCommands = append(conflict.ConflictingCommands, translateToAPICommand(command))
+		}
+	}
+	return conflict
 }
 
 // checkForReapedTargets rejects an apply that references a reaped target it does

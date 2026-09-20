@@ -6,6 +6,7 @@ package metastructure
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"log/slog"
@@ -176,7 +177,12 @@ func (g *GeneratorRotator) checkRotations() {
 
 		commandID, err := g.startRotation(info)
 		if err != nil {
-			g.Log().Error("Failed to start rotation generator=%s: %v", info.GeneratorID, err)
+			if errors.Is(err, datastore.ErrStaleAdmission) || errors.Is(err, datastore.ErrAdmissionConflict) ||
+				errors.Is(err, datastore.ErrCommandConflict) {
+				g.Log().Debug("Rotation attempt refused generator=%s: %v", info.GeneratorID, err)
+			} else {
+				g.Log().Error("Failed to start rotation generator=%s: %v", info.GeneratorID, err)
+			}
 			g.recordFailedAttempt(info)
 			continue
 		}
@@ -266,17 +272,23 @@ func (g *GeneratorRotator) startRotation(info datastore.GeneratorRotationInfo) (
 		return "", nil
 	}
 
-	result, err := prepareRotation(g.datastore, info)
+	certified, err := certifyRotation(g.datastore, info)
 	if err != nil {
 		return "", err
 	}
-	if result == nil {
+	if certified == nil || certified.result == nil {
 		return "", nil
 	}
+	result := certified.result
 
+	digest, err := resolutionHash(certified.info)
+	if err != nil {
+		return "", fmt.Errorf("hash rotation decision: %w", err)
+	}
+	admission := datastore.CommandAdmission{Guards: certified.guards, PrincipalScope: "generator-rotator", IdempotencyKey: result.command.ID, RequestDigest: digest, Receipt: []byte(`{"producer":"generator-rotator"}`)}
 	_, err = messages.UnwrapCall(g.Call(
 		gen.ProcessID{Name: actornames.FormaCommandPersister, Node: g.Node().Name()},
-		forma_persister.StoreNewFormaCommand{Command: *result.command},
+		forma_persister.StoreNewFormaCommand{Command: *result.command, Admission: &admission},
 	))
 	if err != nil {
 		return "", fmt.Errorf("failed to store rotation command: %w", err)
@@ -303,6 +315,58 @@ func (g *GeneratorRotator) startRotation(info datastore.GeneratorRotationInfo) (
 	}
 
 	return result.command.ID, nil
+}
+
+type certifiedRotation struct {
+	result *rotationResult
+	info   datastore.GeneratorRotationInfo
+	guards []datastore.RevisionGuard
+}
+
+func certifyRotation(ds datastore.Datastore, info datastore.GeneratorRotationInfo) (*certifiedRotation, error) {
+	scope := newPlanningDatastore(ds, &pkgmodel.Forma{Stacks: []pkgmodel.Stack{{Label: info.StackLabel}}})
+	if _, err := scope.GetStackByLabel(info.StackLabel); err != nil {
+		return nil, err
+	}
+	for attempt := 0; attempt < 16; attempt++ {
+		var result *rotationResult
+		var current datastore.GeneratorRotationInfo
+		var eligible bool
+		guards, err := scope.certify(func() error {
+			result = nil
+			eligible = false
+			infos, err := scope.GetGeneratorsWithRotation()
+			if err != nil {
+				return err
+			}
+			for _, observed := range infos {
+				if observed.GeneratorID == info.GeneratorID && observed.Label == info.Label && observed.StackLabel == info.StackLabel {
+					current = observed
+					eligible = rotationIsDue(current, time.Now().UTC())
+					break
+				}
+			}
+			if !eligible {
+				return nil
+			}
+			result, err = prepareRotation(scope, current)
+			if err != nil || result == nil {
+				return err
+			}
+			return result.command.ResolveStackIdentities(scope)
+		})
+		if errors.Is(err, errPlanningScopeExpanded) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if !eligible {
+			return nil, nil
+		}
+		return &certifiedRotation{result: result, info: current, guards: guards}, nil
+	}
+	return nil, fmt.Errorf("%w: rotation planning scope did not stabilize after 16 attempts", datastore.ErrStaleAdmission)
 }
 
 // rotationJitterBound is the width of the window a generator's rotation may

@@ -57,7 +57,7 @@ func (d *uncertainScopedCommit) PinCommandTargetIncarnation(commandID, target, i
 }
 func startScopedActor(t *testing.T, ds datastore.Datastore, path string, overrides *plugin.ResourcePluginOverrides) *Metastructure {
 	t.Helper()
-	cfg := &pkgmodel.Config{Agent: pkgmodel.AgentConfig{Server: pkgmodel.ServerConfig{Nodename: "scope-" + util.RandomString(8), Hostname: "localhost"}, Datastore: pkgmodel.DatastoreConfig{DatastoreType: pkgmodel.SqliteDatastore, Sqlite: pkgmodel.SqliteConfig{FilePath: path}}, Retry: pkgmodel.RetryConfig{MaxRetries: 1, RetryDelay: time.Millisecond, StatusCheckInterval: time.Millisecond}, Discovery: pkgmodel.DiscoveryConfig{Interval: time.Hour}}}
+	cfg := &pkgmodel.Config{Agent: pkgmodel.AgentConfig{Server: pkgmodel.ServerConfig{Nodename: "scope-" + util.RandomString(8), Hostname: "localhost"}, Datastore: pkgmodel.DatastoreConfig{DatastoreType: pkgmodel.SqliteDatastore, Sqlite: pkgmodel.SqliteConfig{FilePath: path}}, Retry: pkgmodel.RetryConfig{MaxRetries: 1, RetryDelay: time.Millisecond, StatusCheckInterval: time.Millisecond}, Discovery: pkgmodel.DiscoveryConfig{Interval: time.Hour}, StackExpirer: pkgmodel.StackExpirerConfig{Interval: time.Hour}}}
 	ctx, cancel := testutil.PluginOverridesContext(overrides)
 	t.Cleanup(cancel)
 	m, err := NewMetastructureWithDataStoreAndContext(ctx, cfg, nil, nil, ds, "test")

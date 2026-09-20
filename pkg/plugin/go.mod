@@ -18,7 +18,7 @@ require (
 	github.com/hashicorp/hcl/v2 v2.24.0
 	github.com/klauspost/compress v1.18.5
 	github.com/masterminds/semver v1.5.0
-	github.com/platform-engineering-labs/formae/pkg/credential v0.1.0
+	github.com/platform-engineering-labs/formae/pkg/credential v0.1.1-0.20260918154753-1ddaf2b87619
 	github.com/platform-engineering-labs/formae/pkg/model v0.1.28
 	github.com/stretchr/testify v1.11.1
 	github.com/vmihailenco/msgpack/v5 v5.4.1

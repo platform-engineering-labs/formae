@@ -7,8 +7,11 @@ package forma_persister
 
 import (
 	"context"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/platform-engineering-labs/formae/internal/datastore"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
 
@@ -112,6 +115,9 @@ func TestAllProducerSourcesResolveAffectedAndEmptyStackIdentitiesAtAdmission(t *
 		require.NoError(t, err)
 		require.Equal(t, source, persisted.Source)
 		require.ElementsMatch(t, []forma_command.CommandStack{{ID: "real-empty", Label: "empty"}, {ID: "real-resource", Label: "resource"}, {ID: "real-cascade", Label: "cascade"}}, persisted.Stacks)
+		// Each producer case is independent. Finish this synthetic command so
+		// command-level exclusion does not make the next matrix row overlap it.
+		require.NoError(t, ds.UpdateFormaCommandProgress(command.ID, forma_command.CommandStateSuccess, time.Now().UTC()))
 	}
 }
 
@@ -131,4 +137,77 @@ func TestDiscoveryVirtualStackDoesNotFabricateMembership(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, persisted.Stacks, "virtual inventory scope has no managed stack incarnation")
 	require.Equal(t, []string{"unmanaged"}, persisted.GetStackLabels())
+}
+
+// Removing command-level exclusion from the persister admits a second mutator
+// after the first command's last RU is terminal but its command is not.
+func TestUnguardedPersisterRejectsNonterminalCommandMembership(t *testing.T) {
+	ds, err := dssqlite.NewDatastoreSQLite(context.Background(), &pkgmodel.DatastoreConfig{Sqlite: pkgmodel.SqliteConfig{FilePath: ":memory:"}}, "test")
+	require.NoError(t, err)
+	defer ds.Close()
+	for _, label := range []string{"test-stack", "free"} {
+		_, err = ds.CreateStack(&pkgmodel.Stack{Label: label}, "seed")
+		require.NoError(t, err)
+	}
+
+	active := newFormaCommandWithCreateResourceUpdate()
+	active.State = forma_command.CommandStateInProgress
+	active.ResourceUpdates[0].State = types.ResourceUpdateStateSuccess
+	active.ModifiedTs = time.Now().UTC()
+	require.NoError(t, ds.StoreFormaCommand(active, active.ID))
+
+	operator, sender, err := newFormaCommandPersisterWithDatastore(t, ds)
+	require.NoError(t, err)
+	conflicting := newFormaCommandWithCreateResourceUpdate()
+	conflicting.ID = util.NewID()
+	conflicting.Command = pkgmodel.CommandDestroy
+	conflicting.Source = forma_command.SourceStackExpirer
+	result := operator.Call(sender, StoreNewFormaCommand{Command: *conflicting})
+	require.NoError(t, result.Error)
+	require.ErrorIs(t, result.Response.(CommandPersistResult).CallFailure(), datastore.ErrCommandConflict)
+	stored, err := ds.GetFormaCommandByCommandID(conflicting.ID)
+	require.Error(t, err)
+	require.Nil(t, stored)
+
+	guarded := newFormaCommandWithCreateResourceUpdate()
+	guarded.ID = util.NewID()
+	guarded.Command = pkgmodel.CommandDestroy
+	guarded.Source = forma_command.SourceStackExpirer
+	require.NoError(t, guarded.ResolveStackIdentities(ds))
+	guards, err := ds.(datastore.CommandAdmitter).ReadAdmissionRevisions([]string{datastore.AdmissionStackMappingGuard})
+	require.NoError(t, err)
+	admission := &datastore.CommandAdmission{Guards: guards, PrincipalScope: "stack-expirer", IdempotencyKey: guarded.ID, RequestDigest: strings.Repeat("a", 64), Receipt: []byte(`{"producer":"test"}`)}
+	result = operator.Call(sender, StoreNewFormaCommand{Command: *guarded, Admission: admission})
+	require.NoError(t, result.Error)
+	require.ErrorIs(t, result.Response.(CommandPersistResult).CallFailure(), datastore.ErrCommandConflict)
+	require.NoError(t, ds.UpdateFormaCommandProgress(active.ID, forma_command.CommandStateSuccess, time.Now().UTC()))
+
+	metadataOnly := &forma_command.FormaCommand{
+		ID: util.NewID(), Command: pkgmodel.CommandApply, Source: forma_command.SourceUser,
+		State: forma_command.CommandStateInProgress, StartTs: time.Now().UTC(), ModifiedTs: time.Now().UTC(),
+		Stacks: []forma_command.CommandStack{{ID: "real-test-stack", Label: "test-stack"}},
+	}
+	require.NoError(t, ds.StoreFormaCommand(metadataOnly, metadataOnly.ID))
+	metadataConflict := newFormaCommandWithCreateResourceUpdate()
+	metadataConflict.ID = util.NewID()
+	result = operator.Call(sender, StoreNewFormaCommand{Command: *metadataConflict})
+	require.NoError(t, result.Error)
+	require.ErrorIs(t, result.Response.(CommandPersistResult).CallFailure(), datastore.ErrCommandConflict,
+		"metadata-only membership remains protected without a resource update")
+
+	independent := newFormaCommandWithCreateResourceUpdate()
+	independent.ID = util.NewID()
+	independent.ResourceUpdates[0].StackLabel = "free"
+	independent.ResourceUpdates[0].DesiredState.Stack = "free"
+	result = operator.Call(sender, StoreNewFormaCommand{Command: *independent})
+	require.NoError(t, result.Error)
+	require.NoError(t, result.Response.(CommandPersistResult).CallFailure())
+
+	readOnly := newFormaCommandWithCreateResourceUpdate()
+	readOnly.ID = util.NewID()
+	readOnly.Command = pkgmodel.CommandSync
+	readOnly.Source = forma_command.SourceSynchronizer
+	result = operator.Call(sender, StoreNewFormaCommand{Command: *readOnly})
+	require.NoError(t, result.Error)
+	require.NoError(t, result.Response.(CommandPersistResult).CallFailure())
 }

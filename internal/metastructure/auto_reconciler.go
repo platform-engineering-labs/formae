@@ -5,6 +5,7 @@
 package metastructure
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -266,6 +267,58 @@ type reconcileResult struct {
 	changeset changeset.Changeset
 }
 
+type certifiedReconcile struct {
+	result *reconcileResult
+	policy datastore.StackReconcileInfo
+	guards []datastore.RevisionGuard
+}
+
+func certifyScheduledReconcile(ds datastore.Datastore, stackLabel string) (*certifiedReconcile, error) {
+	scope := newPlanningDatastore(ds, &pkgmodel.Forma{Stacks: []pkgmodel.Stack{{Label: stackLabel}}})
+	if _, err := scope.GetStackByLabel(stackLabel); err != nil {
+		return nil, err
+	}
+	for attempt := 0; attempt < 16; attempt++ {
+		var result *reconcileResult
+		var policy datastore.StackReconcileInfo
+		var eligible bool
+		guards, err := scope.certify(func() error {
+			result = nil
+			eligible = false
+			policies, err := scope.GetStacksWithAutoReconcilePolicy()
+			if err != nil {
+				return err
+			}
+			for _, current := range policies {
+				if current.StackLabel == stackLabel {
+					policy = current
+					eligible = true
+					break
+				}
+			}
+			if !eligible {
+				return nil
+			}
+			result, err = prepareReconcile(scope, stackLabel, "auto-reconciler", "", "", forma_command.SourceAutoReconciler)
+			if err != nil || result == nil {
+				return err
+			}
+			return result.command.ResolveStackIdentities(scope)
+		})
+		if errors.Is(err, errPlanningScopeExpanded) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		if !eligible {
+			return nil, nil
+		}
+		return &certifiedReconcile{result: result, policy: policy, guards: guards}, nil
+	}
+	return nil, fmt.Errorf("%w: reconcile planning scope did not stabilize after 16 attempts", datastore.ErrStaleAdmission)
+}
+
 // prepareReconcile builds a reconcile FormaCommand and Changeset from the stack's last-reconcile snapshot.
 // It returns nil (with no error) when no drift is detected. The caller is responsible for persisting
 // the command and starting the changeset execution.
@@ -411,21 +464,27 @@ func startReconcile(proc gen.Process, data *AutoReconcilerData, stackLabel strin
 		return "", nil // Not an error - just skip and reschedule
 	}
 
-	result, err := prepareReconcile(data.datastore, stackLabel, "auto-reconciler", "", "", forma_command.SourceAutoReconciler)
+	certified, err := certifyScheduledReconcile(data.datastore, stackLabel)
 	if err != nil {
 		return "", err
 	}
-	if result == nil {
+	if certified == nil || certified.result == nil {
 		proc.Log().Debug("No drift detected, nothing to reconcile stack=%s", stackLabel)
 		return "", nil
 	}
+	result := certified.result
 
 	proc.Log().Debug("Generated resource updates for stack=%s, starting reconcile command=%s", stackLabel, result.command.ID)
 
 	// Store the forma command
+	digest, err := resolutionHash(certified.policy)
+	if err != nil {
+		return "", fmt.Errorf("hash reconcile decision: %w", err)
+	}
+	admission := datastore.CommandAdmission{Guards: certified.guards, PrincipalScope: "auto-reconciler", IdempotencyKey: result.command.ID, RequestDigest: digest, Receipt: []byte(`{"producer":"auto-reconciler"}`)}
 	_, err = messages.UnwrapCall(proc.Call(
 		gen.ProcessID{Name: actornames.FormaCommandPersister, Node: proc.Node().Name()},
-		forma_persister.StoreNewFormaCommand{Command: *result.command},
+		forma_persister.StoreNewFormaCommand{Command: *result.command, Admission: &admission},
 	))
 	if err != nil {
 		return "", fmt.Errorf("failed to store reconcile command: %w", err)

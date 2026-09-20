@@ -564,6 +564,9 @@ type Datastore interface {
 	// StackHasActiveCommands returns true if the stack has any forma commands
 	// that are not in a terminal state (Success, Failed, Canceled)
 	StackHasActiveCommands(stackLabel string) (bool, error)
+	// HasConflictingCommandForStacks checks command-level coverage through
+	// membership and resource updates, including metadata-only commands.
+	HasConflictingCommandForStacks(stackLabels []string) (bool, error)
 
 	// Generator operations - a generator produces a value (e.g. a random
 	// password) that a secret will later reference. Unlike a policy, a

@@ -15,7 +15,8 @@ import (
 )
 
 // OidcCredentialPlugin mints short-lived OIDC identity tokens on behalf of
-// the agent.
+// the agent. IdentityToken must honor context cancellation promptly and finish
+// its local mint work before returning; bounded calls wait for that completion.
 type OidcCredentialPlugin interface {
 	IdentityToken(ctx context.Context, req *OidcIdentityTokenRequest) (*OidcIdentityTokenResult, error)
 }
@@ -31,6 +32,14 @@ type Configurable interface {
 type OidcIdentityTokenRequest struct {
 	Audience  string `json:"audience"`
 	RequestID string `json:"requestId"`
+}
+
+// OidcBoundedIdentityTokenRequest requires the receiver to honor the enclosing
+// Ergo call reference's deadline. A distinct wire type makes older receivers
+// fail closed instead of silently ignoring the required lifetime bound.
+// Supervisor-launched caller and broker processes share the host clock.
+type OidcBoundedIdentityTokenRequest struct {
+	Request OidcIdentityTokenRequest `json:"request"`
 }
 
 // OidcIdentityTokenResult carries a minted identity token and its expiry.

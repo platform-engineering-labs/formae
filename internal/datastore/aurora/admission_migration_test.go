@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/platform-engineering-labs/formae/internal/datastore"
 	"github.com/stretchr/testify/require"
 )
 
@@ -30,4 +31,19 @@ DROP TABLE example;
 	statements := parseGooseUp(sql)
 	require.Len(t, statements, 3)
 	require.True(t, strings.Contains(statements[1], "PERFORM 1;\nRETURN NEW;\nEND $$;"))
+}
+
+func TestScopedCommandUpdateMigrationParsesForAurora(t *testing.T) {
+	raw, err := datastore.EmbedMigrationsPostgres.ReadFile("migrations_postgres/00034_scope_command_update.sql")
+	require.NoError(t, err)
+	statements := parseGooseUp(string(raw))
+	require.Len(t, statements, 1)
+	function := statements[0]
+	require.Contains(t, function, "CREATE OR REPLACE FUNCTION admission_forma_commands_update()")
+	require.Contains(t, function, "to_jsonb(OLD) - 'modified_ts'")
+	require.Contains(t, function, "affected_resource_updates AS MATERIALIZED")
+	require.Contains(t, function, "affected_resource_update_history AS MATERIALIZED")
+	require.Contains(t, function, "affected_resources AS MATERIALIZED")
+	require.Contains(t, function, `ORDER BY guard_key COLLATE "C"`)
+	require.NotContains(t, function, "admission_forma_commands_insert")
 }

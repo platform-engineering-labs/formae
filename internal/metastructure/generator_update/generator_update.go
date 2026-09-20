@@ -235,3 +235,10 @@ type PersistGeneratorUpdates struct {
 	CommandID        string
 	StackIDMap       map[string]string // StackLabel -> StackID mapping
 }
+
+// UpdateGeneratorStates transfers the result of a synchronous generator-row
+// write to the FormaCommand persister.
+type UpdateGeneratorStates struct {
+	CommandID        string
+	GeneratorUpdates []GeneratorUpdate
+}

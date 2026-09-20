@@ -276,6 +276,9 @@ func (m *mockSummaryDatastore) GetResourcesAtLastReconcile(_ string) ([]datastor
 func (m *mockSummaryDatastore) StackHasActiveCommands(_ string) (bool, error) {
 	panic("not implemented")
 }
+func (m *mockSummaryDatastore) HasConflictingCommandForStacks(_ []string) (bool, error) {
+	panic("not implemented")
+}
 func (m *mockSummaryDatastore) CreateGenerator(_ pkgmodel.Generator, _ string) (string, error) {
 	panic("not implemented")
 }
