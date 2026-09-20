@@ -289,6 +289,26 @@ func (rp *ResourcePersister) storeResourceUpdate(commandID string, resourceOpera
 			resourceUpdate.DesiredState.Label, resourceUpdate.DesiredState.Stack, err)
 	}
 	hash := forma.ResourceUpdates[0].Version
+	prior := resourceUpdate.PriorState
+	// A fresh synchronizer Read can update provider-observed properties in
+	// place, returning the physical version it started from. That observation
+	// is durable, but it is not a new history event. Hide only that exact
+	// receipt. The identity and ownership checks matter even when the receipt
+	// matches: prior attribution is preserved only when KSUID, physical target,
+	// and managed state all match. Retaining a receipt for any mismatch avoids
+	// pruning a command that may own an action-bearing row.
+	if resourceUpdate.Source == resource_update.FormaCommandSourceSynchronize &&
+		resourceOperation == resource_update.OperationRead &&
+		pluginOperation == pkgresource.OperationRead &&
+		resourceUpdate.Operation == resource_update.OperationRead &&
+		relevantProgress.OperationStatus == pkgresource.OperationStatusSuccess &&
+		prior.Version != "" &&
+		prior.Ksuid == resourceUpdate.DesiredState.Ksuid &&
+		prior.Target == resourceUpdate.DesiredState.Target &&
+		prior.Managed == resourceUpdate.DesiredState.Managed &&
+		hash == fmt.Sprintf("%s_%s", prior.Ksuid, prior.Version) {
+		return "", nil
+	}
 
 	return hash, nil
 }
