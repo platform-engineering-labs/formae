@@ -76,10 +76,10 @@ func TestSyncReadOnlyHistory_Deterministic(t *testing.T) {
 		// while the batch remains in history because the other resource mints a
 		// physical version.
 		beforeMixed := h.captureHistorySnapshot(t)
-		readBaseline := len(h.GetOperationLog(t))
 		h.putObservedRevisionWithRetry(t, observed.NativeID, observed.Type, "revision-mixed")
 		driftProps := cloudPropertiesWith(t, h, drifted.NativeID, "Value", "writable-drift")
 		h.putCloudStateWithRetry(t, drifted.NativeID, drifted.Type, driftProps)
+		readBaseline := len(h.GetOperationLog(t))
 		require.True(t, h.forceSyncAndAwait(t, nil, 10*time.Second))
 		require.NotNil(t, h.waitForObservedInventory(t, observed.NativeID, "revision-mixed", 10*time.Second))
 		require.True(t, h.waitForAbsorbedInventory(t, "managed:true", drifted.NativeID, driftProps, false, 10*time.Second))

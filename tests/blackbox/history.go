@@ -188,9 +188,9 @@ func (h *TestHarness) observeManagedCloudResource(
 	require.True(t, ok, "observed resource %s has a physical row", nativeID)
 	beforeInventory := h.waitForInventoryNativeIDResource(t, "managed:true", nativeID, 10*time.Second)
 	require.NotNil(t, beforeInventory)
-	readBaseline := len(h.GetOperationLog(t))
 
 	h.putObservedRevisionWithRetry(t, nativeID, resourceType, revision)
+	readBaseline := len(h.GetOperationLog(t))
 	var afterInventory *pkgmodel.Resource
 	const maxSyncAttempts = 3
 	for attempt := range maxSyncAttempts {
