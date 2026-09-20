@@ -124,7 +124,7 @@ func (h *TestHarness) captureHistorySnapshot(t *testing.T) historySnapshot {
 // retained successful synchronizer batch is justified by a physical history
 // event. Usually the command owns a version created in the observation window.
 // An idempotent delete may instead return a receipt for a tombstone that already
-// existed when the window began.
+// existed when the window began or that a non-sync command created during it.
 func newSuccessfulSynchronizerCommandsHaveDurableEvents(before, after historySnapshot) error {
 	for commandID, command := range after.Commands {
 		if _, existed := before.Commands[commandID]; existed || command.Command != "sync" ||
@@ -139,7 +139,7 @@ func newSuccessfulSynchronizerCommandsHaveDurableEvents(before, after historySna
 			}
 		}
 		if !hasDurableEvent {
-			hasDurableEvent = commandHasSuccessfulExistingDeleteReceipt(commandID, before, after)
+			hasDurableEvent = commandHasSuccessfulDeleteReceipt(commandID, before, after)
 		}
 		if !hasDurableEvent {
 			return fmt.Errorf("successful synchronizer command %s has no durable physical resource event", commandID)
@@ -148,19 +148,33 @@ func newSuccessfulSynchronizerCommandsHaveDurableEvents(before, after historySna
 	return nil
 }
 
-func commandHasSuccessfulExistingDeleteReceipt(commandID string, before, after historySnapshot) bool {
+func commandHasSuccessfulDeleteReceipt(commandID string, before, after historySnapshot) bool {
 	for _, update := range after.Updates {
 		if update.CommandID != commandID || update.Operation != "delete" || update.State != "Success" {
 			continue
 		}
 		for _, version := range before.Versions {
-			if version.Operation == "delete" && version.Ksuid == update.Ksuid &&
-				update.Version == version.Ksuid+"_"+version.Version {
+			if deleteReceiptMatchesTombstone(update, version) {
+				return true
+			}
+		}
+		for key, version := range after.Versions {
+			if _, existed := before.Versions[key]; existed || !deleteReceiptMatchesTombstone(update, version) ||
+				version.CommandID == commandID {
+				continue
+			}
+			owner, knownOwner := after.Commands[version.CommandID]
+			if knownOwner && owner.Command != "sync" {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+func deleteReceiptMatchesTombstone(update historyUpdateRow, version historyResourceRow) bool {
+	return version.Operation == "delete" && version.Ksuid == update.Ksuid &&
+		update.Version == version.Ksuid+"_"+version.Version
 }
 
 func (h *TestHarness) observeManagedCloudResource(
