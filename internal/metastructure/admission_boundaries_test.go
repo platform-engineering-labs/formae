@@ -15,6 +15,8 @@ import (
 	dssqlite "github.com/platform-engineering-labs/formae/internal/datastore/sqlite"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_persister"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/messages"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/testutil"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
@@ -32,6 +34,24 @@ type admissionBoundaryDatastore struct {
 	*scopedReadBarrier
 	beforeAdmission func() error
 	refreshGuards   bool
+}
+
+// finalizationStoreBarrier pauses only the full command re-store which closes
+// the real persister's last-resource-terminal/command-terminal handoff.
+type finalizationStoreBarrier struct {
+	*scopedReadBarrier
+	commandID string
+	entered   chan struct{}
+	release   chan struct{}
+	blocked   atomic.Bool
+}
+
+func (d *finalizationStoreBarrier) StoreFormaCommand(command *forma_command.FormaCommand, commandID string) error {
+	if commandID == d.commandID && command.IsInFinalState() && d.blocked.CompareAndSwap(false, true) {
+		close(d.entered)
+		<-d.release
+	}
+	return d.Datastore.StoreFormaCommand(command, commandID)
 }
 
 func (d *admissionBoundaryDatastore) AdmitFormaCommand(command *forma_command.FormaCommand, admission datastore.CommandAdmission) (datastore.AdmissionResult, error) {
@@ -202,6 +222,210 @@ func TestAdmissionBoundariesTerminalResourceBeforeCommandFinalizationInvalidates
 	freshPlan, err := m.prepareGuardedApply(forma, options, "client", "subject", "")
 	require.NoError(t, err)
 	require.NoError(t, admitScopedPlan(t, m, freshPlan), "a plan certified after finalization remains admissible")
+}
+
+// Removing planning invalidation from the real persister's final full command
+// re-store would admit the candidate planned while the finishing command was
+// still excluded from accepted desired state.
+func TestAdmissionBoundariesPersisterFinalizationInvalidatesConcurrentPlan(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		path := t.TempDir() + "/persister-finalization.db"
+		cfg := &pkgmodel.DatastoreConfig{Sqlite: pkgmodel.SqliteConfig{FilePath: path}}
+		ds, err := dssqlite.NewDatastoreSQLite(context.Background(), cfg, "actor")
+		require.NoError(t, err)
+		writer, err := dssqlite.NewDatastoreSQLite(context.Background(), cfg, "writer")
+		require.NoError(t, err)
+		t.Cleanup(func() { writer.Close() })
+		plannerDS, err := dssqlite.NewDatastoreSQLite(context.Background(), cfg, "planner")
+		require.NoError(t, err)
+		t.Cleanup(func() { plannerDS.Close() })
+
+		stackID, err := writer.CreateStack(&pkgmodel.Stack{Label: "handoff"}, "seed")
+		require.NoError(t, err)
+		_, err = writer.CreateTarget(&pkgmodel.Target{Label: "target", Namespace: "FakeAWS", Config: []byte(`{}`)})
+		require.NoError(t, err)
+		before := admissionBoundaryForma("handoff", "resource", "before").Resources[0]
+		before.Ksuid = util.NewID()
+		before.Managed = true
+		before.NativeID = "native-resource"
+		_, err = writer.StoreResource(&before, "seed")
+		require.NoError(t, err)
+		beforeRow, err := writer.LoadResourceById(before.Ksuid)
+		require.NoError(t, err)
+		require.NotNil(t, beforeRow)
+		storeDesired(t, writer, *beforeRow, resource_update.OperationCreate, forma_command.CommandStateSuccess)
+
+		barrier := &finalizationStoreBarrier{
+			scopedReadBarrier: withScopedBarrier(ds, nil),
+			entered:           make(chan struct{}),
+			release:           make(chan struct{}),
+		}
+		var releaseOnce sync.Once
+		defer releaseOnce.Do(func() { close(barrier.release) })
+		m := startScopedActor(t, barrier, path, &plugin.ResourcePluginOverrides{})
+		_, err = testutil.StartTestHelperActor(m.Node, make(chan any, 1))
+		require.NoError(t, err)
+
+		terminal := *beforeRow
+		terminal.Properties = []byte(`{"foo":"terminal"}`)
+		now := time.Now().UTC()
+		finishing := forma_command.FormaCommand{
+			ID: util.NewID(), Command: pkgmodel.CommandApply, Source: forma_command.SourceUser,
+			Config: config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
+			State:  forma_command.CommandStateInProgress, StartTs: now, ModifiedTs: now,
+			Stacks: []forma_command.CommandStack{{ID: stackID, Label: "handoff"}},
+			ResourceUpdates: []resource_update.ResourceUpdate{{
+				DesiredState: terminal, PriorState: *beforeRow, Version: beforeRow.Version,
+				StackLabel: "handoff", Operation: resource_update.OperationUpdate,
+				Source: resource_update.FormaCommandSourceUser, State: resource_update.ResourceUpdateStateNotStarted,
+			}},
+		}
+		stored, err := testutil.Call(m.Node, "FormaCommandPersister", forma_persister.StoreNewFormaCommand{Command: finishing})
+		require.NoError(t, err)
+		require.True(t, stored.(forma_persister.CommandPersistResult).OK)
+		barrier.commandID = finishing.ID
+
+		// The provider/result persistence precedes the completion handoff in the
+		// workflow. The command remains InProgress until the persister's full
+		// re-store below is released.
+		_, err = writer.StoreResource(&terminal, finishing.ID)
+		require.NoError(t, err)
+		type completionResult struct {
+			response any
+			err      error
+		}
+		completed := make(chan completionResult, 1)
+		go func() {
+			response, callErr := testutil.Call(m.Node, "FormaCommandPersister", messages.MarkResourceUpdateAsComplete{
+				CommandID: finishing.ID, ResourceURI: terminal.URI(), Operation: resource_update.OperationUpdate,
+				FinalState: resource_update.ResourceUpdateStateSuccess, ResourceStartTs: now, ResourceModifiedTs: now.Add(time.Second),
+			})
+			completed <- completionResult{response: response, err: callErr}
+		}()
+		select {
+		case <-barrier.entered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("persister did not reach the final full command store")
+		}
+
+		persistedGap, err := plannerDS.GetFormaCommandByCommandID(finishing.ID)
+		require.NoError(t, err)
+		require.Equal(t, forma_command.CommandStateInProgress, persistedGap.State)
+		require.Len(t, persistedGap.ResourceUpdates, 1)
+		require.Equal(t, resource_update.ResourceUpdateStateSuccess, persistedGap.ResourceUpdates[0].State)
+		planner := &Metastructure{Datastore: plannerDS, Cfg: &pkgmodel.Config{}}
+		extracted, err := planner.ExtractDesiredStacks("stack:handoff")
+		require.NoError(t, err)
+		require.Len(t, extracted.Resources, 1)
+		require.JSONEq(t, `{"foo":"before"}`, string(extracted.Resources[0].Properties), "the InProgress command is not accepted desired intent")
+
+		candidate := admissionBoundaryForma("handoff", "resource", "candidate")
+		plan, err := planner.prepareGuardedApply(candidate, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Force: true}, "client", "subject", "")
+		require.NoError(t, err, "the terminal resource update leaves no active provider work to conflict")
+		beforeAdmission, err := plannerDS.LoadFormaCommands()
+		require.NoError(t, err)
+
+		releaseOnce.Do(func() { close(barrier.release) })
+		select {
+		case result := <-completed:
+			require.NoError(t, result.err)
+			require.True(t, result.response.(forma_persister.CommandPersistResult).OK)
+		case <-time.After(5 * time.Second):
+			t.Fatal("persister finalization did not complete after release")
+		}
+		finalized, err := plannerDS.GetFormaCommandByCommandID(finishing.ID)
+		require.NoError(t, err)
+		require.Equal(t, forma_command.CommandStateSuccess, finalized.State)
+
+		require.ErrorIs(t, admitScopedPlan(t, planner, plan), datastore.ErrStaleAdmission)
+		afterAdmission, err := plannerDS.LoadFormaCommands()
+		require.NoError(t, err)
+		require.Len(t, afterAdmission, len(beforeAdmission), "stale admission must leave no candidate intent")
+		for _, command := range afterAdmission {
+			require.NotEqual(t, plan.Command.ID, command.ID)
+		}
+
+		extracted, err = planner.ExtractDesiredStacks("stack:handoff")
+		require.NoError(t, err)
+		require.Len(t, extracted.Resources, 1)
+		require.JSONEq(t, `{"foo":"terminal"}`, string(extracted.Resources[0].Properties), "finalization makes the literal terminal declaration accepted")
+		fresh, err := planner.prepareGuardedApply(candidate, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Force: true}, "client", "subject", "")
+		require.NoError(t, err)
+		require.Len(t, fresh.Command.ResourceUpdates, 1)
+		require.JSONEq(t, `{"foo":"terminal"}`, string(fresh.Command.ResourceUpdates[0].PriorState.Properties), "fresh planning reads the provider state committed by the finishing command")
+	})
+}
+
+// A reviewed absorption is bound to the observation shown in its preview. If
+// that observation changes before public submission, the public ApplyForma path
+// must reject without admitting new intent or dispatching a provider write.
+func TestAdmissionBoundariesReviewedAbsorptionRejectsChangedObservationBeforeSubmit(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		path := t.TempDir() + "/pre-submit-review.db"
+		ds, err := dssqlite.NewDatastoreSQLite(context.Background(), &pkgmodel.DatastoreConfig{Sqlite: pkgmodel.SqliteConfig{FilePath: path}}, "test")
+		require.NoError(t, err)
+		var writes atomic.Int64
+		m := startScopedActor(t, ds, path, &plugin.ResourcePluginOverrides{
+			Create: func(*resource.CreateRequest) (*resource.CreateResult, error) { writes.Add(1); return nil, nil },
+			Update: func(*resource.UpdateRequest) (*resource.UpdateResult, error) { writes.Add(1); return nil, nil },
+			Delete: func(*resource.DeleteRequest) (*resource.DeleteResult, error) { writes.Add(1); return nil, nil },
+		})
+
+		_, err = ds.CreateStack(&pkgmodel.Stack{Label: "review"}, "seed")
+		require.NoError(t, err)
+		_, err = ds.CreateTarget(&pkgmodel.Target{Label: "target", Namespace: "FakeAWS", Config: []byte(`{}`)})
+		require.NoError(t, err)
+		declared := admissionBoundaryForma("review", "resource", "before")
+		row := declared.Resources[0]
+		row.Ksuid = util.NewID()
+		row.Managed = true
+		row.NativeID = "native-resource"
+		_, err = ds.StoreResource(&row, "seed")
+		require.NoError(t, err)
+		rowAtBaseline, err := ds.LoadResourceById(row.Ksuid)
+		require.NoError(t, err)
+		storeDesired(t, ds, *rowAtBaseline, resource_update.OperationCreate, forma_command.CommandStateSuccess)
+		commands, err := ds.LoadFormaCommands()
+		require.NoError(t, err)
+		require.Len(t, commands, 1)
+		commands[0].ResourceUpdates[0].Version = rowAtBaseline.Version
+		require.NoError(t, ds.StoreFormaCommand(commands[0], commands[0].ID))
+
+		firstObservation := &forma_command.FormaCommand{ID: util.NewID(), StartTs: time.Now().UTC(), ModifiedTs: time.Now().UTC(), Command: pkgmodel.CommandSync, Source: forma_command.SourceSynchronizer, State: forma_command.CommandStateSuccess}
+		require.NoError(t, ds.StoreFormaCommand(firstObservation, firstObservation.ID))
+		rowAtBaseline.Properties = []byte(`{"foo":"first-drift"}`)
+		_, err = ds.StoreResource(rowAtBaseline, firstObservation.ID)
+		require.NoError(t, err)
+		rejected := observeResolution(t, m, declared)
+		options := &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: true, Resolution: &pkgmodel.DriftResolution{
+			ObservationID: rejected.ObservationID,
+			Decisions:     []pkgmodel.DriftDecision{{ResourceID: row.Ksuid, Action: "absorb"}},
+		}}
+		preview, err := m.ApplyForma(declared, options, "client", "subject", "")
+		require.NoError(t, err)
+		require.NotNil(t, preview.Review)
+
+		secondObservation := &forma_command.FormaCommand{ID: util.NewID(), StartTs: time.Now().UTC(), ModifiedTs: time.Now().UTC(), Command: pkgmodel.CommandSync, Source: forma_command.SourceSynchronizer, State: forma_command.CommandStateSuccess}
+		require.NoError(t, ds.StoreFormaCommand(secondObservation, secondObservation.ID))
+		rowAtBaseline.Properties = []byte(`{"foo":"second-drift"}`)
+		_, err = ds.StoreResource(rowAtBaseline, secondObservation.ID)
+		require.NoError(t, err)
+		beforeCommands, err := ds.LoadFormaCommands()
+		require.NoError(t, err)
+		beforeWrites := writes.Load()
+
+		options.Simulate = false
+		options.Resolution.ReviewID = preview.Review.ReviewID
+		options.Resolution.IdempotencyKey = "changed-before-submit"
+		_, err = m.ApplyForma(declared, options, "client", "subject", "")
+		var stale apimodel.DriftResolutionError
+		require.ErrorAs(t, err, &stale)
+		require.Equal(t, "stale-review", stale.Code)
+		afterCommands, loadErr := ds.LoadFormaCommands()
+		require.NoError(t, loadErr)
+		require.Len(t, afterCommands, len(beforeCommands), "stale review must leave no newly accepted command")
+		require.Equal(t, beforeWrites, writes.Load(), "stale review must not dispatch a provider write")
+	})
 }
 
 type absorptionBoundaryFixture struct {
