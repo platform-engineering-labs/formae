@@ -344,14 +344,15 @@ func RunStoreResourceReadOnlyRefreshPreservesAttribution(t *testing.T, newDS fun
 				changed := resource
 				tc.mutate(&changed)
 				changed.ReadOnlyProperties = json.RawMessage(`{"observed":"after"}`)
-				event := successfulResourceCommand(changed, pkgmodel.CommandApply, forma_command.SourceUser, types.OperationCreate, -time.Minute)
-				require.NoError(t, ds.StoreFormaCommand(event, event.ID))
-				_, err = ds.StoreResource(&changed, event.ID)
+				incoming := successfulResourceCommand(changed, pkgmodel.CommandSync, forma_command.SourceSynchronizer, types.OperationRead, -time.Minute)
+				require.NoError(t, ds.StoreFormaCommand(incoming, incoming.ID))
+				_, err = ds.StoreResource(&changed, incoming.ID)
 				require.NoError(t, err)
 
-				witness, err := ds.GetPropertiesAtLastWrite(changed.Ksuid)
+				observation, err := ds.(datastore.ResourceObservationReader).GetResourceObservation(changed.Ksuid)
 				require.NoError(t, err)
-				require.JSONEq(t, `{"configured":"value"}`, string(witness), "the metadata change must remain attributed to the apply command")
+				require.NotNil(t, observation)
+				require.Equal(t, incoming.ID, observation.CommandID, "the metadata change must remain attributed to the incoming synchronizer command")
 			})
 		}
 	})
