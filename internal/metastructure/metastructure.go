@@ -354,11 +354,11 @@ func (m *Metastructure) planApplyFormaCore(ds datastore.Datastore, forma *pkgmod
 	// while the conflict check passes (the command already completed). By checking conflicts
 	// first, we guarantee that if no incomplete commands exist, all their resources are already
 	// persisted and visible to subsequent queries.
-	if !config.Simulate {
-		if err := m.checkForConflictingCommands(drift.StackLabelsFromForma(forma)); err != nil {
-			return nil, err
-		}
+	if err := m.checkForConflictingCommands(drift.StackLabelsFromForma(forma)); err != nil {
+		return nil, err
+	}
 
+	if !config.Simulate {
 		// Reject an apply that touches a reaped target without re-declaring it.
 		// A reaped target is a tombstone for a target that stayed unreachable past
 		// its reap threshold; a resource-only or stale apply that references it must

@@ -6,6 +6,7 @@ package metastructure
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -26,6 +27,96 @@ import (
 	"github.com/platform-engineering-labs/formae/pkg/plugin/resource"
 	"github.com/stretchr/testify/require"
 )
+
+// An in-flight provider update must not be presented as stable actionable
+// drift. Desired extraction remains the accepted declaration, while a review
+// request receives the ordinary stack-conflict signal until the write ends.
+func TestAdmissionBoundariesActiveProviderWriteNeedsBusyDriftReview(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		path := t.TempDir() + "/active-read-view.db"
+		ds, err := dssqlite.NewDatastoreSQLite(context.Background(), &pkgmodel.DatastoreConfig{Sqlite: pkgmodel.SqliteConfig{FilePath: path}}, "test")
+		require.NoError(t, err)
+		_, err = ds.CreateStack(&pkgmodel.Stack{Label: "active"}, "seed")
+		require.NoError(t, err)
+		_, err = ds.CreateTarget(&pkgmodel.Target{Label: "target", Namespace: "FakeAWS", Config: []byte(`{}`)})
+		require.NoError(t, err)
+		accepted := admissionBoundaryForma("active", "resource", "before")
+		row := accepted.Resources[0]
+		row.Ksuid = util.NewID()
+		row.Managed = true
+		row.NativeID = "native-resource"
+		_, err = ds.StoreResource(&row, "seed")
+		require.NoError(t, err)
+		baseline, err := ds.LoadResourceById(row.Ksuid)
+		require.NoError(t, err)
+		storeDesired(t, ds, *baseline, resource_update.OperationCreate, forma_command.CommandStateSuccess)
+		commands, err := ds.LoadFormaCommands()
+		require.NoError(t, err)
+		require.Len(t, commands, 1)
+		commands[0].ResourceUpdates[0].Version = baseline.Version
+		require.NoError(t, ds.StoreFormaCommand(commands[0], commands[0].ID))
+		driftCommand := &forma_command.FormaCommand{ID: util.NewID(), StartTs: time.Now().UTC(), ModifiedTs: time.Now().UTC(), Command: pkgmodel.CommandSync, Source: forma_command.SourceSynchronizer, State: forma_command.CommandStateSuccess}
+		require.NoError(t, ds.StoreFormaCommand(driftCommand, driftCommand.ID))
+		baseline.Properties = []byte(`{"foo":"drifted"}`)
+		_, err = ds.StoreResource(baseline, driftCommand.ID)
+		require.NoError(t, err)
+
+		updateEntered := make(chan struct{})
+		releaseUpdate := make(chan struct{})
+		var releaseOnce sync.Once
+		defer releaseOnce.Do(func() { close(releaseUpdate) })
+		var providerUpdates atomic.Int64
+		m := startScopedActor(t, ds, path, &plugin.ResourcePluginOverrides{
+			Read: func(*resource.ReadRequest) (*resource.ReadResult, error) {
+				return &resource.ReadResult{ResourceType: "FakeAWS::S3::Bucket", Properties: `{"foo":"drifted"}`}, nil
+			},
+			Update: func(*resource.UpdateRequest) (*resource.UpdateResult, error) {
+				providerUpdates.Add(1)
+				close(updateEntered)
+				<-releaseUpdate
+				return &resource.UpdateResult{ProgressResult: &resource.ProgressResult{
+					Operation: resource.OperationUpdate, OperationStatus: resource.OperationStatusSuccess,
+					NativeID: "native-resource", ResourceProperties: []byte(`{"foo":"replacement"}`),
+				}}, nil
+			},
+		})
+		replacement := admissionBoundaryForma("active", "resource", "replacement")
+		active, err := m.ApplyForma(replacement, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Force: true}, "client", "subject", "")
+		require.NoError(t, err)
+		select {
+		case <-updateEntered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("active apply did not reach the provider update barrier")
+		}
+
+		extracted, err := m.ExtractDesiredStacks("stack:active")
+		require.NoError(t, err)
+		require.Len(t, extracted.Resources, 1)
+		require.JSONEq(t, `{"foo":"before"}`, string(extracted.Resources[0].Properties), "read-only desired extraction must expose only accepted intent")
+		beforeReview, err := ds.LoadFormaCommands()
+		require.NoError(t, err)
+		independent, err := m.ApplyForma(admissionBoundaryForma("free-review", "free-resource", "independent"), &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: true}, "reviewer", "subject", "")
+		require.NoError(t, err, "an active write on another stack must not block a legitimate simulation")
+		require.True(t, independent.Simulation.ChangesRequired)
+		require.EqualValues(t, 1, providerUpdates.Load(), "an independent simulation must not call the provider")
+		_, reviewErr := m.ApplyForma(accepted, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: true}, "reviewer", "subject", "")
+		var conflict apimodel.FormaConflictingCommandsError
+		require.ErrorAs(t, reviewErr, &conflict, "an active provider mutation requires a typed busy/conflict result")
+		require.Len(t, conflict.ConflictingCommands, 1)
+		require.Equal(t, active.CommandID, conflict.ConflictingCommands[0].CommandID)
+		var actionable apimodel.FormaReconcileRejectedError
+		require.False(t, errors.As(reviewErr, &actionable), "an active provider mutation must not be presented as actionable drift")
+		afterReview, err := ds.LoadFormaCommands()
+		require.NoError(t, err)
+		require.Len(t, afterReview, len(beforeReview), "busy review must leave no new intent")
+		require.EqualValues(t, 1, providerUpdates.Load(), "busy review must not dispatch another provider mutation")
+
+		releaseOnce.Do(func() { close(releaseUpdate) })
+		finished := waitForAdmissionBoundaryCommand(t, ds, active.CommandID)
+		require.Equal(t, forma_command.CommandStateSuccess, finished.State, "the held provider write must positively complete after release")
+		require.EqualValues(t, 1, providerUpdates.Load())
+	})
+}
 
 // admissionBoundaryDatastore changes only the post-certification admission
 // window. Refreshing the supplied guard revisions models removal of that final
