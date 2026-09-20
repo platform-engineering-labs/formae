@@ -8,6 +8,7 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -17,16 +18,96 @@ import (
 	"github.com/demula/mksuid/v2"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/platform-engineering-labs/formae/internal/datastore"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/config"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/types"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
+	"github.com/pressly/goose/v3"
 	"github.com/stretchr/testify/require"
 )
 
+func TestAdmissionCommandScopeMigrationUpDownUp(t *testing.T) {
+	ctx := context.Background()
+	database := "admission_command_migration_" + strings.ToLower(mksuid.New().String())
+	cfg := &pkgmodel.DatastoreConfig{DatastoreType: pkgmodel.PostgresDatastore, Postgres: pkgmodel.PostgresConfig{
+		Host: "localhost", Port: 5432, User: "postgres", Password: "admin", Database: database,
+	}}
+	ds, err := NewDatastorePostgresEnsureDatabase(ctx, cfg, "test")
+	require.NoError(t, err)
+	d := ds.(DatastorePostgres)
+	t.Cleanup(func() {
+		d.Close()
+		admin, connectErr := pgx.Connect(ctx, BuildConnStr(cfg.Postgres.Host, cfg.Postgres.Port, cfg.Postgres.User, cfg.Postgres.Password, "postgres"))
+		require.NoError(t, connectErr)
+		defer func() { require.NoError(t, admin.Close(ctx)) }()
+		_, dropErr := admin.Exec(ctx, fmt.Sprintf("DROP DATABASE %s", pgx.Identifier{database}.Sanitize()))
+		require.NoError(t, dropErr)
+	})
+
+	stack := &pkgmodel.Stack{Label: "migration-" + mksuid.New().String()}
+	_, err = d.CreateStack(stack, "migration-test")
+	require.NoError(t, err)
+	command := &forma_command.FormaCommand{
+		ID: mksuid.New().String(), Command: pkgmodel.CommandApply, State: forma_command.CommandStatePending,
+		StartTs: time.Now().UTC(), ModifiedTs: time.Now().UTC(), Source: forma_command.SourceUser,
+		Config: config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
+		Stacks: []forma_command.CommandStack{{ID: stack.ID, Label: stack.Label}},
+	}
+	require.NoError(t, d.StoreFormaCommand(command, command.ID))
+	guardKey := datastore.AdmissionStackGuardKey(stack.ID)
+	readRevision := func() int64 {
+		guards, readErr := d.ReadAdmissionRevisions([]string{guardKey})
+		require.NoError(t, readErr)
+		require.Len(t, guards, 1)
+		return guards[0].Revision
+	}
+	updateModifiedOnly := func() {
+		_, updateErr := d.Pool().Exec(ctx, `UPDATE forma_commands SET modified_ts=clock_timestamp() WHERE command_id=$1`, command.ID)
+		require.NoError(t, updateErr)
+	}
+	functionDefinition := func() string {
+		var definition string
+		queryErr := d.Pool().QueryRow(ctx, `SELECT pg_get_functiondef('admission_forma_commands_update()'::regprocedure)`).Scan(&definition)
+		require.NoError(t, queryErr)
+		return definition
+	}
+
+	require.Contains(t, functionDefinition(), "affected_resource_update_history AS MATERIALIZED")
+	before := readRevision()
+	updateModifiedOnly()
+	require.Equal(t, before, readRevision(), "Up must ignore a modified_ts-only command write")
+
+	migrationDB, err := sql.Open("pgx", BuildConnStr(cfg.Postgres.Host, cfg.Postgres.Port, cfg.Postgres.User, cfg.Postgres.Password, database))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, migrationDB.Close()) }()
+	goose.SetBaseFS(datastore.EmbedMigrationsPostgres)
+	goose.SetTableName(datastore.MigrationHistoryV2)
+	require.NoError(t, goose.SetDialect("postgres"))
+	require.NoError(t, goose.Down(migrationDB, "migrations_postgres"))
+	require.NotContains(t, functionDefinition(), "affected_resource_update_history AS MATERIALIZED")
+
+	before = readRevision()
+	updateModifiedOnly()
+	require.Greater(t, readRevision(), before, "Down must restore migration 00031 behavior")
+
+	require.NoError(t, datastore.RunMigrations(migrationDB, "postgres"))
+	require.Contains(t, functionDefinition(), "affected_resource_update_history AS MATERIALIZED")
+	before = readRevision()
+	updateModifiedOnly()
+	require.Equal(t, before, readRevision(), "second Up must restore the modified_ts fast path")
+}
+
 func TestAdmissionCommandUpdateScopesHistoryBeforeJSON(t *testing.T) {
-	const unrelatedResources = 7560
+	for _, unrelatedResources := range []int{0, 7560, 15120} {
+		t.Run(fmt.Sprintf("unrelated_%d", unrelatedResources), func(t *testing.T) {
+			testAdmissionCommandUpdateScopesHistoryBeforeJSON(t, unrelatedResources)
+		})
+	}
+}
+
+func testAdmissionCommandUpdateScopesHistoryBeforeJSON(t *testing.T, unrelatedResources int) {
 	ctx := context.Background()
 	database := "admission_command_scope_" + strings.ToLower(mksuid.New().String())
 	cfg := &pkgmodel.DatastoreConfig{DatastoreType: pkgmodel.PostgresDatastore, Postgres: pkgmodel.PostgresConfig{
@@ -124,6 +205,14 @@ func TestAdmissionCommandUpdateScopesHistoryBeforeJSON(t *testing.T) {
 	require.Positive(t, metrics.resourceNodes, "nested plans must include the affected resources query")
 	require.LessOrEqual(t, metrics.maxResources, float64(2), "command UPDATE must filter/materialize affected resources before JSON and label processing")
 	require.LessOrEqual(t, metrics.maxResourceUpdates, float64(2), "command UPDATE must filter affected resource-update history before JSON processing")
+
+	command.State = forma_command.CommandStateFailed
+	command.ModifiedTs = time.Now().UTC()
+	require.NoError(t, d.StoreFormaCommand(command, command.ID), "real StoreFormaCommand must preserve full production persistence semantics")
+	stored, err := d.GetFormaCommandByCommandID(command.ID)
+	require.NoError(t, err)
+	require.Equal(t, forma_command.CommandStateFailed, stored.State)
+	require.Equal(t, command.Stacks, stored.Stacks)
 }
 
 type nestedPlanMetrics struct {
