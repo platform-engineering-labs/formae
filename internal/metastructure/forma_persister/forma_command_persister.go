@@ -634,8 +634,19 @@ func (f *FormaCommandPersister) storeNewFormaCommandWithAdmission(command *forma
 				f.Log().Warning("Failed to refresh committed policies: %v", err)
 			}
 		}
-	} else if err := f.datastore.StoreFormaCommand(command, command.ID); err != nil {
-		return CommandPersistResult{}, fmt.Errorf("failed to store new Forma command: %w", err)
+	} else {
+		// The mailbox message owns only a shallow copy of the caller's command.
+		// Take ownership after synchronous normalization and before the durable
+		// write, so later progress cannot mutate caller memory and a snapshot
+		// failure cannot leave an unowned committed command.
+		owned, err := snapshotFormaCommand(command)
+		if err != nil {
+			return CommandPersistResult{}, fmt.Errorf("snapshot unguarded command: %w", err)
+		}
+		command = owned
+		if err = f.datastore.StoreFormaCommand(command, command.ID); err != nil {
+			return CommandPersistResult{}, fmt.Errorf("failed to store new Forma command: %w", err)
+		}
 	}
 
 	if command.IsInFinalState() {

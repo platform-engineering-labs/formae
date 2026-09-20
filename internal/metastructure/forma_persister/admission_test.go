@@ -228,6 +228,66 @@ func TestGuardedPersisterRepliesOwnDetachedCommandSnapshots(t *testing.T) {
 	require.Equal(t, "generator-stack-id", reloaded.DrawGeneratorUpdates[0].Generator.GetStackID())
 }
 
+// Unguarded callers hand the persister a shallow command value. Once the
+// store reply returns, later mailbox turns must not mutate the caller's nested
+// values, and the caller must not be able to mutate the authoritative cache.
+func TestUnguardedPersisterOwnsDetachedCommandAfterStore(t *testing.T) {
+	ds, err := dssqlite.NewDatastoreSQLite(context.Background(), &pkgmodel.DatastoreConfig{Sqlite: pkgmodel.SqliteConfig{FilePath: ":memory:"}}, "test")
+	require.NoError(t, err)
+	defer ds.Close()
+
+	persister, sender, err := newFormaCommandPersisterWithDatastore(t, ds)
+	require.NoError(t, err)
+	command := newFormaCommandWithCreateResourceUpdate()
+	command.Setup = &forma_command.SetupBoundary{Version: 1, Committed: false}
+	command.ResourceUpdates[0].ResourceTarget.Config = json.RawMessage(`{"endpoint":"original"}`)
+	command.ResourceUpdates[0].ResourceTarget.ExecutionIncarnation = "planned-incarnation"
+	draw := &pkgmodel.PasswordGenerator{Label: "credential", Stack: "test-stack", Length: 24, Lowercase: true}
+	draw.SetID("generator-id")
+	draw.SetStackID("generator-stack-id")
+	command.DrawGeneratorUpdates = []generator_update.GeneratorUpdate{generator_update.NewDrawGeneratorUpdate(draw, "test-stack")}
+	command.DrawIntentKnown = true
+
+	stored := persister.Call(sender, StoreNewFormaCommand{Command: *command})
+	require.NoError(t, stored.Error)
+	require.Empty(t, stored.Response.(CommandPersistResult).Error)
+
+	progress := persister.Call(sender, messages.UpdateResourceProgress{
+		CommandID: command.ID, ResourceURI: command.ResourceUpdates[0].URI(), Operation: resource_update.OperationCreate,
+		ResourceState: resource_update.ResourceUpdateStateInProgress, ResourceStartTs: time.Now(), ResourceModifiedTs: time.Now(),
+		ResourceProperties: json.RawMessage(`{"foo":"progressed"}`), Version: "v2",
+		Progress: plugin.TrackedProgress{ProgressResult: resource.ProgressResult{Operation: resource.OperationCreate, OperationStatus: resource.OperationStatusInProgress}},
+	})
+	require.NoError(t, progress.Error)
+	require.Empty(t, progress.Response.(CommandPersistResult).Error)
+
+	require.Equal(t, resource_update.ResourceUpdateStateNotStarted, command.ResourceUpdates[0].State)
+	require.JSONEq(t, `{"foo":"bar"}`, string(command.ResourceUpdates[0].DesiredState.Properties))
+	require.Empty(t, command.ResourceUpdates[0].Version)
+	require.False(t, command.Setup.Committed)
+	require.Equal(t, "generator-id", command.DrawGeneratorUpdates[0].Generator.GetID())
+
+	command.ResourceUpdates[0].DesiredState.Properties[0] = '['
+	command.ResourceUpdates[0].ResourceTarget.Config[0] = '['
+	command.ResourceUpdates[0].ResourceTarget.ExecutionIncarnation = "caller-corruption"
+	command.Setup.Committed = true
+	command.DrawGeneratorUpdates[0].Generator.SetID("caller-corruption")
+	command.DrawGeneratorUpdates[0].Generator.SetStackID("caller-corruption")
+
+	loadedResult := persister.Call(sender, LoadFormaCommand{CommandID: command.ID})
+	require.NoError(t, loadedResult.Error)
+	loaded := loadedResult.Response.(LoadFormaCommandResult).Command
+	require.Equal(t, resource_update.ResourceUpdateStateInProgress, loaded.ResourceUpdates[0].State)
+	require.JSONEq(t, `{"foo":"progressed"}`, string(loaded.ResourceUpdates[0].DesiredState.Properties))
+	require.Equal(t, "v2", loaded.ResourceUpdates[0].Version)
+	require.JSONEq(t, `{"endpoint":"original"}`, string(loaded.ResourceUpdates[0].ResourceTarget.Config))
+	require.Equal(t, "planned-incarnation", loaded.ResourceUpdates[0].ResourceTarget.ExecutionIncarnation)
+	require.False(t, loaded.Setup.Committed)
+	require.True(t, loaded.DrawIntentKnown)
+	require.Equal(t, "generator-id", loaded.DrawGeneratorUpdates[0].Generator.GetID())
+	require.Equal(t, "generator-stack-id", loaded.DrawGeneratorUpdates[0].Generator.GetStackID())
+}
+
 func TestOverallStateIncludesIncompleteAndFailedMetadata(t *testing.T) {
 	c := &forma_command.FormaCommand{StackUpdates: []stack_update.StackUpdate{{State: stack_update.StackUpdateStateNotStarted}}}
 	require.NotEqual(t, forma_command.CommandStateSuccess, overallCommandState(c))
