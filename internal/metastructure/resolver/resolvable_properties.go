@@ -176,6 +176,11 @@ func LoadResolvablePropertiesFromStacks(resource pkgmodel.Resource, allResources
 
 	answerGeneratorOutputs(&res, resource, generators)
 
+	uris := ExtractResolvableURIs(resource)
+	if len(uris) == 0 {
+		return res, nil
+	}
+
 	resourcesByKsuid := make(map[string]*pkgmodel.Resource)
 	for _, resources := range allResources {
 		for _, r := range resources {
@@ -184,8 +189,6 @@ func LoadResolvablePropertiesFromStacks(resource pkgmodel.Resource, allResources
 			}
 		}
 	}
-
-	uris := ExtractResolvableURIs(resource)
 
 	for _, uri := range uris {
 		answer, err := classifySourceProperty(uri.KSUID(), uri.PropertyPath(), resourcesByKsuid, effective, nil, observers...)
