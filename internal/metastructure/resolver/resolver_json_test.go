@@ -228,3 +228,38 @@ func TestResolvePropertyReferences_JSONPathEmbeddedScalar(t *testing.T) {
 		t.Fatalf("embedded scalar: type=%s value=%q", value.Type, value.String())
 	}
 }
+
+func TestConvertExistingStateForComparison_JSONPathHashedScalar(t *testing.T) {
+	const digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	ref := newTestRef("SecretString")
+	props := json.RawMessage(`{"Password":{"$ref":"` + ref + `","$json":"password","$value":"` + digest + `","$hashed":true,"$visibility":"Opaque"}}`)
+
+	comparison, err := ConvertExistingStateForComparison(props)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := gjson.GetBytes(comparison, "Password")
+	if value.Type != gjson.String || value.String() != digest {
+		t.Fatalf("comparison scalar: type=%s value=%q, want digest %q", value.Type, value.String(), digest)
+	}
+	if _, err := ConvertToPluginFormat(props); err == nil {
+		t.Fatal("provider-write conversion accepted a hashed selected scalar")
+	}
+}
+
+func TestResolvePropertyReferences_JSONPathSetOnceSkipsExistingScalar(t *testing.T) {
+	ref := newTestRef("SecretString")
+	props := json.RawMessage(`{"Password":{"$ref":"` + ref + `","$json":"password","$value":"original","$strategy":"SetOnce","$visibility":"Opaque"}}`)
+
+	resolved, err := ResolvePropertyReferences(pkgmodel.FormaeURI(ref), props, `{"password":"replacement"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	password := gjson.GetBytes(resolved, "Password")
+	if password.Get("$value").Type != gjson.String || password.Get("$value").String() != "original" {
+		t.Fatalf("SetOnce value was overwritten: %s", password.Raw)
+	}
+	if password.Get("$strategy").String() != "SetOnce" || password.Get("$json").String() != "password" {
+		t.Fatalf("SetOnce envelope changed: %s", password.Raw)
+	}
+}
