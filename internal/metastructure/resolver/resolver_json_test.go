@@ -155,3 +155,76 @@ func TestResolveReference_NoJSONPath(t *testing.T) {
 		t.Fatalf("expected vpc-123, got %q", got)
 	}
 }
+
+// A scalar selected from a JSON document remains a string even when its text
+// looks like another JSON document, property envelope, or primitive.
+func TestResolvePropertyReferences_JSONPathPreservesScalar(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		leaf any
+		want string
+	}{
+		{"invalid object text", "{not-json", "{not-json"},
+		{"invalid array text", "[not-json", "[not-json"},
+		{"object text", `{"key":"value"}`, `{"key":"value"}`},
+		{"array text", `[1,"two"]`, `[1,"two"]`},
+		{"value envelope text", `{"$value":"different"}`, `{"$value":"different"}`},
+		{"source property text", `{"SecretString":"different"}`, `{"SecretString":"different"}`},
+		{"empty text", "", ""},
+		{"quoted text", `"quoted"`, `"quoted"`},
+		{"number text", "5432", "5432"},
+		{"boolean text", "true", "true"},
+		{"null text", "null", "null"},
+		{"number leaf", 5432, "5432"},
+		{"boolean leaf", true, "true"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ref := newTestRef("SecretString")
+			props := json.RawMessage(`{"Password":{"$ref":"` + ref + `","$visibility":"Opaque","$json":"password"}}`)
+			document, err := json.Marshal(map[string]any{"password": tc.leaf})
+			if err != nil {
+				t.Fatal(err)
+			}
+			resolved, err := ResolvePropertyReferences(pkgmodel.FormaeURI(ref), props, string(document))
+			if err != nil {
+				t.Fatalf("resolve selected scalar: %v", err)
+			}
+			value := gjson.GetBytes(resolved, "Password.$value")
+			if value.Type != gjson.String || value.String() != tc.want {
+				t.Fatalf("selected scalar: type=%s value=%q, want string %q", value.Type, value.String(), tc.want)
+			}
+			if gjson.GetBytes(resolved, "Password.$visibility").String() != "Opaque" ||
+				gjson.GetBytes(resolved, "Password.$json").String() != "password" {
+				t.Fatal("resolution discarded the selector or opaque visibility")
+			}
+			// Recreate the resolver from the stored envelope through the public
+			// conversion path used before sending desired properties to plugins.
+			plugin, err := ConvertToPluginFormat(resolved)
+			if err != nil {
+				t.Fatalf("convert selected scalar for plugin: %v", err)
+			}
+			value = gjson.GetBytes(plugin, "Password")
+			if value.Type != gjson.String || value.String() != tc.want {
+				t.Fatalf("plugin scalar: type=%s value=%q, want string %q", value.Type, value.String(), tc.want)
+			}
+		})
+	}
+}
+
+func TestResolvePropertyReferences_JSONPathEmbeddedScalar(t *testing.T) {
+	ref := newTestRef("SecretString")
+	envelope := `{"$ref":"` + ref + `","$json":"password","$visibility":"Opaque"}`
+	props := embedProps("connection", "password="+pkgmodel.FrameEnvelope(envelope))
+	resolved, err := ResolvePropertyReferences(pkgmodel.FormaeURI(ref), props, `{"password":"{not-json"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plugin, err := ConvertToPluginFormat(resolved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value := gjson.GetBytes(plugin, "connection")
+	if value.Type != gjson.String || value.String() != "password={not-json" {
+		t.Fatalf("embedded scalar: type=%s value=%q", value.Type, value.String())
+	}
+}
