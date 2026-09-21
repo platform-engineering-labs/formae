@@ -90,6 +90,20 @@ func CheckAgentCompatibility(agentVersion string) error {
 // a simplified ResourcePlugin. For built-in plugins that implement FullResourcePlugin
 // directly, use this function.
 func Run(fp FullResourcePlugin) {
+	RunWithConfig(fp, RunConfig{})
+}
+
+// RunConfig contains options for the plugin process lifecycle.
+type RunConfig struct {
+	// BeforeStop runs synchronously after the plugin process receives SIGINT or
+	// SIGTERM and before its node stops. The callback is responsible for bounding
+	// its own work. It is not invoked when the process is killed without a signal
+	// it can handle, such as SIGKILL.
+	BeforeStop func()
+}
+
+// RunWithConfig starts the plugin process with lifecycle configuration.
+func RunWithConfig(fp FullResourcePlugin, config RunConfig) {
 	// Check that the agent is compatible with this SDK version
 	if err := CheckAgentCompatibility(os.Getenv("FORMAE_VERSION")); err != nil {
 		log.Fatal(err)
@@ -190,10 +204,22 @@ func Run(fp FullResourcePlugin) {
 	// Wait for shutdown signal
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-	<-sig
+	defer signal.Stop(sig)
 
-	fmt.Printf("Shutting down %s plugin...\n", fp.Namespace())
-	node.Stop()
+	waitForShutdownSignal(sig, func() {
+		fmt.Printf("Shutting down %s plugin...\n", fp.Namespace())
+		if config.BeforeStop != nil {
+			config.BeforeStop()
+		}
+	}, node.Stop)
+}
+
+func waitForShutdownSignal(sig <-chan os.Signal, beforeStop, stop func()) {
+	<-sig
+	if beforeStop != nil {
+		beforeStop()
+	}
+	stop()
 }
 
 // registerEDFTypes registers all message types needed for network serialization

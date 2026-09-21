@@ -130,6 +130,11 @@ type RunConfig struct {
 	// If empty, uses the remote package URL.
 	// Only needed for local development of the formae core schemas.
 	FormaeSchemaPath string
+
+	// BeforeStop runs synchronously after the plugin process receives SIGINT or
+	// SIGTERM and before its node stops. The callback is responsible for bounding
+	// its own work.
+	BeforeStop func()
 }
 
 // SetupPlugin reads the manifest and extracts schemas, then wraps the plugin.
@@ -336,5 +341,11 @@ func RunWithManifest(p plugin.ResourcePlugin, config RunConfig) {
 	}
 
 	// Start the plugin
-	plugin.Run(wrapped)
+	runWrappedPlugin(wrapped, config, plugin.RunWithConfig)
+}
+
+type configuredPluginRunner func(plugin.FullResourcePlugin, plugin.RunConfig)
+
+func runWrappedPlugin(wrapped plugin.FullResourcePlugin, config RunConfig, run configuredPluginRunner) {
+	run(wrapped, plugin.RunConfig{BeforeStop: config.BeforeStop})
 }
