@@ -41,6 +41,10 @@ func TestIsDynamicCommandSelectsFormaInput(t *testing.T) {
 		{"shorthand separate", []string{"apply", "-m", "message.pkl", "forma.pkl"}, "forma.pkl"},
 		{"shorthand equals", []string{"apply", "-m=message.pkl", "forma.pkl"}, "forma.pkl"},
 		{"shorthand attached", []string{"apply", "-mmessage.pkl", "forma.pkl"}, "forma.pkl"},
+		{"grouped shorthand separate", []string{"apply", "-vm", "message.pkl", "forma.pkl"}, "forma.pkl"},
+		{"grouped shorthand attached", []string{"apply", "-vmmessage.pkl", "forma.pkl"}, "forma.pkl"},
+		{"grouped shorthand equals", []string{"apply", "-vm=message.pkl", "forma.pkl"}, "forma.pkl"},
+		{"boolean shorthand equals", []string{"apply", "-v=false", "forma.pkl"}, "forma.pkl"},
 		{"builtin boolean", []string{"apply", "--force", "forma.pkl"}, "forma.pkl"},
 		{"builtin boolean equals", []string{"apply", "--yes=false", "forma.pkl"}, "forma.pkl"},
 		{"end of flags", []string{"apply", "--", "forma.pkl"}, "forma.pkl"},
@@ -56,6 +60,9 @@ func TestIsDynamicCommandSelectsFormaInput(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			root := &cobra.Command{Use: "formae"}
+			// Match the inherited root flags registered in cli/root.go.
+			root.PersistentFlags().BoolP("version", "v", false, "")
+			root.PersistentFlags().BoolP("help", "h", false, "")
 			root.AddCommand(apply.ApplyCmd(), destroy.DestroyCmd(), eval.EvalCmd(), status.StatusCmd())
 			dynamic, path := cmd.IsDynamicCommand(root, tt.args)
 			require.Equal(t, tt.want != "", dynamic)

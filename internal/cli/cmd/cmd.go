@@ -298,9 +298,18 @@ func IsDynamicCommand(root *cobra.Command, args []string) (bool, string) {
 					continue
 				}
 			case strings.HasPrefix(arg, "-") && len(arg) > 1:
-				if flag := command.Flags().ShorthandLookup(arg[1:2]); flag != nil {
-					if len(arg) == 2 && flag.NoOptDefVal == "" {
-						i++
+				if command.Flags().ShorthandLookup(arg[1:2]) != nil {
+					for n := 1; n < len(arg); n++ {
+						flag := command.Flags().ShorthandLookup(arg[n : n+1])
+						if flag == nil || (n+1 < len(arg) && arg[n+1] == '=') {
+							break
+						}
+						if flag.NoOptDefVal == "" {
+							if n+1 == len(arg) {
+								i++
+							}
+							break
+						}
 					}
 					continue
 				}
