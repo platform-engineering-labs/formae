@@ -710,6 +710,9 @@ func (pr *propertyResolver) extractResolvedValue(ref pkgmodel.Ref) any {
 	if ref.ResolvedValue.Value == nil {
 		return nil
 	}
+	if ref.ResolvedValue.JSONPath != "" {
+		return ref.ResolvedValue.Value
+	}
 
 	resolvedJSON, ok := ref.ResolvedValue.Value.(string)
 	if ok {

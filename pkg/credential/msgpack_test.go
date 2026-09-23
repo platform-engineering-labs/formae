@@ -25,6 +25,16 @@ func TestEDFHooks_RoundTripRequest(t *testing.T) {
 	require.Equal(t, in, out)
 }
 
+func TestEDFHooks_RoundTripBoundedRequest(t *testing.T) {
+	in := OidcBoundedIdentityTokenRequest{Request: OidcIdentityTokenRequest{Audience: "sts.amazonaws.com", RequestID: "bounded-1"}}
+	var buf bytes.Buffer
+	require.NoError(t, in.MarshalEDF(&buf))
+	var out OidcBoundedIdentityTokenRequest
+	require.NoError(t, out.UnmarshalEDF(buf.Bytes()))
+	require.Equal(t, in, out)
+	require.Error(t, out.UnmarshalEDF([]byte("invalid bounded request")))
+}
+
 func TestEDFHooks_RoundTripResponse(t *testing.T) {
 	in := IdentityTokenResponse{ErrorCode: ErrCodeMintFailed}
 

@@ -503,6 +503,9 @@ func (o *PluginOperator) Init(args ...any) (statemachine.StateMachineSpec[Plugin
 	}
 	if brokerClient != nil {
 		data.context = withOidcBrokerClient(data.context, brokerClient)
+		if info, ok := oidcOperationInfoFromEnv(o); ok {
+			data.context = context.WithValue(data.context, oidcOperationInfoKey{}, info)
+		}
 	}
 
 	// Initialize OTel metrics

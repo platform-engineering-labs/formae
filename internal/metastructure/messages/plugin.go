@@ -111,3 +111,14 @@ type RegisteredPluginInfo struct {
 type GetRegisteredPluginsResult struct {
 	Plugins []RegisteredPluginInfo
 }
+
+// RegisterOidcCredentialLaunch carries supervisor-owned discovery/config identity
+// before the child can announce. It is agent-local and never accepted from a broker.
+type RegisterOidcCredentialLaunch struct {
+	Name           string
+	Version        string
+	NodeName       gen.Atom
+	SpawnToken     string
+	ConfigIdentity string
+	Namespaces     []string
+}

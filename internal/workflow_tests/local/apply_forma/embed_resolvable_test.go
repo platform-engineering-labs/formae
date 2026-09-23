@@ -9,6 +9,7 @@ package workflow_tests_local
 import (
 	"encoding/json"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -460,6 +461,7 @@ func TestEmbed_PersistedStateStaysStructured(t *testing.T) {
 func TestEmbed_SyncPreservesEnvelope(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
 		const hostID = "sync-host-id-9012"
+		var consumerReads atomic.Int64
 
 		overrides := &plugin.ResourcePluginOverrides{
 			Create: func(req *resource.CreateRequest) (*resource.CreateResult, error) {
@@ -487,9 +489,10 @@ func TestEmbed_SyncPreservesEnvelope(t *testing.T) {
 					}, nil
 				}
 				// Consumer: return the assembled plain string (cloud-native view).
+				consumerReads.Add(1)
 				return &resource.ReadResult{
 					ResourceType: req.ResourceType,
-					Properties:   `{"functionCode":"cf.kvs('` + hostID + `')","name":"consumer1"}`,
+					Properties:   `{"ObservedRevision":"sync-observed","functionCode":"cf.kvs('` + hostID + `')","name":"consumer1"}`,
 				}, nil
 			},
 		}
@@ -580,29 +583,44 @@ func TestEmbed_SyncPreservesEnvelope(t *testing.T) {
 			return len(fas[0].ResourceUpdates) == 2
 		}, 5*time.Second, 100*time.Millisecond, "apply must complete before triggering sync")
 
+		resourcesBeforeSync, err := m.Datastore.LoadResourcesByStack("embed-stack")
+		require.NoError(t, err)
+		var consumerBeforeSync *pkgmodel.Resource
+		for _, persisted := range resourcesBeforeSync {
+			if persisted.Label == "embed-consumer" {
+				consumerBeforeSync = persisted
+				break
+			}
+		}
+		require.NotNil(t, consumerBeforeSync)
+		require.False(t, gjson.GetBytes(consumerBeforeSync.ReadOnlyProperties, "ObservedRevision").Exists(),
+			"the sync observation must not exist before ForceSync")
+
 		// Trigger a manual sync. The Read override returns the assembled plain string
 		// for the consumer — simulating what the cloud returns for a lambda's code.
+		readsBefore := consumerReads.Load()
 		err = m.ForceSync()
 		require.NoError(t, err)
 
-		// Wait for the sync command to complete successfully.
+		// A same-version read-only refresh is intentionally removed from command
+		// history after completion. Prove the triggered provider Read completed
+		// and its fresh observation reached durable inventory instead of waiting
+		// for a command row that no longer survives finalization.
 		require.Eventually(t, func() bool {
-			fas, err := m.Datastore.LoadFormaCommands()
+			if consumerReads.Load() <= readsBefore {
+				return false
+			}
+			resources, err := m.Datastore.LoadResourcesByStack("embed-stack")
 			if err != nil {
 				return false
 			}
-			for _, fc := range fas {
-				if fc.Command == pkgmodel.CommandSync {
-					for _, ru := range fc.ResourceUpdates {
-						if ru.State != resource_update.ResourceUpdateStateSuccess {
-							return false
-						}
-					}
-					return len(fc.ResourceUpdates) > 0
+			for _, persisted := range resources {
+				if persisted.Label == "embed-consumer" {
+					return gjson.GetBytes(persisted.ReadOnlyProperties, "ObservedRevision").String() == "sync-observed"
 				}
 			}
 			return false
-		}, 5*time.Second, 100*time.Millisecond, "sync must complete successfully")
+		}, 5*time.Second, 100*time.Millisecond, "sync Read must persist its fresh observation")
 
 		// After sync, load the consumer from the datastore and verify the $embed is preserved.
 		resources, err := m.Datastore.LoadResourcesByStack("embed-stack")

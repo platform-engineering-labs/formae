@@ -248,7 +248,7 @@ func InitCommandWithContext(cmd *cobra.Command) (*cobra.Command, error) {
 		}
 	}
 
-	dyn, path := IsDynamicCommand(app)
+	dyn, path := IsDynamicCommand(cmd, os.Args[1:])
 	if dyn {
 		props, err := app.Projects.Properties(path)
 		if err != nil {
@@ -275,16 +275,48 @@ func InitCommandWithContext(cmd *cobra.Command) (*cobra.Command, error) {
 	return cmd, nil
 }
 
-func IsDynamicCommand(app *app.App) (bool, string) {
-	if len(os.Args) < 3 {
+func IsDynamicCommand(root *cobra.Command, args []string) (bool, string) {
+	command, args, err := root.Find(args)
+	if err != nil || !slices.Contains(PropertyCommands, command.Name()) {
 		return false, ""
 	}
 
-	if !slices.Contains(PropertyCommands, os.Args[1]) {
-		return false, ""
-	}
-
-	for _, arg := range os.Args {
+	flagsEnded := false
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if !flagsEnded {
+			switch {
+			case arg == "--":
+				flagsEnded = true
+				continue
+			case strings.HasPrefix(arg, "--"):
+				name, _, hasValue := strings.Cut(arg[2:], "=")
+				if flag := command.Flags().Lookup(name); flag != nil {
+					if !hasValue && flag.NoOptDefVal == "" {
+						i++
+					}
+					continue
+				}
+			case strings.HasPrefix(arg, "-") && len(arg) > 1:
+				if command.Flags().ShorthandLookup(arg[1:2]) != nil {
+					for n := 1; n < len(arg); n++ {
+						flag := command.Flags().ShorthandLookup(arg[n : n+1])
+						if flag == nil || (n+1 < len(arg) && arg[n+1] == '=') {
+							break
+						}
+						if flag.NoOptDefVal == "" {
+							if n+1 == len(arg) {
+								i++
+							}
+							break
+						}
+					}
+					continue
+				}
+			}
+		}
+		// Unknown property flags retain the historical scan: their arity is
+		// unavailable until the forma has supplied its property definitions.
 		for _, fileExtension := range schema.DefaultRegistry.SupportedFileExtensions() {
 			if strings.Contains(arg, fileExtension) {
 				return true, arg

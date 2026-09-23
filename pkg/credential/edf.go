@@ -23,6 +23,7 @@ func RegisterEDFTypes() error {
 	types := []any{
 		OidcCredentialPluginAnnouncement{},
 		OidcIdentityTokenRequest{},
+		OidcBoundedIdentityTokenRequest{},
 		IdentityTokenResponse{},
 	}
 

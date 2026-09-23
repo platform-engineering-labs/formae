@@ -81,7 +81,7 @@ func allowedKinds(config PropertyTestConfig) []OperationKind {
 	kinds := []OperationKind{OpApply, OpDestroy, OpVerifyState, OpTriggerSync, OpTriggerDiscovery}
 
 	if config.EnableCloudChanges {
-		kinds = append(kinds, OpCloudModify, OpCloudDelete, OpCloudCreate)
+		kinds = append(kinds, OpCloudModify, OpCloudObserve, OpCloudDelete, OpCloudCreate)
 	}
 	if config.EnableCancel {
 		kinds = append(kinds, OpCancel)
@@ -259,6 +259,10 @@ func fillOperationFields(t *rapid.T, op *Operation, config PropertyTestConfig, s
 		op.CloudTargetManaged = rapid.Bool().Draw(t, "cloudTargetManaged")
 		op.NativeID = cloudNativeIDGen(t)
 		op.Properties = cloudPropertiesGen(t)
+
+	case OpCloudObserve:
+		op.CloudTargetManaged = true
+		op.ObservedRevision = fmt.Sprintf("revision-%d", seq)
 
 	case OpCloudDelete:
 		op.CloudTargetManaged = rapid.Bool().Draw(t, "cloudTargetManaged")

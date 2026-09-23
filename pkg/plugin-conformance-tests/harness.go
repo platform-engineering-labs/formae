@@ -324,8 +324,8 @@ cli {
 	disableUsageReporting = true
 }
 
-pluginDir = "~/.pel/formae/plugins"
-`, agentPort, h.ergoPort, h.registrarPort, h.networkCookie, h.testRunID, dbPath, logPath, agentPort)
+pluginDir = %q
+`, agentPort, h.ergoPort, h.registrarPort, h.networkCookie, h.testRunID, dbPath, logPath, agentPort, conformancePluginDir())
 
 	// Write config to temp directory
 	configFile := filepath.Join(tempDir, "test-config.pkl")
@@ -338,10 +338,19 @@ pluginDir = "~/.pel/formae/plugins"
 	return nil
 }
 
+// conformancePluginDir permits hermetic packaged-plugin tests without installing
+// into the developer's home. The unset default preserves existing conformance.
+func conformancePluginDir() string {
+	if path := os.Getenv("FORMAE_TEST_PLUGIN_DIR"); path != "" {
+		return ExpandHomePath(path)
+	}
+	return ExpandHomePath("~/.pel/formae/plugins")
+}
+
 // setupPluginDiscovery discovers external resource plugins from the user
 // plugin directory (~/.pel/formae/plugins).
 func (h *TestHarness) setupPluginDiscovery() error {
-	pluginDir := ExpandHomePath("~/.pel/formae/plugins")
+	pluginDir := conformancePluginDir()
 	h.t.Logf("Discovering external plugins from: %s", pluginDir)
 
 	for _, p := range plugindiscovery.DiscoverPlugins(pluginDir, plugindiscovery.Resource) {
@@ -678,10 +687,10 @@ cli {
 	disableUsageReporting = true
 }
 
-pluginDir = "~/.pel/formae/plugins"
+pluginDir = %%q
 `, pluginAlias, pluginAlias, pluginAlias)
 
-	configContent = fmt.Sprintf(configContent, h.agentPort, h.ergoPort, h.registrarPort, h.networkCookie, h.testRunID, dbPath, h.logFile, resourceTypesList, h.agentPort)
+	configContent = fmt.Sprintf(configContent, h.agentPort, h.ergoPort, h.registrarPort, h.networkCookie, h.testRunID, dbPath, h.logFile, resourceTypesList, h.agentPort, conformancePluginDir())
 
 	// Overwrite the config file
 	if err := os.WriteFile(h.configFile, []byte(configContent), 0644); err != nil {

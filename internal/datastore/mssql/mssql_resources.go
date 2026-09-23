@@ -16,6 +16,7 @@ import (
 	json "github.com/goccy/go-json"
 
 	"github.com/platform-engineering-labs/formae/internal/datastore"
+	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	metautil "github.com/platform-engineering-labs/formae/internal/metastructure/util"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
@@ -177,19 +178,22 @@ func (d *DatastoreMSSQL) storeResource(ctx context.Context, resource *pkgmodel.R
 	}
 
 	lookup := fmt.Sprintf(
-		"SELECT TOP (1) ksuid, data, uri, version, managed FROM resources WHERE native_id = @p1 AND type = @p2 ORDER BY version %s DESC",
+		"SELECT TOP (1) ksuid, data, uri, version, managed, target, COALESCE(target_incarnation_id, ''), COALESCE(command_id, '') FROM resources WHERE native_id = @p1 AND type = @p2 ORDER BY version %s DESC",
 		binColl,
 	)
 	row := d.conn.QueryRowContext(ctx, lookup, resource.NativeID, resource.Type)
 
 	var (
-		ksuid        string
-		existingData string
-		uri          string
-		version      string
-		managed      bool
+		ksuid               string
+		existingData        string
+		uri                 string
+		version             string
+		managed             bool
+		target              string
+		existingIncarnation string
+		existingCommandID   string
 	)
-	err := row.Scan(&ksuid, &existingData, &uri, &version, &managed)
+	err := row.Scan(&ksuid, &existingData, &uri, &version, &managed, &target, &existingIncarnation, &existingCommandID)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		newVersion := mksuid.New().String()
@@ -241,10 +245,32 @@ func (d *DatastoreMSSQL) storeResource(ctx context.Context, resource *pkgmodel.R
 
 	// Read-only-only changes update in place; read-write changes mint a new version.
 	var newVersion string
-	if readWriteEqual && !readOnlyEqual {
+	if operation != string(resource_update.OperationDelete) && readWriteEqual && !readOnlyEqual {
 		newVersion = version
 	} else {
 		newVersion = mksuid.New().String()
+	}
+
+	// A synchronizer read that changes only provider-observed fields refreshes
+	// the existing physical version. Keep that version owned by the command that
+	// created it so pruning the transient read cannot erase write/drift history.
+	// Other callers, missing commands, and metadata changes keep the incoming
+	// attribution conservatively.
+	if newVersion == version && resource.Ksuid == ksuid && resource.Target == target && resource.Managed == managed {
+		var incomingCommand, incomingSource string
+		lookupErr := d.conn.QueryRowContext(ctx,
+			`SELECT command, COALESCE(source, '') FROM forma_commands WHERE command_id = @p1`,
+			commandID,
+		).Scan(&incomingCommand, &incomingSource)
+		if lookupErr != nil && !errors.Is(lookupErr, sql.ErrNoRows) {
+			return "", fmt.Errorf("failed to classify resource command: %w", lookupErr)
+		}
+		if lookupErr == nil && incomingCommand == string(pkgmodel.CommandSync) && incomingSource == string(forma_command.SourceSynchronizer) {
+			commandID = existingCommandID
+			if expectedIncarnation == "" {
+				expectedIncarnation = existingIncarnation
+			}
+		}
 	}
 
 	if err := d.upsertResource(ctx, resource, newVersion, commandID, operation, data, expectedIncarnation); err != nil {

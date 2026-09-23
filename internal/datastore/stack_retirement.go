@@ -19,6 +19,12 @@ type EmptyStackRetirer interface {
 	TryRetireEmptyStack(expectedStackID, label, cleanupCommandID string) (bool, error)
 }
 
+// ExpiredEmptyStackRetirer binds the scheduler's certified expiry decision to
+// the same transaction that proves emptiness and tombstones the stack.
+type ExpiredEmptyStackRetirer interface {
+	TryRetireExpiredEmptyStack(candidate ExpiredStackInfo, expected []RevisionGuard, cleanupCommandID string) (bool, error)
+}
+
 // TryRetireEmptyStack serializes with admission and ordinary writers on their
 // existing durable guards. It never manufactures delete intent for resources
 // which failed to create. Retention and all errors leave the stack untouched.
@@ -26,29 +32,108 @@ func (s AdmissionStore) TryRetireEmptyStack(expectedStackID, label, cleanupComma
 	if expectedStackID == "" || label == "" {
 		return false, nil
 	}
-	keys, err := s.ResolveAdmissionStackGuards([]string{label})
-	if err != nil {
-		return false, err
-	}
-	keys = append(keys, AdmissionStackMappingGuard, AdmissionStackGuardKey(expectedStackID), AdmissionGeneratorGuard, AdmissionPolicyGuard)
-	guards := make([]RevisionGuard, len(keys))
-	for i, k := range keys {
-		guards[i].Key = k
-	}
-	guards, err = CanonicalAdmissionGuards(guards)
-	if err != nil {
-		return false, err
-	}
-	tx, err := s.Begin()
+	tx, err := s.beginStackRetirement(expectedStackID, label, nil)
 	if err != nil {
 		return false, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	for _, g := range guards {
-		if _, err = s.revision(tx, g.Key); err != nil {
-			return false, err
+	return s.tryRetireEmptyStackTx(tx, expectedStackID, label, cleanupCommandID)
+}
+
+func (s AdmissionStore) TryRetireExpiredEmptyStack(candidate ExpiredStackInfo, expected []RevisionGuard, cleanupCommandID string) (bool, error) {
+	if candidate.StackID == "" || candidate.StackLabel == "" || candidate.HasUnreadableDeadline() {
+		return false, nil
+	}
+	expected, err := CanonicalAdmissionGuards(expected)
+	if err != nil {
+		return false, err
+	}
+	if len(expected) == 0 {
+		return false, fmt.Errorf("%w: expiry retirement requires certified guards", ErrInvalidAdmission)
+	}
+	tx, err := s.beginStackRetirement(candidate.StackID, candidate.StackLabel, expected)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	eligible, err := s.expiredCandidateStillMatches(tx, candidate)
+	if err != nil || !eligible {
+		return false, err
+	}
+	return s.tryRetireEmptyStackTx(tx, candidate.StackID, candidate.StackLabel, cleanupCommandID)
+}
+
+func (s AdmissionStore) beginStackRetirement(expectedStackID, label string, expected []RevisionGuard) (AdmissionTransaction, error) {
+	keys, err := s.ResolveAdmissionStackGuards([]string{label})
+	if err != nil {
+		return nil, err
+	}
+	keys = append(keys, AdmissionStackMappingGuard, AdmissionStackGuardKey(expectedStackID), AdmissionGeneratorGuard, AdmissionPolicyGuard)
+	byKey := make(map[string]int64, len(expected))
+	for _, guard := range expected {
+		keys = append(keys, guard.Key)
+		byKey[guard.Key] = guard.Revision
+	}
+	guards := make([]RevisionGuard, len(keys))
+	for i, key := range keys {
+		guards[i].Key = key
+	}
+	guards, err = CanonicalAdmissionGuards(guards)
+	if err != nil {
+		return nil, err
+	}
+	tx, err := s.Begin()
+	if err != nil {
+		return nil, err
+	}
+	for _, guard := range guards {
+		actual, revisionErr := s.revision(tx, guard.Key)
+		if revisionErr != nil {
+			_ = tx.Rollback()
+			return nil, revisionErr
+		}
+		if wanted, ok := byKey[guard.Key]; ok && actual != wanted {
+			_ = tx.Rollback()
+			return nil, fmt.Errorf("%w: %q expected %d, got %d", ErrStaleAdmission, guard.Key, wanted, actual)
 		}
 	}
+	return tx, nil
+}
+
+func (s AdmissionStore) expiredCandidateStillMatches(tx AdmissionTransaction, candidate ExpiredStackInfo) (bool, error) {
+	jsonValue := func(path string) string {
+		switch s.Dialect {
+		case "postgres":
+			return "p.policy_data::jsonb->>'" + path + "'"
+		case "mssql":
+			return "JSON_VALUE(p.policy_data,'$." + path + "')"
+		default:
+			return "json_extract(p.policy_data,'$." + path + "')"
+		}
+	}
+	prefix := s.retirementCollation(`WITH latest_policies AS (
+ SELECT p.*,ROW_NUMBER() OVER(PARTITION BY p.id ORDER BY p.version DESC) rn FROM policies p
+)
+`)
+	outer := `SELECT CAST(1 AS VARCHAR(1)) FROM latest_policies p
+WHERE p.rn=1 AND p.operation!='delete' AND p.policy_type='ttl'
+AND (p.stack_id=? OR ((p.stack_id IS NULL OR p.stack_id='') AND EXISTS (SELECT 1 FROM stack_policies sp WHERE sp.policy_id=p.id AND sp.stack_id=?)))
+		AND COALESCE(` + jsonValue("OnDependents") + `,'abort')=? AND `
+	args := []any{candidate.StackID, candidate.StackID, candidate.OnDependents}
+	if candidate.ExpiresAt != "" {
+		outer += jsonValue("ExpiresAt") + `=?`
+		args = append(args, candidate.ExpiresAt)
+	} else if candidate.TTLSeconds != nil {
+		outer += jsonValue("ExpiresAt") + ` IS NULL AND CAST(` + jsonValue("TTLSeconds") + ` AS VARCHAR(32))=?`
+		args = append(args, fmt.Sprint(*candidate.TTLSeconds))
+	} else {
+		return false, nil
+	}
+	row, err := tx.Query(prefix+s.first(outer), args...)
+	return row != nil, err
+}
+
+func (s AdmissionStore) tryRetireEmptyStackTx(tx AdmissionTransaction, expectedStackID, label, cleanupCommandID string) (bool, error) {
 	row, err := tx.Query(s.first("SELECT id,version,operation,description FROM stacks WHERE label=? ORDER BY version DESC"), label)
 	if err != nil {
 		return false, err
@@ -136,6 +221,7 @@ func (s AdmissionStore) retirementCollation(q string) string {
 		collation = " COLLATE Latin1_General_BIN2"
 	}
 	q = strings.ReplaceAll(q, "ORDER BY version DESC", "ORDER BY version"+collation+" DESC")
+	q = strings.ReplaceAll(q, "ORDER BY p.version DESC", "ORDER BY p.version"+collation+" DESC")
 	return strings.ReplaceAll(q, "newer.version > r.version", "newer.version"+collation+" > r.version"+collation)
 }
 

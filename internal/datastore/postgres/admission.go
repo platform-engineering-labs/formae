@@ -64,6 +64,9 @@ func (d DatastorePostgres) LookupCommandAdmission(scope, key string) (*datastore
 func (d DatastorePostgres) AdmitFormaCommand(c *forma_command.FormaCommand, a datastore.CommandAdmission) (datastore.AdmissionResult, error) {
 	return d.admissionStore().AdmitFormaCommand(c, a)
 }
+func (d DatastorePostgres) HasConflictingCommandForStacks(labels []string) (bool, error) {
+	return d.admissionStore().HasConflictingCommandForStacks(labels)
+}
 
 var _ datastore.CommandAdmitter = DatastorePostgres{}
 
@@ -98,8 +101,12 @@ func (d DatastorePostgres) PinCommandTargetIncarnation(commandID, target, incarn
 func (d DatastorePostgres) TryRetireEmptyStack(expectedStackID, label, cleanupCommandID string) (bool, error) {
 	return d.admissionStore().TryRetireEmptyStack(expectedStackID, label, cleanupCommandID)
 }
+func (d DatastorePostgres) TryRetireExpiredEmptyStack(candidate datastore.ExpiredStackInfo, expected []datastore.RevisionGuard, cleanupCommandID string) (bool, error) {
+	return d.admissionStore().TryRetireExpiredEmptyStack(candidate, expected, cleanupCommandID)
+}
 
 var _ datastore.EmptyStackRetirer = DatastorePostgres{}
+var _ datastore.ExpiredEmptyStackRetirer = DatastorePostgres{}
 
 func (d DatastorePostgres) HasOnlyExternalChanges(ksuid, baselineCommandID, observedVersion string) (bool, error) {
 	return d.admissionStore().HasOnlyExternalChanges(ksuid, baselineCommandID, observedVersion)

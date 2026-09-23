@@ -36,6 +36,7 @@ var (
 	ErrInvalidAdmission  = errors.New("invalid command admission")
 	ErrStaleAdmission    = errors.New("command admission revisions changed")
 	ErrAdmissionConflict = errors.New("idempotency key already used for a different request")
+	ErrCommandConflict   = errors.New("nonterminal command already covers an affected stack")
 )
 
 type RevisionGuard struct {

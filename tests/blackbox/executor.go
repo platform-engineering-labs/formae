@@ -462,6 +462,8 @@ func (h *TestHarness) ExecuteOperation(t *testing.T, op *Operation, model *State
 		}
 	case OpCloudModify:
 		h.executeCloudModify(t, op, model)
+	case OpCloudObserve:
+		h.executeManagedCloudObserve(t, op, model)
 	case OpCloudDelete:
 		h.executeCloudDelete(t, op, model)
 	case OpCloudCreate:
@@ -2132,6 +2134,24 @@ func (h *TestHarness) executeManagedCloudModify(t *testing.T, op *Operation, mod
 	// overwrite later plugin writes with these stale properties after a crash.
 	delete(h.cloudStateMirror, nativeID)
 	t.Logf("[op %d] CloudModify managed: %s (%s)", op.SequenceNum, resLabel, nativeID)
+}
+
+// executeManagedCloudObserve changes only a provider-owned field. It leaves
+// the writable model untouched and uses the public inventory plus a subsequent
+// provider Read as freshness evidence. History evidence is sampled without
+// draining unrelated work; any retained successful sync must therefore be
+// justified by an actual physical version elsewhere in that coherent window.
+func (h *TestHarness) executeManagedCloudObserve(t *testing.T, op *Operation, model *StateModel) {
+	t.Helper()
+	_, _, _, resLabel, resType, nativeID, ok := model.FindDriftEligibleResource(op.SequenceNum)
+	if !ok {
+		t.Logf("[op %d] CloudObserve managed → skipped (no eligible resource in model)", op.SequenceNum)
+		return
+	}
+	h.observeManagedCloudResource(t, model, nativeID, resType, op.ObservedRevision)
+	h.ObservationsExecuted++
+	t.Logf("[op %d] CloudObserve managed: %s (%s) revision=%s",
+		op.SequenceNum, resLabel, nativeID, op.ObservedRevision)
 }
 
 // executeManagedCloudDelete injects an out-of-band delete of a managed

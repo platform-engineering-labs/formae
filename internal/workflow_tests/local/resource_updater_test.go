@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -145,12 +146,19 @@ func TestResourceUpdater_HandlesThrottlingDuringSynchronization(t *testing.T) {
 
 func TestResourceUpdater_RejectsUpdateWhenTheResourceIsOutOfSync(t *testing.T) {
 	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		var updateWrites atomic.Int64
 		overrides := &plugin.ResourcePluginOverrides{
 			Read: func(request *resource.ReadRequest) (*resource.ReadResult, error) {
 				return &resource.ReadResult{
 					ResourceType: "FakeAWS::S3::Bucket",
 					Properties:   `{"foo":"bar","baz":"qux","a":[3,4,2,1]}`,
 				}, nil
+			},
+			Update: func(*resource.UpdateRequest) (*resource.UpdateResult, error) {
+				updateWrites.Add(1)
+				return &resource.UpdateResult{ProgressResult: &resource.ProgressResult{
+					Operation: resource.OperationUpdate, OperationStatus: resource.OperationStatusSuccess,
+				}}, nil
 			},
 		}
 
@@ -245,6 +253,7 @@ func TestResourceUpdater_RejectsUpdateWhenTheResourceIsOutOfSync(t *testing.T) {
 		assert.Equal(t, forma_command.CommandStateFailed, command.State)
 		assert.Len(t, command.ResourceUpdates, 1)
 		assert.Equal(t, resource_update.ResourceUpdateStateRejected, command.ResourceUpdates[0].State)
+		assert.Zero(t, updateWrites.Load(), "fresh drift rejection must happen before the provider Update")
 	})
 }
 

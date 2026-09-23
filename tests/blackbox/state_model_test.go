@@ -231,6 +231,79 @@ func TestStateModel_Verify_PropertyMatch(t *testing.T) {
 	assert.Empty(t, violations)
 }
 
+func TestCheckInvariants_MergesWritableAndReadOnlyProperties(t *testing.T) {
+	inventory := []pkgmodel.Resource{{
+		Label:              "res-a",
+		Type:               "Test::Generic::Resource",
+		NativeID:           "native-0",
+		Properties:         []byte(`{"Name":"a","Value":"v1"}`),
+		ReadOnlyProperties: []byte(`{"ObservedRevision":"revision-2"}`),
+	}}
+	cloudState := map[string]testcontrol.CloudStateEntry{
+		"native-0": {
+			NativeID:     "native-0",
+			ResourceType: "Test::Generic::Resource",
+			Properties:   `{"ObservedRevision":"revision-2","Name":"a","Value":"v1"}`,
+		},
+	}
+
+	assert.Empty(t, CheckInvariants(inventory, cloudState, nil))
+}
+
+func TestCheckInvariants_RejectsWrongOrMissingReadOnlyProperties(t *testing.T) {
+	cloudState := map[string]testcontrol.CloudStateEntry{
+		"native-0": {
+			NativeID:     "native-0",
+			ResourceType: "Test::Generic::Resource",
+			Properties:   `{"Name":"a","Value":"v1","ObservedRevision":"revision-2"}`,
+		},
+	}
+
+	for _, tc := range []struct {
+		name     string
+		readOnly string
+	}{
+		{name: "wrong", readOnly: `{"ObservedRevision":"revision-1"}`},
+		{name: "missing", readOnly: `{}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inventory := []pkgmodel.Resource{{
+				Label:              "res-a",
+				Type:               "Test::Generic::Resource",
+				NativeID:           "native-0",
+				Properties:         []byte(`{"Name":"a","Value":"v1"}`),
+				ReadOnlyProperties: []byte(tc.readOnly),
+			}}
+
+			violations := CheckInvariants(inventory, cloudState, nil)
+			require.Len(t, violations, 1)
+			assert.Equal(t, ViolationPropertyMismatch, violations[0].Kind)
+		})
+	}
+}
+
+func TestCheckInvariants_RejectsOverlappingWritableAndReadOnlyProperties(t *testing.T) {
+	inventory := []pkgmodel.Resource{{
+		Label:              "res-a",
+		Type:               "Test::Generic::Resource",
+		NativeID:           "native-0",
+		Properties:         []byte(`{"Name":"a","Value":"writable"}`),
+		ReadOnlyProperties: []byte(`{"Value":"read-only"}`),
+	}}
+	cloudState := map[string]testcontrol.CloudStateEntry{
+		"native-0": {
+			NativeID:     "native-0",
+			ResourceType: "Test::Generic::Resource",
+			Properties:   `{"Name":"a","Value":"read-only"}`,
+		},
+	}
+
+	violations := CheckInvariants(inventory, cloudState, nil)
+	require.Len(t, violations, 1)
+	assert.Equal(t, ViolationPropertyMismatch, violations[0].Kind)
+	assert.Contains(t, violations[0].Message, "overlap")
+}
+
 func TestStateModel_CommandsTerminal(t *testing.T) {
 	commands := []CommandState{
 		{ID: "cmd-1", State: "Success"},

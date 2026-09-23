@@ -97,6 +97,33 @@ func TestPlugin_Read_NotFound_ReturnsNotFoundErrorCode(t *testing.T) {
 	}
 }
 
+func TestPlugin_Update_PreservesObservedRevision(t *testing.T) {
+	cs := NewCloudState()
+	cs.Put("native-42", "Test::Generic::Resource", `{"Name":"existing-resource","Value":"before","ObservedRevision":"revision-7"}`)
+	gate := make(chan struct{})
+	close(gate)
+	p := &TestPlugin{cloudState: cs, gate: gate}
+
+	desired := json.RawMessage(`{"Name":"existing-resource","Value":"after"}`)
+	result, err := p.Update(context.Background(), &resource.UpdateRequest{
+		NativeID:          "native-42",
+		ResourceType:      "Test::Generic::Resource",
+		DesiredProperties: desired,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotNil(t, result.ProgressResult)
+	assert.JSONEq(t,
+		`{"Name":"existing-resource","Value":"after","ObservedRevision":"revision-7"}`,
+		string(result.ProgressResult.ResourceProperties))
+
+	entry, ok := cs.Get("native-42")
+	require.True(t, ok)
+	assert.JSONEq(t,
+		`{"Name":"existing-resource","Value":"after","ObservedRevision":"revision-7"}`,
+		entry.Properties)
+}
+
 func TestPlugin_Delete_RemovesFromCloudState(t *testing.T) {
 	cs := NewCloudState()
 	p := &TestPlugin{cloudState: cs}
@@ -286,6 +313,16 @@ func TestSchemaForResourceType_HasCollectionHints(t *testing.T) {
 	arrayHint, hasOrderedItems := schema.Hints["OrderedItems"]
 	assert.True(t, hasOrderedItems)
 	assert.Equal(t, model.FieldUpdateMethodArray, arrayHint.UpdateMethod)
+}
+
+func TestPlugin_DiscoveryFilters_ExcludeMarkedResources(t *testing.T) {
+	p := &TestPlugin{}
+	filters := p.DiscoveryFilters()
+	require.Len(t, filters, 1)
+	assert.Equal(t, []string{"Test::Generic::Resource"}, filters[0].ResourceTypes)
+	require.Len(t, filters[0].Conditions, 1)
+	assert.Equal(t, "$.ExcludeFromDiscovery", filters[0].Conditions[0].PropertyPath)
+	assert.Equal(t, "true", filters[0].Conditions[0].PropertyValue)
 }
 
 func TestPlugin_List_FiltersByParentId(t *testing.T) {

@@ -121,7 +121,15 @@ func CheckInvariants(inventory []pkgmodel.Resource, cloudState map[string]testco
 		if !ok {
 			continue // already reported as orphaned or ignored
 		}
-		invProps := string(invRes.Properties)
+		invProps, err := combinedInventoryProperties(invRes)
+		if err != nil {
+			violations = append(violations, Violation{
+				Kind: ViolationPropertyMismatch,
+				Message: fmt.Sprintf("property mismatch for %s: %v",
+					nativeID, err),
+			})
+			continue
+		}
 		if invProps != "" && cloudEntry.Properties != "" && !jsonEqual(invProps, cloudEntry.Properties) {
 			violations = append(violations, Violation{
 				Kind: ViolationPropertyMismatch,
@@ -132,6 +140,41 @@ func CheckInvariants(inventory []pkgmodel.Resource, cloudState map[string]testco
 	}
 
 	return violations
+}
+
+// combinedInventoryProperties reconstructs the provider document returned by
+// Read. The public inventory deliberately splits schema fields into Properties
+// and provider-only fields into ReadOnlyProperties; cloud state contains the
+// unsplit document. An overlap is invalid because accepting one side would hide
+// disagreement between the two public inventory fields.
+func combinedInventoryProperties(resource pkgmodel.Resource) (string, error) {
+	combined := make(map[string]any)
+	for name, raw := range map[string]json.RawMessage{
+		"writable":  resource.Properties,
+		"read-only": resource.ReadOnlyProperties,
+	} {
+		if len(raw) == 0 {
+			continue
+		}
+		var properties map[string]any
+		if err := json.Unmarshal(raw, &properties); err != nil {
+			return "", fmt.Errorf("invalid %s inventory properties: %w", name, err)
+		}
+		for key, value := range properties {
+			if _, exists := combined[key]; exists {
+				return "", fmt.Errorf("writable/read-only property overlap at %q", key)
+			}
+			combined[key] = value
+		}
+	}
+	if len(combined) == 0 {
+		return "", nil
+	}
+	encoded, err := json.Marshal(combined)
+	if err != nil {
+		return "", fmt.Errorf("encode combined inventory properties: %w", err)
+	}
+	return string(encoded), nil
 }
 
 // CheckReconcileProperties verifies that after a successful reconcile, the

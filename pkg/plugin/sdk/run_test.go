@@ -131,6 +131,29 @@ func TestConfigureWrapped_InstallsSourceOnceAndForwards(t *testing.T) {
 	assert.ErrorIs(t, err, plugin.ErrNoOidcBroker)
 }
 
+func TestRunWrappedPluginForwardsBeforeStop(t *testing.T) {
+	wrapped, err := plugin.WrapPlugin(
+		&mockPlugin{},
+		&plugin.Manifest{Name: "fake-aws", Version: "1.0.0", Namespace: "FakeAWS"},
+		nil,
+		nil,
+	)
+	require.NoError(t, err)
+
+	beforeStopCalled := false
+	beforeStop := func() { beforeStopCalled = true }
+	runnerCalled := false
+	runWrappedPlugin(wrapped, RunConfig{BeforeStop: beforeStop}, func(gotPlugin plugin.FullResourcePlugin, gotConfig plugin.RunConfig) {
+		runnerCalled = true
+		assert.Same(t, wrapped, gotPlugin)
+		require.NotNil(t, gotConfig.BeforeStop)
+		gotConfig.BeforeStop()
+	})
+
+	assert.True(t, runnerCalled, "configured plugin runner was not called")
+	assert.True(t, beforeStopCalled, "BeforeStop was not forwarded to the plugin runner")
+}
+
 func TestSetupPluginFromDir_InstallsOidcTokenSource(t *testing.T) {
 	pluginDir, formaeSchemaPath := getTestPaths()
 	inner := &oidcAwarePlugin{}

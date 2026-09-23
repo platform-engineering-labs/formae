@@ -2139,7 +2139,7 @@ func (d *DatastoreAuroraDataAPI) storeResource(ctx context.Context, resource *pk
 
 	// Check if this resource already exists by native_id and type
 	// Fetch all versions and find the max in Go code for reliability
-	query := `SELECT ksuid, data, uri, version, managed FROM resources WHERE native_id = :native_id AND type = :type`
+	query := `SELECT ksuid, data, uri, version, managed, target, COALESCE(target_incarnation_id, ''), COALESCE(command_id, '') FROM resources WHERE native_id = :native_id AND type = :type`
 	params := []types.SqlParameter{
 		{Name: aws.String("native_id"), Value: &types.FieldMemberStringValue{Value: resource.NativeID}},
 		{Name: aws.String("type"), Value: &types.FieldMemberStringValue{Value: resource.Type}},
@@ -2154,7 +2154,7 @@ func (d *DatastoreAuroraDataAPI) storeResource(ctx context.Context, resource *pk
 	var maxVersion string
 	var maxRecordIdx = -1
 	for i, record := range output.Records {
-		if len(record) < 5 {
+		if len(record) < 8 {
 			continue
 		}
 		version, err := getStringField(record[3])
@@ -2206,6 +2206,18 @@ func (d *DatastoreAuroraDataAPI) storeResource(ctx context.Context, resource *pk
 	existingData, _ := getStringField(record[1])
 	version, _ := getStringField(record[3])
 	managed, _ := getBoolField(record[4])
+	target, err := getStringField(record[5])
+	if err != nil {
+		return "", fmt.Errorf("failed to parse existing resource target: %w", err)
+	}
+	existingIncarnation, err := getStringField(record[6])
+	if err != nil {
+		return "", fmt.Errorf("failed to parse existing resource incarnation: %w", err)
+	}
+	existingCommandID, err := getStringField(record[7])
+	if err != nil {
+		return "", fmt.Errorf("failed to parse existing resource command: %w", err)
+	}
 
 	// Handle unmanaged -> managed transition
 	if !managed && operation != string(resource_update.OperationDelete) {
@@ -2248,10 +2260,44 @@ func (d *DatastoreAuroraDataAPI) storeResource(ctx context.Context, resource *pk
 	}
 
 	var newVersion string
-	if readWriteEqual && !readOnlyEqual {
+	if operation != string(resource_update.OperationDelete) && readWriteEqual && !readOnlyEqual {
 		newVersion = version
 	} else {
 		newVersion = mksuid.New().String()
+	}
+
+	// A synchronizer read that changes only provider-observed fields refreshes
+	// the existing physical version. Keep that version owned by the command that
+	// created it so pruning the transient read cannot erase write/drift history.
+	// Other callers, missing commands, and metadata changes keep the incoming
+	// attribution conservatively.
+	if newVersion == version && resource.Ksuid == ksuid && resource.Target == target && resource.Managed == managed {
+		commandOutput, lookupErr := d.executeStatement(ctx,
+			`SELECT command, COALESCE(source, '') FROM forma_commands WHERE command_id = :command_id`,
+			[]types.SqlParameter{{Name: aws.String("command_id"), Value: &types.FieldMemberStringValue{Value: commandID}}},
+		)
+		if lookupErr != nil {
+			return "", fmt.Errorf("failed to classify resource command: %w", lookupErr)
+		}
+		if len(commandOutput.Records) > 0 {
+			if len(commandOutput.Records[0]) < 2 {
+				return "", fmt.Errorf("failed to classify resource command: incomplete result")
+			}
+			incomingCommand, fieldErr := getStringField(commandOutput.Records[0][0])
+			if fieldErr != nil {
+				return "", fmt.Errorf("failed to parse resource command: %w", fieldErr)
+			}
+			incomingSource, fieldErr := getStringField(commandOutput.Records[0][1])
+			if fieldErr != nil {
+				return "", fmt.Errorf("failed to parse resource command source: %w", fieldErr)
+			}
+			if incomingCommand == string(pkgmodel.CommandSync) && incomingSource == string(forma_command.SourceSynchronizer) {
+				commandID = existingCommandID
+				if expectedIncarnation == "" {
+					expectedIncarnation = existingIncarnation
+				}
+			}
+		}
 	}
 
 	upsertQuery := `
