@@ -3098,7 +3098,7 @@ func (d *DatastoreAuroraDataAPI) CreateTarget(target *pkgmodel.Target) (string, 
 	}
 
 	var configSchemaParam types.Field
-	if len(target.ConfigSchema.Hints) > 0 {
+	if !target.ConfigSchema.IsZero() {
 		csJSON, err := json.Marshal(target.ConfigSchema)
 		if err != nil {
 			return "", fmt.Errorf("failed to marshal config schema: %w", err)
@@ -3214,7 +3214,7 @@ func (d *DatastoreAuroraDataAPI) UpdateTarget(target *pkgmodel.Target) (string, 
 	}
 
 	var configSchemaParam types.Field
-	if len(target.ConfigSchema.Hints) > 0 {
+	if !target.ConfigSchema.IsZero() {
 		csJSON, err := json.Marshal(target.ConfigSchema)
 		if err != nil {
 			return "", fmt.Errorf("failed to marshal config schema: %w", err)
