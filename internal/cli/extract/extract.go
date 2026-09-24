@@ -144,7 +144,7 @@ func ExtractCmd() *cobra.Command {
 	command.Flags().String("from-json", "", "Render an already retrieved {Forma, Plugins} JSON bundle from a file or stdin (-), without reading agent/profile/auth configuration")
 	command.Flags().String("query", " ", "Query that allows to find resources by their attributes. Use * as a wildcard anywhere (e.g. foo*, *foo, *foo*, foo*bar). ? and regex are not yet supported.")
 	command.Flags().Bool("yes", false, "Overwrite existing files without prompting")
-	command.Flags().String("output-schema", "pkl", "Output schema (only 'pkl' is currently supported)")
+	command.Flags().String("output-schema", "pkl", "Output schema ('pkl', or 'json' with --desired)")
 	command.Flags().String("schema-location", "remote", "How plugin PKL schemas are referenced in the generated PklProject. 'remote' (default) emits package:// URIs that PKL fetches from the hub. 'local' emits local file imports against the agent's on-disk PklProject paths; requires CLI and agent to share a filesystem.")
 	cmd.AddConfigFlags(command)
 
@@ -176,7 +176,11 @@ func runExtract(a *app.App, opts *ExtractOptions) error {
 		if !isInteractive() {
 			return fmt.Errorf("interactive input requires a TTY — pass the target file as an argument")
 		}
-		chosen, err := promptPath(th, "./extracted.pkl")
+		defaultPath := "./extracted.pkl"
+		if opts.OutputSchema == "json" {
+			defaultPath = "./extracted.json"
+		}
+		chosen, err := promptPath(th, defaultPath)
 		if err != nil {
 			return err
 		}
@@ -186,6 +190,9 @@ func runExtract(a *app.App, opts *ExtractOptions) error {
 
 	if opts.TargetPath != "" && opts.OutputSchema == "pkl" && !strings.HasSuffix(opts.TargetPath, ".pkl") {
 		opts.TargetPath += ".pkl"
+	}
+	if opts.TargetPath != "" && opts.OutputSchema == "json" && !strings.HasSuffix(opts.TargetPath, ".json") {
+		opts.TargetPath += ".json"
 	}
 	if err := validateExtractOptions(opts); err != nil {
 		return err
@@ -334,6 +341,14 @@ func validateExtractOptions(opts *ExtractOptions) error {
 	info, err := os.Stat(opts.TargetPath)
 	if err == nil && info.IsDir() {
 		return cmd.FlagErrorf("target path '%s' is a directory, not a file", opts.TargetPath)
+	}
+	if opts.OutputSchema == "json" {
+		if !opts.Desired || opts.CommandID != "" || opts.FromJSON != "" || opts.bundle != nil {
+			return cmd.FlagErrorf("JSON output is only supported with --desired complete-state extraction")
+		}
+		if opts.SchemaLocation == schema.SchemaLocationLocal {
+			return cmd.FlagErrorf("--schema-location local is not supported for JSON output")
+		}
 	}
 
 	if (opts.FromJSON != "" && (opts.Desired || opts.CommandID != "" || strings.TrimSpace(opts.Query) != "")) || (opts.CommandID != "" && (opts.Desired || strings.TrimSpace(opts.Query) != "")) {

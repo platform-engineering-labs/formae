@@ -3717,15 +3717,17 @@ func (d DatastoreSQLite) GetResourcesAtLastReconcile(stackLabel string) ([]datas
 	// Canceled and InProgress reconciles do not (they aren't accepted user
 	// intent).
 	//
-	// Reading per-resource rather than per-command is the key invariant.
+	// Reading per-resource identity rather than per-command is the key invariant.
 	// The generator only emits resource_updates rows for resources whose
 	// state actually changes — unchanged resources produce no row. If we
 	// scoped the snapshot to a single reconcile command, a partial reconcile
 	// that changed only some resources would yield a desired-state Forma
 	// that omits the unchanged ones, and auto-reconcile would implicitly
 	// delete them as drift. Taking the most recent user-source reconcile
-	// row per ksuid keeps unchanged resources represented by the earlier
-	// reconcile that last declared them.
+	// row per stable stack/type/label identity keeps unchanged resources
+	// represented by the earlier reconcile that last declared them. Immutable
+	// replacements may mint a successor ksuid; that physical history must not
+	// produce duplicate current declarations for one authored identity.
 	//
 	// Destroy commands also contribute to the baseline. A destroy is the
 	// user's latest declaration that the named resources should not exist —
@@ -3786,21 +3788,33 @@ func (d DatastoreSQLite) GetResourcesAtLastReconcile(stackLabel string) ([]datas
 			       ROW_NUMBER() OVER (
 			           PARTITION BY ksuid
 			           ORDER BY timestamp DESC,
+			                    command_id DESC,
+			                    CASE WHEN operation = 'delete' THEN 1 ELSE 0 END
+			       ) as physical_rn
+			FROM user_reconcile_updates
+		),
+		latest_per_identity AS (
+			SELECT ksuid, resource, operation, command_id, stack_id, timestamp, legacy_failed_create, declared_label, declared_type, declared_target,
+			       ROW_NUMBER() OVER (
+			           PARTITION BY stack_id, declared_label, LOWER(declared_type)
+			           ORDER BY timestamp DESC,
+			                    command_id DESC,
 			                    CASE WHEN operation = 'delete' THEN 1 ELSE 0 END
 			       ) as rn
-			FROM user_reconcile_updates
+			FROM latest_per_ksuid
+			WHERE physical_rn = 1
 		)
 		SELECT ksuid, resource, command_id, stack_id
-		FROM latest_per_ksuid
+		FROM latest_per_identity
 		WHERE rn = 1 AND operation NOT IN ('delete', 'accept_delete', 'withdraw')
           AND NOT (legacy_failed_create=1 AND EXISTS (
             SELECT 1 FROM user_reconcile_updates successor
-            WHERE successor.timestamp > latest_per_ksuid.timestamp
-              AND successor.ksuid != latest_per_ksuid.ksuid
-              AND successor.stack_id = latest_per_ksuid.stack_id
-              AND successor.declared_label = latest_per_ksuid.declared_label
-              AND successor.declared_type = latest_per_ksuid.declared_type
-              AND successor.declared_target = latest_per_ksuid.declared_target
+            WHERE successor.timestamp > latest_per_identity.timestamp
+              AND successor.ksuid != latest_per_identity.ksuid
+              AND successor.stack_id = latest_per_identity.stack_id
+              AND successor.declared_label = latest_per_identity.declared_label
+              AND successor.declared_type = latest_per_identity.declared_type
+              AND successor.declared_target = latest_per_identity.declared_target
               AND successor.resource_state='Success'
               AND successor.operation IN ('create','update','accept')
           ))
