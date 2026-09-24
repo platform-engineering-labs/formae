@@ -171,6 +171,11 @@ func resolutionEditDocument(ds datastore.Datastore, resource pkgmodel.Resource) 
 				}
 			}
 			if resolutionExpressionNode(n) {
+				// Clear is the implicit visibility of a persisted reference.
+				// Keep non-default visibility changes as authored edits.
+				if _, reference := n["$ref"]; reference && n["$visibility"] == pkgmodel.VisibilityClear {
+					delete(n, "$visibility")
+				}
 				for _, key := range []string{"$value", "$hashed", "$applied", "$resolvedFrom"} {
 					delete(n, key)
 				}

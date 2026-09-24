@@ -589,6 +589,12 @@ func mergeResolutionDeclaration(prior, request, chosen pkgmodel.Resource) (pkgmo
 				bv, be := bm[k]
 				rv, re := rm[k]
 				cv, ce := cm[k]
+				// Canonical source may omit persisted provider outputs. When
+				// absorption changes one, omission is not an authored deletion.
+				if path == "" && be && !re && ce && prior.Schema.Hints[k].HasProviderDefault && !resolutionJSONEqual(bv, cv) {
+					out[k] = cv
+					continue
+				}
 				if be != re || be != ce {
 					if be == re && resolutionJSONEqual(bv, rv) {
 						if ce {

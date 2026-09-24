@@ -121,11 +121,11 @@ func TestExtractedPriorAbsorbThenCanonicalProviderDefaults(t *testing.T) {
 	resourceByLabel(t, canonicalFirst, "image-build").Properties = json.RawMessage(`{"Repository":"repo","BuildArg":"old"}`)
 	canonicalPath := writeFrozenFormaJSON(t, canonicalFirst)
 	canonicalObservation := observeResolution(t, m, readFrozenFormaJSON(t, canonicalPath))
-	_, err = m.ApplyForma(readFrozenFormaJSON(t, canonicalPath), &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: true, Resolution: &pkgmodel.DriftResolution{ObservationID: canonicalObservation.ObservationID, Decisions: []pkgmodel.DriftDecision{{ResourceID: "image-build", Action: "absorb"}}}}, "client", "subject", "")
-	var conflict apimodel.DriftResolutionError
-	require.ErrorAs(t, err, &conflict)
-	require.Equal(t, "decision-edit-conflict", conflict.Code)
-	require.Contains(t, conflict.Reason, "/ImageRef")
+	canonicalPreview, err := m.ApplyForma(readFrozenFormaJSON(t, canonicalPath), &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: true, Resolution: &pkgmodel.DriftResolution{ObservationID: canonicalObservation.ObservationID, Decisions: []pkgmodel.DriftDecision{{ResourceID: "image-build", Action: "absorb"}}}}, "client", "subject", "")
+	require.NoError(t, err)
+	require.Len(t, canonicalPreview.Simulation.Command.ResourceUpdates, 1)
+	require.Equal(t, "accept", canonicalPreview.Simulation.Command.ResourceUpdates[0].Operation)
+	require.Empty(t, canonicalPreview.Simulation.Command.ResourceUpdates[0].PatchDocument)
 
 	priorObservation := observeResolution(t, m, readFrozenFormaJSON(t, frozenPath))
 	opts := &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: true, Resolution: &pkgmodel.DriftResolution{ObservationID: priorObservation.ObservationID, Decisions: []pkgmodel.DriftDecision{{ResourceID: "image-build", Action: "absorb"}}}}
