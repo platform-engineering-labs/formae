@@ -318,6 +318,7 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 	RunGetResourcesAtLastReconcile_NonUserSourceExcluded(t, newDS)
 	RunGetResourcesAtLastReconcile_PatchModeExcluded(t, newDS)
 	RunGetResourcesAtLastReconcile_ReplacementHistorySelectsCurrentIdentity(t, newDS)
+	RunGetResourcesAtLastReconcile_RenameDoesNotResurrectPriorLabel(t, newDS)
 	RunGetResourcesAtLastReconcile_MostRecentReconcileWins(t, newDS)
 	RunGetResourcesAtLastReconcile_StackScoped(t, newDS)
 	RunGetResourcesAtLastReconcile_DestroyAfterApplyEmptiesBaseline(t, newDS)

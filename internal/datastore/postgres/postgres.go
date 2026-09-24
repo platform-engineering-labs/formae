@@ -3576,6 +3576,16 @@ func (d DatastorePostgres) GetResourcesAtLastReconcile(stackLabel string) ([]dat
 
 			AND ru.stack_label = $1
 		),
+		latest_per_ksuid AS (
+			SELECT ksuid, resource_json, operation, command_id, stack_id, timestamp, legacy_failed_create, declared_label, declared_type, declared_target,
+			       ROW_NUMBER() OVER (
+			           PARTITION BY ksuid
+			           ORDER BY timestamp DESC,
+			                    command_id DESC,
+			                    CASE WHEN operation = 'delete' THEN 1 ELSE 0 END
+			       ) as physical_rn
+			FROM user_reconcile_updates
+		),
 		latest_per_identity AS (
 			SELECT ksuid, resource_json, operation, command_id, stack_id, timestamp, legacy_failed_create, declared_label, declared_type, declared_target,
 			       ROW_NUMBER() OVER (
@@ -3584,7 +3594,8 @@ func (d DatastorePostgres) GetResourcesAtLastReconcile(stackLabel string) ([]dat
 			                    command_id DESC,
 			                    CASE WHEN operation = 'delete' THEN 1 ELSE 0 END
 			       ) as rn
-			FROM user_reconcile_updates
+			FROM latest_per_ksuid
+			WHERE physical_rn = 1
 		)
 		SELECT ksuid, resource_json, command_id, stack_id
 		FROM latest_per_identity

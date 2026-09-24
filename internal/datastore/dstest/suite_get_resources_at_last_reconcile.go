@@ -421,6 +421,42 @@ func RunGetResourcesAtLastReconcile_ReplacementHistorySelectsCurrentIdentity(t *
 	})
 }
 
+// RunGetResourcesAtLastReconcile_RenameDoesNotResurrectPriorLabel verifies
+// that a label rename keeps the physical resource identity while replacing
+// its prior authored identity in the desired snapshot.
+func RunGetResourcesAtLastReconcile_RenameDoesNotResurrectPriorLabel(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("GetResourcesAtLastReconcile_RenameDoesNotResurrectPriorLabel", func(t *testing.T) {
+		td := newDS(t)
+		defer td.CleanUpFn() //nolint:errcheck
+
+		stack := &pkgmodel.Stack{Label: "stack-a"}
+		_, err := td.CreateStack(stack, "seed")
+		require.NoError(t, err)
+		stack, err = td.GetStackByLabel(stack.Label)
+		require.NoError(t, err)
+
+		ksuid := util.NewID()
+		original := resourceUpdate(stack.Label, ksuid, "old-label", `{"foo":"old"}`, types.OperationCreate, resource_update.FormaCommandSourceUser)
+		initial := reconcileBuilder(forma_command.CommandStateSuccess, pkgmodel.FormaApplyModeReconcile, -2*time.Minute, []resource_update.ResourceUpdate{original})
+		initial.Stacks = []forma_command.CommandStack{{ID: stack.ID, Label: stack.Label}}
+		require.NoError(t, td.StoreFormaCommand(initial, initial.ID))
+
+		renamed := resourceUpdate(stack.Label, ksuid, "new-label", `{"foo":"new"}`, types.OperationUpdate, resource_update.FormaCommandSourceUser)
+		renamed.DesiredState.Alias = original.DesiredState.Label
+		rename := reconcileBuilder(forma_command.CommandStateSuccess, pkgmodel.FormaApplyModeReconcile, -time.Minute, []resource_update.ResourceUpdate{renamed})
+		rename.Stacks = []forma_command.CommandStack{{ID: stack.ID, Label: stack.Label}}
+		require.NoError(t, td.StoreFormaCommand(rename, rename.ID))
+
+		snapshots, err := td.GetResourcesAtLastReconcile(stack.Label)
+		require.NoError(t, err)
+		require.Len(t, snapshots, 1, "the previous label of one physical resource must not remain desired")
+		require.Equal(t, ksuid, snapshots[0].KSUID)
+		require.Equal(t, "new-label", snapshots[0].Label)
+		require.Equal(t, rename.ID, snapshots[0].CommandID)
+		require.JSONEq(t, `{"foo":"new"}`, string(snapshots[0].Properties))
+	})
+}
+
 // RunGetResourcesAtLastReconcile_MostRecentReconcileWins verifies that
 // when multiple reconciles for the same stack exist, the most recent one
 // is returned, including when the most recent is Failed.

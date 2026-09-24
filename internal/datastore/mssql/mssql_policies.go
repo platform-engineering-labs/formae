@@ -986,6 +986,16 @@ func (d *DatastoreMSSQL) GetResourcesAtLastReconcile(stackLabel string) ([]datas
                    AND NOT EXISTS (SELECT 1 FROM stacks newer_stack WHERE newer_stack.label = current_stack.label AND newer_stack.version > current_stack.version)))
 			AND ru.stack_label = @p1
 		),
+		latest_per_ksuid AS (
+			SELECT ksuid, resource, operation, command_id, stack_id, timestamp, legacy_failed_create, declared_label, declared_type, declared_target,
+			       ROW_NUMBER() OVER (
+			           PARTITION BY ksuid
+			           ORDER BY timestamp DESC,
+			                    command_id DESC,
+			                    CASE WHEN operation = 'delete' THEN 1 ELSE 0 END
+			       ) as physical_rn
+			FROM user_reconcile_updates
+		),
 		latest_per_identity AS (
 			SELECT ksuid, resource, operation, command_id, stack_id, timestamp, legacy_failed_create, declared_label, declared_type, declared_target,
 			       ROW_NUMBER() OVER (
@@ -994,7 +1004,8 @@ func (d *DatastoreMSSQL) GetResourcesAtLastReconcile(stackLabel string) ([]datas
 			                    command_id DESC,
 			                    CASE WHEN operation = 'delete' THEN 1 ELSE 0 END
 			       ) as rn
-			FROM user_reconcile_updates
+			FROM latest_per_ksuid
+			WHERE physical_rn = 1
 		)
 		SELECT ksuid, resource, command_id, stack_id
 		FROM latest_per_identity
