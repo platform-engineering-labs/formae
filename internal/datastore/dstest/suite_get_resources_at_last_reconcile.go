@@ -386,12 +386,15 @@ func RunGetResourcesAtLastReconcile_ReplacementHistorySelectsCurrentIdentity(t *
 		stack, err = td.GetStackByLabel(stack.Label)
 		require.NoError(t, err)
 
+		sharedTimestamp := time.Now().UTC().Add(-3 * time.Minute)
 		var commands []*forma_command.FormaCommand
 		for i, version := range []string{"v1", "v2", "v3"} {
 			update := resourceUpdate(stack.Label, util.NewID(), "task-definition", `{"image":"`+version+`"}`, types.OperationCreate, resource_update.FormaCommandSourceUser)
 			update.DesiredState.Type = "AWS::ECS::TaskDefinition"
 			cmd := reconcileBuilder(forma_command.CommandStateSuccess, pkgmodel.FormaApplyModeReconcile, -3*time.Minute, []resource_update.ResourceUpdate{update})
 			cmd.ID = fmt.Sprintf("replacement-command-%d", i)
+			cmd.StartTs = sharedTimestamp
+			cmd.ModifiedTs = sharedTimestamp
 			cmd.Stacks = []forma_command.CommandStack{{ID: stack.ID, Label: stack.Label}}
 			require.NoError(t, td.StoreFormaCommand(cmd, cmd.ID))
 			commands = append(commands, cmd)
