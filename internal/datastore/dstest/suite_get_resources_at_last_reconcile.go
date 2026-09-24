@@ -8,6 +8,7 @@ package dstest
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -369,6 +370,54 @@ func RunGetResourcesAtLastReconcile_PatchModeExcluded(t *testing.T, newDS func(t
 	})
 }
 
+// RunGetResourcesAtLastReconcile_ReplacementHistorySelectsCurrentIdentity
+// verifies that immutable replacements remain historical command records while
+// the desired snapshot contains only the newest declaration for their stable
+// stack/type/label identity. A later patch changes actual state, not desired
+// reconcile intent, and therefore must not replace that declaration.
+func RunGetResourcesAtLastReconcile_ReplacementHistorySelectsCurrentIdentity(t *testing.T, newDS func(t *testing.T) TestDatastore) {
+	t.Run("GetResourcesAtLastReconcile_ReplacementHistorySelectsCurrentIdentity", func(t *testing.T) {
+		td := newDS(t)
+		defer td.CleanUpFn() //nolint:errcheck
+
+		stack := &pkgmodel.Stack{Label: "stack-a"}
+		_, err := td.CreateStack(stack, "seed")
+		require.NoError(t, err)
+		stack, err = td.GetStackByLabel(stack.Label)
+		require.NoError(t, err)
+
+		var commands []*forma_command.FormaCommand
+		for i, version := range []string{"v1", "v2", "v3"} {
+			update := resourceUpdate(stack.Label, util.NewID(), "task-definition", `{"image":"`+version+`"}`, types.OperationCreate, resource_update.FormaCommandSourceUser)
+			update.DesiredState.Type = "AWS::ECS::TaskDefinition"
+			cmd := reconcileBuilder(forma_command.CommandStateSuccess, pkgmodel.FormaApplyModeReconcile, -3*time.Minute, []resource_update.ResourceUpdate{update})
+			cmd.ID = fmt.Sprintf("replacement-command-%d", i)
+			cmd.Stacks = []forma_command.CommandStack{{ID: stack.ID, Label: stack.Label}}
+			require.NoError(t, td.StoreFormaCommand(cmd, cmd.ID))
+			commands = append(commands, cmd)
+		}
+
+		patchUpdate := resourceUpdate(stack.Label, commands[2].ResourceUpdates[0].DesiredState.Ksuid, "task-definition", `{"image":"patched"}`, types.OperationUpdate, resource_update.FormaCommandSourceUser)
+		patchUpdate.DesiredState.Type = "AWS::ECS::TaskDefinition"
+		patch := reconcileBuilder(forma_command.CommandStateSuccess, pkgmodel.FormaApplyModePatch, -time.Second, []resource_update.ResourceUpdate{patchUpdate})
+		patch.Stacks = []forma_command.CommandStack{{ID: stack.ID, Label: stack.Label}}
+		require.NoError(t, td.StoreFormaCommand(patch, patch.ID))
+
+		snapshots, err := td.GetResourcesAtLastReconcile(stack.Label)
+		require.NoError(t, err)
+		require.Len(t, snapshots, 1)
+		require.Equal(t, commands[2].ResourceUpdates[0].DesiredState.Ksuid, snapshots[0].KSUID)
+		require.Equal(t, commands[2].ID, snapshots[0].CommandID)
+		require.JSONEq(t, `{"image":"v3"}`, string(snapshots[0].Properties))
+
+		for _, cmd := range commands {
+			history, err := td.GetFormaCommandByCommandID(cmd.ID)
+			require.NoError(t, err)
+			require.NotNil(t, history, "replacement history must remain available")
+		}
+	})
+}
+
 // RunGetResourcesAtLastReconcile_MostRecentReconcileWins verifies that
 // when multiple reconciles for the same stack exist, the most recent one
 // is returned, including when the most recent is Failed.
@@ -649,7 +698,12 @@ func RunDesiredDeclaration(t *testing.T, newDS func(t *testing.T) TestDatastore)
 				for _, v := range snapshots {
 					ids = append(ids, v.KSUID)
 				}
-				if scenario == "successful" {
+				// Stable desired identity is stack/type/label. A newer reconcile
+				// for that identity supersedes the prior ksuid even when it is a
+				// failed retry, changes target, or follows physical history. The
+				// command rows remain available above; only current desired state
+				// is singular. Patch mode and distinct identities remain separate.
+				if scenario == "successful" || scenario == "failed-retry" || scenario == "different-target" || scenario == "physical-history" || scenario == "modern-intent" {
 					require.Equal(t, []string{newID}, ids)
 				} else if scenario == "deleted-retry" {
 					require.Empty(t, ids, "deleting the successful retry must not resurrect its failed predecessor")

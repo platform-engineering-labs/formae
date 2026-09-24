@@ -142,6 +142,87 @@ func TestExtractDesiredStacks_PklRoundTrip(t *testing.T) {
 	require.Equal(t, map[string]int{"ttl-stack": 2, "plain-stack": 0}, policies)
 }
 
+func TestExtractDesiredStacks_ReplacementHistoryRoundTripsCurrentDeclaration(t *testing.T) {
+	ds := newSQLiteTestDatastore(t)
+	m := &Metastructure{Datastore: ds, Cfg: &pkgmodel.Config{}}
+	_, err := ds.CreateStack(&pkgmodel.Stack{Label: "service"}, "seed")
+	require.NoError(t, err)
+	stack, err := ds.GetStackByLabel("service")
+	require.NoError(t, err)
+	target := pkgmodel.Target{Label: "aws", Namespace: "FakeAWS", Config: json.RawMessage(`{"Type":"FakeAWS","Region":"us-east-1"}`)}
+	_, err = ds.CreateTarget(&target)
+	require.NoError(t, err)
+
+	base := time.Now().UTC().Add(-time.Hour)
+	var current pkgmodel.Resource
+	for i, image := range []string{"v1", "v2", "v3"} {
+		current = pkgmodel.Resource{
+			Ksuid:      util.NewID(),
+			Label:      "task-definition",
+			Type:       "FakeAWS::SecretsManager::Secret",
+			Stack:      stack.Label,
+			Target:     target.Label,
+			NativeID:   "task-definition-" + image,
+			Managed:    true,
+			Properties: json.RawMessage(`{"Name":"task-definition-` + image + `"}`),
+			Schema:     pkgmodel.Schema{Fields: []string{"Name"}},
+		}
+		cmd := &forma_command.FormaCommand{
+			ID:         util.NewID(),
+			StartTs:    base.Add(time.Duration(i) * time.Minute),
+			ModifiedTs: base.Add(time.Duration(i) * time.Minute),
+			Command:    pkgmodel.CommandApply,
+			Source:     forma_command.SourceUser,
+			State:      forma_command.CommandStateSuccess,
+			Config:     config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile},
+			Stacks:     []forma_command.CommandStack{{ID: stack.ID, Label: stack.Label}},
+			ResourceUpdates: []resource_update.ResourceUpdate{{
+				DesiredState: current,
+				StackLabel:   current.Stack,
+				Operation:    resource_update.OperationCreate,
+				Source:       resource_update.FormaCommandSourceUser,
+				State:        resource_update.ResourceUpdateStateSuccess,
+			}},
+		}
+		require.NoError(t, ds.StoreFormaCommand(cmd, cmd.ID))
+	}
+	_, err = ds.StoreResource(&current, "current")
+	require.NoError(t, err)
+
+	patched := current
+	patched.Properties = json.RawMessage(`{"Name":"task-definition-patched"}`)
+	patch := &forma_command.FormaCommand{
+		ID:         util.NewID(),
+		StartTs:    base.Add(10 * time.Minute),
+		ModifiedTs: base.Add(10 * time.Minute),
+		Command:    pkgmodel.CommandApply,
+		Source:     forma_command.SourceUser,
+		State:      forma_command.CommandStateSuccess,
+		Config:     config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModePatch},
+		Stacks:     []forma_command.CommandStack{{ID: stack.ID, Label: stack.Label}},
+		ResourceUpdates: []resource_update.ResourceUpdate{{
+			DesiredState: patched,
+			StackLabel:   patched.Stack,
+			Operation:    resource_update.OperationUpdate,
+			Source:       resource_update.FormaCommandSourceUser,
+			State:        resource_update.ResourceUpdateStateSuccess,
+		}},
+	}
+	require.NoError(t, ds.StoreFormaCommand(patch, patch.ID))
+	_, err = ds.StoreResource(&patched, patch.ID)
+	require.NoError(t, err)
+
+	extracted, err := m.ExtractDesiredStacks("stack:service")
+	require.NoError(t, err)
+	require.Len(t, extracted.Resources, 1)
+	require.Equal(t, current.Ksuid, extracted.Resources[0].Ksuid)
+	require.JSONEq(t, string(current.Properties), string(extracted.Resources[0].Properties))
+
+	rejected := observeResolution(t, m, extracted)
+	require.Len(t, rejected.ModifiedStacks[stack.Label].ModifiedResources, 1, "the extracted declaration must round-trip to an ordinary drift review, not a duplicate-identity error")
+	require.Equal(t, current.Ksuid, rejected.ModifiedStacks[stack.Label].ModifiedResources[0].ResourceID)
+}
+
 func desiredPklRoundTrip(t *testing.T, forma *pkgmodel.Forma) *pkgmodel.Forma {
 	return desiredPklRoundTripWithFixture(t, forma, false)
 }
