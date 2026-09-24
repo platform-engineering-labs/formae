@@ -1109,9 +1109,12 @@ func (a *App) GenerateSourceCode(forma *pkgmodel.Forma, targetPath string, outpu
 		return schema.GenerateSourcesResult{}, err
 	}
 
-	deps, err := a.buildDependencyStrings(forma, schemaLocation)
-	if err != nil {
-		return schema.GenerateSourcesResult{}, err
+	var deps []string
+	if outputSchema == "pkl" {
+		deps, err = a.buildDependencyStrings(forma, schemaLocation)
+		if err != nil {
+			return schema.GenerateSourcesResult{}, err
+		}
 	}
 	if schemaLocation == "" {
 		schemaLocation = schema.SchemaLocationRemote

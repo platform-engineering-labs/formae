@@ -5,8 +5,16 @@
 package apply
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"testing"
+
 	formae "github.com/platform-engineering-labs/formae"
 	"github.com/platform-engineering-labs/formae/internal/cli/app"
 	"github.com/platform-engineering-labs/formae/internal/cli/config"
@@ -18,12 +26,6 @@ import (
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/stretchr/testify/require"
-	"io"
-	"net/http"
-	"net/http/httptest"
-	"os"
-	"path/filepath"
-	"testing"
 )
 
 func TestResolutionMachineStructuredReviewAndErrors(t *testing.T) {
@@ -125,6 +127,51 @@ func TestResolutionReusesEvaluatedInputOnTransport(t *testing.T) {
 	require.Contains(t, controls[2], `"ReviewID":"review"`)
 	require.Contains(t, controls[2], `"IdempotencyKey":"retry"`)
 	require.Equal(t, []string{"", "", ""}, messages)
+}
+
+func TestResolutionFreshJSONReadsReuseFrozenOpaqueSetOnceValues(t *testing.T) {
+	require.NoError(t, config.Config.EnsureDataDirectory())
+	require.NoError(t, config.Config.EnsureClientID())
+	path := filepath.Join(t.TempDir(), "frozen.json")
+	original := []byte(`{"Description":{"Text":"reviewed","Confirm":true},"Properties":{},"Stacks":[{"Label":"service"}],"Resources":[{"Label":"task","Type":"Test::Task","Stack":"service","Target":"target","Schema":{"Identifier":"Test::Task","Fields":["Token"],"Hints":{"Token":{"Opaque":true}},"Discoverable":false,"Extractable":false,"Portable":false,"Parent":"","ParentMappings":[]},"Properties":{"Token":{"$value":"generated-once","$visibility":"Opaque","$strategy":"SetOnce"}}}]}`)
+	require.NoError(t, os.WriteFile(path, original, 0600))
+
+	var bodies [][]byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/v1/stats" {
+			require.NoError(t, json.NewEncoder(w).Encode(apimodel.Stats{Version: formae.Version, Capabilities: []string{"shared-drift-resolution", "command-metadata"}}))
+			return
+		}
+		require.Equal(t, "/api/v1/commands", r.URL.Path)
+		require.NoError(t, r.ParseMultipartForm(4<<20))
+		file, _, err := r.FormFile("file")
+		require.NoError(t, err)
+		body, err := io.ReadAll(file)
+		require.NoError(t, err)
+		require.NoError(t, file.Close())
+		bodies = append(bodies, body)
+		_, _ = w.Write([]byte(`{"CommandId":"recorded"}`))
+	}))
+	defer server.Close()
+	newApp := func() *app.App {
+		return &app.App{Config: &pkgmodel.Config{Cli: pkgmodel.CliConfig{Connection: &pkgmodel.ClassicConnection{URL: server.URL, Port: 80}, DisableUsageReporting: true}}}
+	}
+
+	_, _, err := applyFn(newApp(), &ApplyOptions{FormaFile: path, Mode: pkgmodel.FormaApplyModeReconcile}, true)
+	require.NoError(t, err)
+	_, _, err = applyFn(newApp(), &ApplyOptions{FormaFile: path, Mode: pkgmodel.FormaApplyModeReconcile, Resolution: &pkgmodel.DriftResolution{ObservationID: "observation", Decisions: []pkgmodel.DriftDecision{{ResourceID: "task", Action: "absorb"}}}}, true)
+	require.NoError(t, err)
+
+	changed := bytes.ReplaceAll(original, []byte("generated-once"), []byte("changed-intent"))
+	require.NoError(t, os.WriteFile(path, changed, 0600))
+	_, _, err = applyFn(newApp(), &ApplyOptions{FormaFile: path, Mode: pkgmodel.FormaApplyModeReconcile}, true)
+	require.NoError(t, err)
+
+	require.Len(t, bodies, 3)
+	require.Equal(t, bodies[0], bodies[1], "separate JSON reads must submit the same reviewed declaration")
+	require.NotEqual(t, bodies[1], bodies[2], "changed intent must produce a different admission payload")
+	require.Contains(t, string(bodies[0]), "generated-once")
 }
 
 func TestRecordedGuidanceLiteralQueries(t *testing.T) {
