@@ -19,7 +19,7 @@ import (
 )
 
 func frozenFormaFixture() *model.Forma {
-	sensitive := true
+	sensitive := false
 	return &model.Forma{
 		Extraction: &model.ExtractionContext{
 			Diagnostics:         []model.ExtractionDiagnostic{{Code: "external-reference", Path: "/Resources/0/Properties/Secret", Reference: "formae://external#/Value", Message: "kept for source repair"}},
@@ -40,6 +40,39 @@ func frozenFormaFixture() *model.Forma {
 			Properties: stdjson.RawMessage(`{"Secret":{"$value":"opaque-generated-once","$visibility":"Opaque","$strategy":"SetOnce"},"Count":9007199254740993}`),
 		}},
 	}
+}
+
+func TestFullJSONDoesNotExposePrivateInputValues(t *testing.T) {
+	private, public := true, false
+	forma := frozenFormaFixture()
+	forma.Properties = map[string]model.Prop{
+		"private": {Sensitive: &private, Source: "supplied", Value: "private-input-value", Default: "private-input-default"},
+		"legacy":  {Value: "unclassified-input-value", Default: "unclassified-input-default"},
+		"public":  {Sensitive: &public, Value: stdjson.Number("9007199254740993"), Default: "public-default"},
+	}
+	for _, beautify := range []bool{false, true} {
+		wire, err := (JSON{}).SerializeForma(forma, &schema.SerializeOptions{Beautify: beautify})
+		require.NoError(t, err)
+		for _, secret := range []string{"private-input-value", "private-input-default", "unclassified-input-value", "unclassified-input-default"} {
+			require.NotContains(t, wire, secret)
+		}
+		path := filepath.Join(t.TempDir(), "frozen.json")
+		require.NoError(t, os.WriteFile(path, []byte(wire), 0600))
+		replayed, err := (JSON{}).Evaluate(path, model.CommandApply, model.FormaApplyModeReconcile, nil)
+		require.NoError(t, err)
+		require.Nil(t, replayed.Properties["private"].Value)
+		require.Nil(t, replayed.Properties["private"].Default)
+		require.Equal(t, &private, replayed.Properties["private"].Sensitive)
+		require.Equal(t, "supplied", replayed.Properties["private"].Source)
+		require.Equal(t, stdjson.Number("9007199254740993"), replayed.Properties["public"].Value)
+		require.Equal(t, "public-default", replayed.Properties["public"].Default)
+		require.JSONEq(t, string(model.SnapshotInputProperties(forma.Properties)), string(model.SnapshotInputProperties(replayed.Properties)))
+		require.JSONEq(t, string(forma.Resources[0].Properties), string(replayed.Resources[0].Properties))
+	}
+	// Output sanitization must not alter the evaluated input used by another path.
+	require.Equal(t, "private-input-value", forma.Properties["private"].Value)
+	require.Equal(t, "private-input-default", forma.Properties["private"].Default)
+	require.Equal(t, "unclassified-input-value", forma.Properties["legacy"].Value)
 }
 
 func TestFullFormaRoundTripsAcrossFreshJSONEvaluations(t *testing.T) {

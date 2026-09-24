@@ -231,8 +231,16 @@ func (j JSON) SerializeForma(forma *model.Forma, options *schema.SerializeOption
 		data = simplifiedResources
 	} else {
 		full := *forma
-		if full.Properties == nil {
-			full.Properties = map[string]model.Prop{}
+		full.Properties = make(map[string]model.Prop, len(forma.Properties))
+		for name, prop := range forma.Properties {
+			// Input values are already reflected in the evaluated declaration.
+			// Retain history metadata without exposing private or unclassified
+			// inputs through eval output, and never mutate the source manifest.
+			if prop.Sensitive == nil || *prop.Sensitive {
+				prop.Value = nil
+				prop.Default = nil
+			}
+			full.Properties[name] = prop
 		}
 		data = &full
 	}
