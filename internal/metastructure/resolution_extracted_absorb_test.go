@@ -7,6 +7,7 @@ package metastructure
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"sort"
 	"testing"
@@ -17,11 +18,14 @@ import (
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/types"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
+	"github.com/platform-engineering-labs/formae/internal/schema"
+	jsonschema "github.com/platform-engineering-labs/formae/internal/schema/json"
 	"github.com/platform-engineering-labs/formae/internal/schema/pkl"
 	apimodel "github.com/platform-engineering-labs/formae/pkg/api/model"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 func TestExtractedPriorAbsorbThenCanonicalProviderDefaults(t *testing.T) {
@@ -111,19 +115,27 @@ func TestExtractedPriorAbsorbThenCanonicalProviderDefaults(t *testing.T) {
 		require.True(t, gjson.GetBytes(priorImage.Properties, field).Exists(), field)
 	}
 	require.Equal(t, pkgmodel.StrategySetOnce, gjson.GetBytes(resourceByLabel(t, extracted, "credential").Properties, "SecretString.$strategy").String())
+	frozenPath := writeFrozenFormaJSON(t, extracted)
 
-	canonicalFirst := ownPlanningValue(extracted)
+	canonicalFirst := readFrozenFormaJSON(t, frozenPath)
 	resourceByLabel(t, canonicalFirst, "image-build").Properties = json.RawMessage(`{"Repository":"repo","BuildArg":"old"}`)
-	canonicalObservation := observeResolution(t, m, canonicalFirst)
-	_, err = m.ApplyForma(canonicalFirst, &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: true, Resolution: &pkgmodel.DriftResolution{ObservationID: canonicalObservation.ObservationID, Decisions: []pkgmodel.DriftDecision{{ResourceID: "image-build", Action: "absorb"}}}}, "client", "subject", "")
+	canonicalPath := writeFrozenFormaJSON(t, canonicalFirst)
+	canonicalObservation := observeResolution(t, m, readFrozenFormaJSON(t, canonicalPath))
+	_, err = m.ApplyForma(readFrozenFormaJSON(t, canonicalPath), &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: true, Resolution: &pkgmodel.DriftResolution{ObservationID: canonicalObservation.ObservationID, Decisions: []pkgmodel.DriftDecision{{ResourceID: "image-build", Action: "absorb"}}}}, "client", "subject", "")
 	var conflict apimodel.DriftResolutionError
 	require.ErrorAs(t, err, &conflict)
 	require.Equal(t, "decision-edit-conflict", conflict.Code)
 	require.Contains(t, conflict.Reason, "/ImageRef")
 
-	priorObservation := observeResolution(t, m, extracted)
+	priorObservation := observeResolution(t, m, readFrozenFormaJSON(t, frozenPath))
 	opts := &config.FormaCommandConfig{Mode: pkgmodel.FormaApplyModeReconcile, Simulate: true, Resolution: &pkgmodel.DriftResolution{ObservationID: priorObservation.ObservationID, Decisions: []pkgmodel.DriftDecision{{ResourceID: "image-build", Action: "absorb"}}}}
-	preview, err := m.ApplyForma(extracted, opts, "client", "subject", "")
+	changedPath := writeChangedGeneratedValueJSON(t, frozenPath)
+	_, err = m.ApplyForma(readFrozenFormaJSON(t, changedPath), opts, "client", "subject", "")
+	var staleObservation apimodel.DriftResolutionError
+	require.ErrorAs(t, err, &staleObservation)
+	require.Equal(t, "stale-review", staleObservation.Code)
+
+	preview, err := m.ApplyForma(readFrozenFormaJSON(t, frozenPath), opts, "client", "subject", "")
 	require.NoError(t, err)
 	require.Len(t, preview.Simulation.Command.ResourceUpdates, 1)
 	require.Equal(t, "accept", preview.Simulation.Command.ResourceUpdates[0].Operation)
@@ -131,7 +143,12 @@ func TestExtractedPriorAbsorbThenCanonicalProviderDefaults(t *testing.T) {
 
 	opts.Simulate = false
 	opts.Resolution.ReviewID = preview.Review.ReviewID
-	accepted, err := m.prepareGuardedApply(extracted, opts, "client", "subject", "")
+	_, err = m.prepareGuardedApply(readFrozenFormaJSON(t, changedPath), opts, "client", "subject", "")
+	var staleReview apimodel.DriftResolutionError
+	require.ErrorAs(t, err, &staleReview)
+	require.Equal(t, "stale-review", staleReview.Code)
+
+	accepted, err := m.prepareGuardedApply(readFrozenFormaJSON(t, frozenPath), opts, "client", "subject", "")
 	require.NoError(t, err)
 	require.Len(t, accepted.Command.ResourceUpdates, 1)
 	require.Equal(t, resource_update.OperationAccept, accepted.Command.ResourceUpdates[0].Operation)
@@ -155,6 +172,36 @@ func TestExtractedPriorAbsorbThenCanonicalProviderDefaults(t *testing.T) {
 	}
 	sort.Strings(updated)
 	require.Equal(t, []string{"service", "task-definition"}, updated)
+}
+
+func writeFrozenFormaJSON(t *testing.T, forma *pkgmodel.Forma) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "desired.json")
+	_, err := (jsonschema.JSON{}).GenerateSourceCode(forma, path, nil, &schema.SerializeOptions{Schema: "json"})
+	require.NoError(t, err)
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0600), info.Mode().Perm())
+	return path
+}
+
+func readFrozenFormaJSON(t *testing.T, path string) *pkgmodel.Forma {
+	t.Helper()
+	forma, err := (jsonschema.JSON{}).Evaluate(path, pkgmodel.CommandApply, pkgmodel.FormaApplyModeReconcile, nil)
+	require.NoError(t, err)
+	return forma
+}
+
+func writeChangedGeneratedValueJSON(t *testing.T, sourcePath string) string {
+	t.Helper()
+	changed := readFrozenFormaJSON(t, sourcePath)
+	credential := resourceByLabel(t, changed, "credential")
+	current := gjson.GetBytes(credential.Properties, "SecretString.$value").String()
+	require.NotEmpty(t, current)
+	properties, err := sjson.SetBytes(credential.Properties, "SecretString.$value", current+"-changed")
+	require.NoError(t, err)
+	credential.Properties = properties
+	return writeFrozenFormaJSON(t, changed)
 }
 
 func resourceByLabel(t *testing.T, forma *pkgmodel.Forma, label string) *pkgmodel.Resource {
