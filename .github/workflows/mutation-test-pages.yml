@@ -2,7 +2,7 @@ name: mutation-test-pages
 
 on:
   schedule:
-    - cron: '0 3 * * *'  # nightly at 03:00 UTC
+    - cron: '0 3 * * 0'  # weekly at 03:00 UTC
   workflow_dispatch:
 
 concurrency:
