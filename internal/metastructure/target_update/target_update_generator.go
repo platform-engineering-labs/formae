@@ -27,10 +27,6 @@ type TargetDatastore interface {
 
 type TargetUpdateGenerator struct {
 	datastore TargetDatastore
-	// manifestDefaultReap is the plugin-manifest default reaping behaviour used
-	// when a target declares none. It is nil when no manifest default is wired,
-	// in which case admission falls through to the global reaping default.
-	manifestDefaultReap pkgmodel.ReapingBehaviour
 	// minReapDuration is the floor enforced on any target's explicit reap-after
 	// duration (see resolveTargetReaping). It defaults to reaping.MinReapDuration
 	// (derived from the nominal/default sync interval); WithMinReapDuration lets
@@ -122,6 +118,22 @@ func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, c
 		}, true, nil
 	}
 
+	// Preserve existing ConfigSchema when the incoming target doesn't provide one.
+	// Without this, persistTargetUpdate would write an empty schema, silently
+	// clearing mutability metadata (and the provider's default reaping) for
+	// future applies.
+	if target.ConfigSchema.IsZero() && existing != nil && !existing.ConfigSchema.IsZero() {
+		target.ConfigSchema = existing.ConfigSchema
+	}
+
+	// Resolve the reaping behaviour at admission: explicit per-target > provider
+	// schema default > global default. Write the resolved behaviour back onto
+	// the target so the datastore persists the concrete reap_kind /
+	// reap_max_unreachable_seconds columns.
+	if err := tp.resolveTargetReaping(&target); err != nil {
+		return TargetUpdate{}, false, err
+	}
+
 	// Extract resolvables from target config
 	resolvables := resolver.ExtractResolvableURIsFromJSON(target.Config)
 	slog.Debug("Target resolvables extracted", "label", target.Label, "count", len(resolvables), "uris", resolvables)
@@ -169,6 +181,13 @@ func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, c
 		case ConfigMutableChange:
 			operation = TargetOperationUpdate
 		case ConfigNoChange:
+			// Compare effective reaping for legacy rows without a stored policy too.
+			existingEffective := *existing
+			if len(existingEffective.Reaping) == 0 || string(existingEffective.Reaping) == "null" {
+				if err := tp.resolveTargetReaping(&existingEffective); err != nil {
+					return TargetUpdate{}, false, err
+				}
+			}
 			// Resolved values are identical, but we still need to update if:
 			// - The raw config format changed (e.g., plain value ↔ $ref wrapper)
 			// - The discoverable flag changed
@@ -194,10 +213,12 @@ func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, c
 				operation = TargetOperationUpdate
 			} else if existing.Discoverable != target.Discoverable {
 				operation = TargetOperationUpdate
-			} else if len(target.ConfigSchema.Hints) > 0 && !configSchemasEqual(existing.ConfigSchema, target.ConfigSchema) {
-				// Only update for schema changes when the incoming schema has hints.
+			} else if !target.ConfigSchema.IsZero() && !configSchemasEqual(existing.ConfigSchema, target.ConfigSchema) {
+				// Only update for schema changes when the incoming schema carries metadata.
 				// An empty incoming schema means the plugin/agent doesn't emit one —
 				// don't wipe existing metadata.
+				operation = TargetOperationUpdate
+			} else if !util.JsonEqualRaw(existingEffective.Reaping, target.Reaping) {
 				operation = TargetOperationUpdate
 			} else if isReaped {
 				// Config/discoverable/schema are all unchanged, but the target is
@@ -208,21 +229,6 @@ func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, c
 				return TargetUpdate{}, false, nil
 			}
 		}
-	}
-
-	// Preserve existing ConfigSchema when the incoming target doesn't provide one.
-	// Without this, persistTargetUpdate would write an empty schema, silently
-	// clearing mutability metadata for future applies.
-	if len(target.ConfigSchema.Hints) == 0 && existing != nil && len(existing.ConfigSchema.Hints) > 0 {
-		target.ConfigSchema = existing.ConfigSchema
-	}
-
-	// Resolve the reaping behaviour at admission: explicit per-target > plugin
-	// manifest default > global default. Write the resolved behaviour back onto
-	// the target so the datastore persists the concrete reap_kind /
-	// reap_max_unreachable_seconds columns.
-	if err := tp.resolveTargetReaping(&target); err != nil {
-		return TargetUpdate{}, false, err
 	}
 
 	return TargetUpdate{
@@ -236,8 +242,8 @@ func (tp *TargetUpdateGenerator) determineTargetUpdate(target pkgmodel.Target, c
 	}, true, nil
 }
 
-// resolveTargetReaping applies the reaping precedence (explicit > manifest
-// default > global default), enforces the reap-after duration floor, and writes
+// resolveTargetReaping applies the reaping precedence (explicit > provider
+// schema default > global default), enforces the reap-after duration floor, and writes
 // the resolved behaviour back onto target.Reaping.
 func (tp *TargetUpdateGenerator) resolveTargetReaping(target *pkgmodel.Target) error {
 	explicit, err := pkgmodel.ParseReaping(target.Reaping)
@@ -245,7 +251,21 @@ func (tp *TargetUpdateGenerator) resolveTargetReaping(target *pkgmodel.Target) e
 		return fmt.Errorf("invalid reaping for target %s: %w", target.Label, err)
 	}
 
-	resolved := pkgmodel.ResolveReaping(explicit, tp.manifestDefaultReap)
+	// The provider default comes from the target Config class's ConfigHint,
+	// riding the ConfigSchema that eval attached to the target (or the
+	// preserved schema of the existing row). An invalid declaration is logged
+	// and skipped rather than rejecting the target: the namespace then falls
+	// to the global reaping default.
+	providerDefault, err := pkgmodel.ParseReaping(target.ConfigSchema.DefaultReap)
+	if after, ok := providerDefault.(*pkgmodel.ReapAfter); ok && after.MaxUnreachableSeconds < int64(tp.minReapDuration.Seconds()) {
+		err = fmt.Errorf("provider reap-after of %ds is below the minimum of %ds", after.MaxUnreachableSeconds, int64(tp.minReapDuration.Seconds()))
+	}
+	if err != nil {
+		slog.Warn("Ignoring invalid ConfigHint default reap", "target", target.Label, "error", err)
+		providerDefault = nil
+	}
+
+	resolved := pkgmodel.ResolveReaping(explicit, providerDefault)
 
 	if after, ok := resolved.(*pkgmodel.ReapAfter); ok {
 		floor := int64(tp.minReapDuration.Seconds())
@@ -276,8 +296,11 @@ func isHashedAtRest(raw string) bool {
 	return parsed.Get("$hashed").Bool()
 }
 
-// configSchemasEqual returns true if two ConfigSchemas have identical hints.
+// configSchemasEqual returns true if two ConfigSchemas have identical metadata.
 func configSchemasEqual(a, b pkgmodel.ConfigSchema) bool {
+	if !util.JsonEqualRaw(a.DefaultReap, b.DefaultReap) {
+		return false
+	}
 	if len(a.Hints) != len(b.Hints) {
 		return false
 	}

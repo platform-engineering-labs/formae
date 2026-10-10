@@ -4451,7 +4451,7 @@ func (d DatastorePostgres) CreateTarget(target *pkgmodel.Target) (string, error)
 	}
 
 	var configSchemaJSON []byte
-	if len(target.ConfigSchema.Hints) > 0 {
+	if !target.ConfigSchema.IsZero() {
 		configSchemaJSON, err = json.Marshal(target.ConfigSchema)
 		if err != nil {
 			return "", err
@@ -4529,7 +4529,7 @@ func (d DatastorePostgres) UpdateTarget(target *pkgmodel.Target) (string, error)
 	}
 
 	var configSchemaJSON []byte
-	if len(target.ConfigSchema.Hints) > 0 {
+	if !target.ConfigSchema.IsZero() {
 		configSchemaJSON, err = json.Marshal(target.ConfigSchema)
 		if err != nil {
 			return "", err
