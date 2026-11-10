@@ -87,7 +87,7 @@ func scanTargetColumns(scan func(dest ...any) error) (*pkgmodel.Target, error) {
 }
 
 func marshalConfigSchema(target *pkgmodel.Target) ([]byte, error) {
-	if len(target.ConfigSchema.Hints) == 0 {
+	if target.ConfigSchema.IsZero() {
 		return nil, nil
 	}
 	return json.Marshal(target.ConfigSchema)
