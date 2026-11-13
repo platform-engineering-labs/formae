@@ -140,6 +140,10 @@ type ReadResult struct {
 	ResourceType string
 	Properties   string
 	ErrorCode    OperationErrorCode `json:"ErrorCode,omitempty"`
+	// StatusMessage carries the provider's explanation when ErrorCode is set
+	// (e.g. the raw API error). It is surfaced on the read's ProgressResult so
+	// an outcome such as NotFound can be traced back to what the provider said.
+	StatusMessage string `json:"StatusMessage,omitempty"`
 }
 
 type Resource struct {
