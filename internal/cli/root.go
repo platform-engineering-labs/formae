@@ -42,6 +42,10 @@ import (
 	"github.com/spf13/pflag"
 )
 
+// longDescription is rendered in Start, after the background seed, and not at
+// package init: an AdaptiveColor rendered before lipgloss.SetHasDarkBackground
+// resolves against lipgloss's own detection instead of formae's decision, so the
+// root help could mix two palettes.
 func longDescription() string {
 	th := theme.New("formae")
 	return banner.Tool + ": " + lipgloss.NewStyle().Foreground(th.Palette.Done).Render("A modern infrastructure as code tool that platform engineers deserve")
@@ -59,7 +63,6 @@ func setSilenceUsageRecursive(cmd *cobra.Command) {
 var rootCmd = &cobra.Command{
 	Use:     banner.Tool,
 	Short:   banner.Tool + " CLI",
-	Long:    longDescription(),
 	Version: formae.Version,
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		// Redirect slog output to discard to prevent it from appearing on screen
@@ -293,8 +296,10 @@ func Start() {
 	// consistently without a per-render OSC-11 query. That query is flaky (it
 	// mis-detects as light after the banner's graphics probe, turning body text
 	// unreadable on dark backgrounds) and leaks escape codes into the shell.
-	// COLORFGBG when the terminal exports it, otherwise assume dark.
+	// logo.HasDarkBackground uses the terminal's live answer in an interactive
+	// terminal (also over ssh) and COLORFGBG (else dark) under tmux/non-TTY.
 	lipgloss.SetHasDarkBackground(logo.HasDarkBackground())
+	rootCmd.Long = longDescription()
 
 	err := config.Config.EnsureConfigDirectory()
 	if err != nil {

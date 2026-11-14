@@ -131,7 +131,14 @@ func statusCmd() *cobra.Command {
 			}
 
 			if consumer == printer.ConsumerHuman {
-				app.PrintBanner()
+				if watch {
+					// The watch loop clears and redraws the screen every 2 s
+					// with a text banner; keep the first frame text too, so no
+					// graphics image is left behind under the redrawn screen.
+					app.PrintTextBanner()
+				} else {
+					app.PrintBanner()
+				}
 			}
 
 			stats, nags, err := app.Stats()

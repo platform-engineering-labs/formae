@@ -46,27 +46,6 @@ func TestRender_KittyFallbackToBraille(t *testing.T) {
 	}
 }
 
-// TestRender_ITerm2FallbackToBraille stubs encodeITerm2Fn to return "" and
-// asserts that Render(CapITerm2, SizeFull, …) degrades to braille.
-// Note: NOT parallel — mutates the package-level encodeITerm2Fn seam.
-func TestRender_ITerm2FallbackToBraille(t *testing.T) {
-	origITerm2 := encodeITerm2Fn
-	encodeITerm2Fn = func(_ bool, _ int) string { return "" }
-	t.Cleanup(func() { encodeITerm2Fn = origITerm2 })
-
-	art, rows := Render(CapITerm2, SizeFull, "1.2.3")
-
-	if art == "" {
-		t.Fatal("Render(CapITerm2, SizeFull) returned empty string after encoder failure — expected braille fallback")
-	}
-	if !hasBrailleRune(art) {
-		t.Errorf("Render(CapITerm2, SizeFull) did not fall back to braille; got %q", art)
-	}
-	if rows <= 0 {
-		t.Errorf("expected rows>0, got %d", rows)
-	}
-}
-
 // TestRender_KittyFullLogoComposition stubs encodeKittyFn to return a synthetic
 // image escape and asserts that Render(CapKitty, SizeFull, …) composes the
 // version to the right of the full-wordmark image using CHA positioning. The
@@ -102,39 +81,5 @@ func TestRender_KittyFullLogoComposition(t *testing.T) {
 	// rows must equal graphicsFullLogoImageRows.
 	if rows != graphicsFullLogoImageRows {
 		t.Errorf("expected rows=%d, got %d", graphicsFullLogoImageRows, rows)
-	}
-}
-
-// TestRender_ITerm2TextBelow stubs encodeITerm2Fn to return a synthetic
-// image escape and asserts that Render(CapITerm2, SizeFull, …) places
-// selectable terminal text BELOW the image (iTerm2 has no C=1).
-// Note: NOT parallel — mutates the package-level encodeITerm2Fn seam.
-func TestRender_ITerm2TextBelow(t *testing.T) {
-	origITerm2 := encodeITerm2Fn
-	encodeITerm2Fn = func(_ bool, _ int) string {
-		return "\x1b]1337;File=inline=1;size=4:AAAA\a"
-	}
-	t.Cleanup(func() { encodeITerm2Fn = origITerm2 })
-
-	art, rows := Render(CapITerm2, SizeFull, "2.0.0")
-
-	if art == "" {
-		t.Fatal("Render(CapITerm2, SizeFull) returned empty string")
-	}
-
-	// Text should appear after the image escape (below the image).
-	afterEsc := art
-	if idx := strings.LastIndex(art, "\a"); idx >= 0 {
-		afterEsc = art[idx+1:]
-	}
-	if !strings.Contains(afterEsc, "formae") {
-		t.Error("iTerm2 output missing selectable 'formae' text below image")
-	}
-	if !strings.Contains(afterEsc, "v2.0.0") {
-		t.Error("iTerm2 output missing selectable 'v2.0.0' text below image")
-	}
-
-	if rows <= 0 {
-		t.Errorf("expected rows>0, got %d", rows)
 	}
 }

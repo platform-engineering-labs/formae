@@ -63,9 +63,9 @@ func TestIsHardDisqualified(t *testing.T) {
 }
 
 // TestDetect_DisqualifiedSkipsProbe verifies that Detect() does NOT invoke the
-// probe seam when the environment is hard-disqualified.  In the test process
-// stdout is not a real TTY, so gatherEnv() always produces a disqualified env
-// (IsTTY=false).  We stub the probe seam to panic if called; a successful run
+// probe seam when the environment is hard-disqualified.  The tests pin
+// terminalEnv to IsTTY=false (appearance_test.go init), so Detect always sees a
+// disqualified env, also when `go test` runs with stdout on a terminal.  We stub the probe seam to panic if called; a successful run
 // proves probe was skipped.
 func TestDetect_DisqualifiedSkipsProbe(t *testing.T) {
 	// Reset the global Once so this test gets a fresh run.
@@ -85,8 +85,8 @@ func TestDetect_DisqualifiedSkipsProbe(t *testing.T) {
 
 	got := Detect()
 
-	// In a headless test environment stdout is not a TTY, so gatherEnv()
-	// returns IsTTY=false → isHardDisqualified=true → CapText, no probe.
+	// terminalEnv is pinned to IsTTY=false → isHardDisqualified=true →
+	// CapText, no probe.
 	if got != CapText {
 		t.Errorf("Detect() = %v; want CapText (disqualified env)", got)
 	}

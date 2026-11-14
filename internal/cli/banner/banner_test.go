@@ -95,8 +95,6 @@ func capName(c logo.Capability) string {
 		return "CapText"
 	case logo.CapBraille:
 		return "CapBraille"
-	case logo.CapITerm2:
-		return "CapITerm2"
 	case logo.CapKitty:
 		return "CapKitty"
 	default:
@@ -123,4 +121,22 @@ func TestPrintBanner_TextFallback(t *testing.T) {
 	require.NotEmpty(t, out, "PrintBanner must produce output for CapText on a TTY")
 	assert.True(t, strings.Contains(out, want),
 		"output %q must contain %q", out, want)
+}
+
+// TestPrintTextBanner_NeverDrawsGraphics verifies that the banner used by
+// self-redrawing screens (the agent status --watch loop) falls back to the
+// braille logo where PrintBanner would send a Kitty graphics image.
+func TestPrintTextBanner_NeverDrawsGraphics(t *testing.T) {
+	origIsTerminal, origDetect := isTerminal, detect
+	t.Cleanup(func() { isTerminal, detect = origIsTerminal, origDetect })
+	isTerminal = func(_ io.Writer) bool { return true }
+	detect = func() logo.Capability { return logo.CapKitty }
+
+	full := captureStdout(func() { PrintBanner() })
+	require.Contains(t, full, "\x1b_G", "PrintBanner must still draw the Kitty image on a Kitty terminal")
+
+	text := captureStdout(func() { PrintTextBanner() })
+	assert.NotContains(t, text, "\x1b_G", "PrintTextBanner must not send a graphics image")
+	assert.Contains(t, text, "v"+formae.Version, "PrintTextBanner must still show the version")
+	assert.True(t, strings.ContainsRune(text, '⣿') || strings.ContainsAny(text, "⠀⠁⠂⠃⠄⡀⢀⣀"), "PrintTextBanner must draw the braille logo")
 }

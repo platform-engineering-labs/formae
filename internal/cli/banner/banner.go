@@ -75,15 +75,32 @@ func ClearScreen() {
 // One blank line above the art separates the logo from the prior shell line, and
 // one blank line after the art separates it from subsequent output.
 //
-// TODO(D2): exact graphics spacing needs live tuning once real Kitty/iTerm2
-// row heights are measured.
+// TODO(D2): exact graphics spacing needs live tuning once real Kitty row
+// heights are measured.
 func PrintBanner() {
+	printBanner(true)
+}
+
+// PrintTextBanner prints the banner like PrintBanner but never as a graphics
+// image: where the terminal would get the Kitty image it gets the braille logo.
+// Screens that clear and redraw themselves (the `agent status --watch` loop)
+// use it, because a graphics image is a separate object in the terminal that a
+// clear does not reliably remove: redrawing it every refresh piles up images
+// (iTerm2 keeps each one in scrollback, never pruned) instead of replacing one.
+func PrintTextBanner() {
+	printBanner(false)
+}
+
+func printBanner(allowGraphics bool) {
 	// Suppression gate: never print a banner when stdout is not a TTY.
 	if !isTerminal(os.Stdout) {
 		return
 	}
 
 	cap := detect()
+	if !allowGraphics && cap == logo.CapKitty {
+		cap = logo.CapBraille
+	}
 	var opts []logo.RenderOption
 	// A theme may color the "formae" wordmark (e.g. rich → blue letters). This
 	// applies to the braille renderer and, by tinting the letter pixels, to the
@@ -95,11 +112,11 @@ func PrintBanner() {
 
 	// Blank line above the art so the logo doesn't render flush against the
 	// prior shell line. A plain newline is safe before both the braille/text art
-	// and the Kitty/iTerm2 APC image escape.
+	// and the Kitty APC image escape.
 	_, _ = fmt.Println()
 
 	switch cap {
-	case logo.CapKitty, logo.CapITerm2:
+	case logo.CapKitty:
 		// Graphics art: image + wordmark. The art already advances the cursor
 		// below the image; add a single blank line to separate the logo from
 		// subsequent output.

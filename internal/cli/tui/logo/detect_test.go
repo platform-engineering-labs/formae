@@ -55,29 +55,11 @@ func TestDecide(t *testing.T) {
 			probe: probeResult{Kitty: true},
 			want:  CapKitty,
 		},
-		{
-			name:  "probe.ITerm2 (no kitty) → CapITerm2",
-			env:   envInfo{IsTTY: true, Unicode: true},
-			probe: probeResult{ITerm2: true},
-			want:  CapITerm2,
-		},
-		{
-			name:  "both probe.Kitty and probe.ITerm2 → CapKitty (Kitty wins)",
-			env:   envInfo{IsTTY: true, Unicode: true},
-			probe: probeResult{Kitty: true, ITerm2: true},
-			want:  CapKitty,
-		},
 		// ── Probes UNTRUSTED under tmux ───────────────────────────────────────
 		{
 			name:  "probe.Kitty but Tmux → CapBraille (probe ignored)",
 			env:   envInfo{IsTTY: true, Tmux: true, Unicode: true},
 			probe: probeResult{Kitty: true},
-			want:  CapBraille,
-		},
-		{
-			name:  "probe.ITerm2 but Tmux → CapBraille (probe ignored)",
-			env:   envInfo{IsTTY: true, Tmux: true, Unicode: true},
-			probe: probeResult{ITerm2: true},
 			want:  CapBraille,
 		},
 		// ── Probes UNTRUSTED under SSH ────────────────────────────────────────
@@ -87,24 +69,12 @@ func TestDecide(t *testing.T) {
 			probe: probeResult{Kitty: true},
 			want:  CapBraille,
 		},
-		{
-			name:  "probe.ITerm2 but SSH → CapBraille (probe ignored)",
-			env:   envInfo{IsTTY: true, SSH: true, Unicode: true},
-			probe: probeResult{ITerm2: true},
-			want:  CapBraille,
-		},
 		// ── herdr panes: inherited SSH_* must not suppress the probe ─────────
 		{
 			name:  "probe.Kitty, SSH inherited inside a herdr pane → CapKitty",
 			env:   envInfo{IsTTY: true, SSH: true, Herdr: true, Unicode: true},
 			probe: probeResult{Kitty: true},
 			want:  CapKitty,
-		},
-		{
-			name:  "probe.ITerm2, SSH inherited inside a herdr pane → CapITerm2",
-			env:   envInfo{IsTTY: true, SSH: true, Herdr: true, Unicode: true},
-			probe: probeResult{ITerm2: true},
-			want:  CapITerm2,
 		},
 		{
 			name:  "probe.Kitty, tmux inside a herdr pane → CapBraille (tmux wins)",
@@ -311,6 +281,62 @@ func TestGatherEnv_Herdr(t *testing.T) {
 			}
 			if got := gatherEnv().Herdr; got != tt.want {
 				t.Errorf("gatherEnv().Herdr = %v; want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestProbe_OnlyGraphicsCandidatesAreQueried asserts the Kitty query is sent
+// only to terminals that may draw the logo as an image, decided from
+// environment variables before any terminal I/O. iTerm2 and Terminal.app never
+// get it (iTerm2's Kitty placements misbehave after zoom/reflow and its OSC 1337
+// images prompt "Allow Terminal-Initiated Display?"; Terminal.app prints the
+// query as text); unknown terminals get the braille logo without being asked.
+// Note: NOT parallel — mutates the package-level queryKittyGraphics seam.
+func TestProbe_OnlyGraphicsCandidatesAreQueried(t *testing.T) {
+	orig := queryKittyGraphics
+	t.Cleanup(func() { queryKittyGraphics = orig })
+
+	base := envInfo{IsTTY: true, Unicode: true}
+	cases := []struct {
+		name    string
+		mutate  func(e *envInfo)
+		queried bool
+	}{
+		{"iTerm2", func(e *envInfo) { e.TermProgram = "iTerm.app" }, false},
+		{"Terminal.app", func(e *envInfo) { e.TermProgram = "Apple_Terminal" }, false},
+		{"unknown terminal", func(e *envInfo) { e.TermProgram = "vscode"; e.Term = "xterm-256color" }, false},
+		{"no hints at all", func(e *envInfo) {}, false},
+		{"Ghostty", func(e *envInfo) { e.TermProgram = "ghostty" }, true},
+		{"WezTerm", func(e *envInfo) { e.TermProgram = "WezTerm"; e.WezTerm = true }, true},
+		{"WEZTERM_* alone (inherited)", func(e *envInfo) { e.WezTerm = true }, false},
+		{"KITTY_WINDOW_ID alone (inherited)", func(e *envInfo) { e.KittyWindowID = true }, false},
+		{"Kitty by TERM", func(e *envInfo) { e.Term = "xterm-kitty" }, true},
+		{"iTerm2 launched from Kitty", func(e *envInfo) { e.TermProgram = "iTerm.app"; e.KittyWindowID = true; e.Term = "xterm-256color" }, false},
+		{"VS Code launched from Kitty", func(e *envInfo) { e.TermProgram = "vscode"; e.KittyWindowID = true; e.Term = "xterm-256color" }, false},
+		{"Alacritty launched from Kitty", func(e *envInfo) { e.KittyWindowID = true; e.Term = "alacritty" }, false},
+		{"Kitty launched from iTerm2", func(e *envInfo) { e.TermProgram = "iTerm.app"; e.Term = "xterm-kitty"; e.KittyWindowID = true }, true},
+		{"Ghostty launched from Terminal.app", func(e *envInfo) { e.TermProgram = "Apple_Terminal"; e.Term = "xterm-ghostty" }, true},
+		{"herdr pane with inherited iTerm2 TERM_PROGRAM", func(e *envInfo) { e.Herdr = true; e.TermProgram = "iTerm.app" }, true},
+		{"Kitty under tmux", func(e *envInfo) { e.Term = "xterm-kitty"; e.KittyWindowID = true; e.Tmux = true }, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			queried := false
+			queryKittyGraphics = func() probeResult {
+				queried = true
+				return probeResult{Kitty: true}
+			}
+			env := base
+			tc.mutate(&env)
+			got := probe(env)
+			if queried != tc.queried {
+				t.Fatalf("queried = %v, want %v", queried, tc.queried)
+			}
+			if !tc.queried {
+				if c := decide(env, got); c != CapBraille {
+					t.Errorf("decide = %v, want CapBraille", c)
+				}
 			}
 		})
 	}

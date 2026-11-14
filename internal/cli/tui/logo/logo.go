@@ -15,7 +15,6 @@ import (
 	"sync"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/muesli/termenv"
 )
 
 // Capability represents the rendering mode the terminal supports.
@@ -26,8 +25,6 @@ const (
 	CapText Capability = iota
 	// CapBraille renders the propeller icon as braille art in brand orange.
 	CapBraille
-	// CapITerm2 renders via the iTerm2 inline-image protocol.
-	CapITerm2
 	// CapKitty renders via the Kitty APC graphics protocol.
 	CapKitty
 )
@@ -60,29 +57,25 @@ const (
 	versionColor = "#AAAAAA"
 )
 
-// hasDarkBackground is a seam for tests: it wraps termenv.HasDarkBackground
-// so test code can override it and make Render deterministic in headless
-// environments.  The default implementation is safe to call in any context.
-//
-// HasDarkBackground reports whether the terminal background is dark WITHOUT
-// emitting a terminal query. termenv.HasDarkBackground() sends an OSC 11
-// background-color query plus a cursor-position (CPR) sentinel whose reply is
-// not reliably drained: the leftover bytes leak into the shell as literal text
-// (e.g. "…2c2c/3434;1R"), and the query also mis-detects — defaulting to LIGHT —
-// once the graphics probe has disturbed the terminal, which renders AdaptiveColor
-// body text unreadable (dark-on-dark).
+// HasDarkBackground reports whether the terminal background is dark, issuing no
+// terminal query of its own. A fresh OSC 11 query (termenv) sends a
+// cursor-position (CPR) sentinel whose reply is not reliably drained under
+// tmux/ssh, where the leftover bytes leak into the shell as literal text (e.g.
+// "…2c2c/3434;1R"), and a query sent after the graphics probe has disturbed the
+// terminal can mis-detect LIGHT, which renders AdaptiveColor body text unreadable.
 //
 // Detection order:
 //  1. FORMAE_APPEARANCE=light|dark — explicit user override (leak-free).
-//  2. COLORFGBG when the terminal exports it ("fg;bg"; a trailing field of 7 or
-//     15 means a light background) — leak-free.
-//  3. Auto-detect via an OSC-11 background-color query, but ONLY in a direct
-//     interactive terminal. Under tmux/screen/ssh the query's reply is not
-//     reliably drained and leaks into the shell as literal text, and off a TTY
-//     (piped/CI) there is nothing to query — so those all assume dark. The query
-//     result is memoized so per-frame callers (e.g. the header icon) never
-//     re-query, and the seed happens once at startup before any TUI/graphics
-//     probe disturbs the terminal.
+//  2. In an interactive terminal, including over ssh: the live OSC-11
+//     background answer that Bubble Tea's package init already obtained through
+//     lipgloss (so it follows appearance switches; termenv falls back to
+//     COLORFGBG, then dark, if the terminal does not answer). It is read once at
+//     startup, before any TUI/graphics probe, and memoized so per-frame callers
+//     (e.g. the header icon) never re-read.
+//  3. Under tmux (the multiplexer, not the user's terminal, would answer) and
+//     off a TTY (piped/CI/dumb): COLORFGBG when the terminal exports it
+//     ("fg;bg"; a trailing field of 7 or 15 means a light background),
+//     otherwise dark.
 //
 // Exported so the CLI can seed lipgloss's global AdaptiveColor resolution once at
 // startup (lipgloss.SetHasDarkBackground). It carries no config layer, so it is
@@ -100,8 +93,8 @@ func HasDarkBackground() bool {
 //  2. appearance — the cli.appearance profile setting (light|dark|auto). A
 //     light/dark value wins over auto-detection; "auto" (and empty/unknown)
 //     defer to it.
-//  3. auto-detect — COLORFGBG, then an OSC-11 query in a direct interactive
-//     terminal (see autoDetectDarkBackground).
+//  3. auto-detect — the live OSC-11 answer in an interactive terminal outside
+//     tmux, otherwise COLORFGBG, otherwise dark (see autoDetectDarkBackground).
 //
 // The env layer sits above config because an env override is a per-invocation
 // escape hatch (e.g. forcing light in a screenshot), whereas the config value is
@@ -130,29 +123,59 @@ func parseAppearance(s string) (dark bool, ok bool) {
 	}
 }
 
-// autoDetectDarkBackground is layer 3 of ResolveDarkBackground: COLORFGBG when the
-// terminal exports it, otherwise an OSC-11 query gated to a direct interactive
-// terminal (tmux/screen/ssh and non-TTY contexts assume dark to avoid a leaking,
-// mis-detecting query). The query result is memoized so per-frame callers never
-// re-query.
+// autoDetectDarkBackground is layer 3 of ResolveDarkBackground.
+//
+// In a direct interactive terminal it uses the terminal's live background colour
+// (OSC 11 via lipgloss/termenv, which itself falls back to COLORFGBG when the
+// terminal does not answer). COLORFGBG must not win there: terminals compute it
+// once when the session starts, so it goes stale when the colours change later.
+// iTerm2 is the common case: with a profile that has separate light and dark
+// colours, a tab opened in dark mode keeps COLORFGBG=15;0 after macOS switches
+// to light (and vice versa), which drew the logo and the huh prompts in the
+// wrong palette.
+//
+// ssh is not excluded: Bubble Tea's package init has already sent the OSC 11
+// query over the session (termenv only skips TERM=screen*/tmux*/dumb and
+// non-TTYs) and read the reply with its own timeout, falling back to COLORFGBG
+// and then black itself, so its answer is never worse than ours. Under tmux the
+// multiplexer, not the user's terminal, would answer; there, and where there is
+// nothing to query (non-TTY, CI, dumb), COLORFGBG is the only signal, and
+// without it we assume dark. The query result is memoized
+// so per-frame callers never re-query; the first call happens in cli.Start,
+// before the banner's graphics probe touches the terminal.
 func autoDetectDarkBackground() bool {
+	env := terminalEnv()
+	if env.IsTTY && !env.Dumb && !env.CI && !env.Tmux {
+		darkBgOnce.Do(func() { darkBgQueried = queryDarkBackground() })
+		return darkBgQueried
+	}
 	if fgbg := os.Getenv("COLORFGBG"); fgbg != "" {
 		parts := strings.Split(fgbg, ";")
 		bg := parts[len(parts)-1]
 		return bg != "7" && bg != "15"
 	}
-	env := gatherEnv()
-	if !env.IsTTY || env.Tmux || env.SSH || env.Dumb || env.CI {
-		return true
-	}
-	darkBgOnce.Do(func() { darkBgQueried = termenv.HasDarkBackground() })
-	return darkBgQueried
+	return true
 }
 
 //nolint:gochecknoglobals
 var (
 	darkBgOnce    sync.Once
 	darkBgQueried bool
+
+	// terminalEnv (the environment signals, shared with Detect) and
+	// queryDarkBackground are seams so tests can drive the live-query branch
+	// without a real terminal.
+	//
+	// queryDarkBackground reads lipgloss's default renderer rather than calling
+	// termenv directly: Bubble Tea's package init (tea_init.go, v1) already makes
+	// that renderer send the OSC-11 query and caches the answer, so reading it
+	// here costs no second round trip. Without that init the renderer sends the
+	// query itself on this first read (lipgloss Renderer.HasDarkBackground only
+	// skips it once a value was set explicitly). The first read happens in
+	// cli.Start, before lipgloss.SetHasDarkBackground replaces the cached value
+	// with our decision.
+	terminalEnv         = gatherEnv
+	queryDarkBackground = lipgloss.HasDarkBackground
 )
 
 // hasDarkBackground is a seam for tests; it defaults to HasDarkBackground so
@@ -183,17 +206,12 @@ func MiniPropeller() []string {
 	return rows[:MiniPropellerRows]
 }
 
-// encodeKittyFn and encodeITerm2Fn are seams for the graphics encoders so
-// tests can force the empty-return (error) path and verify the fallback chain.
+// encodeKittyFn is a seam for the graphics encoder so tests can force the
+// empty-return (error) path and verify the fallback chain.
 //
 //nolint:gochecknoglobals
 var encodeKittyFn = func(dark bool, widthPx int, tint color.Color) string {
 	return encodeKittyFullLogo(dark, widthPx, tint)
-}
-
-//nolint:gochecknoglobals
-var encodeITerm2Fn = func(dark bool, cols int) string {
-	return encodeITerm2(dark, cols)
 }
 
 //go:embed assets/Formae_Logo_dark.png
@@ -239,16 +257,6 @@ func brandTextColor(dark bool) lipgloss.Color {
 		return lipgloss.Color("#E8E8E8")
 	}
 	return lipgloss.Color("#1A1A1A")
-}
-
-// wordmarkLines returns the two raw ANSI-styled lines used for graphics
-// text-right composition: nameLine ("formae" in white) and verLine
-// ("v{version}" in brand orange). These are plain strings with ANSI color
-// codes, suitable for direct terminal output via CHA positioning.
-func wordmarkLines(version string) (nameLine, verLine string) {
-	nameStyle := lipgloss.NewStyle().Foreground(brandTextColor(HasDarkBackground()))
-	versionStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(brandOrange))
-	return nameStyle.Render("formae"), versionStyle.Render("v" + version)
 }
 
 // renderCfg holds optional overrides applied via RenderOption.
@@ -316,16 +324,15 @@ func parseHexColor(s string) (color.RGBA, bool) {
 // Dispatch rules:
 //   - SizeNone → ("", 0) — always suppressed.
 //   - CapText (any size) → "formae v{version}", rows=1.
-//   - SizeCompact → braille ALWAYS, even for CapKitty/CapITerm2.
+//   - SizeCompact → braille ALWAYS, even for CapKitty.
 //     Graphics protocols do not survive bubbletea alt-screen repaints;
 //     the compact in-TUI header must use braille only (coexistence rule).
 //   - SizeFull + CapKitty → Kitty APC graphics escape (C=1) + selectable
 //     terminal text to the right, positioned with CHA (\x1b[<N>G).
-//   - SizeFull + CapITerm2 → iTerm2 inline-image escape + wordmark below.
 //   - SizeFull + CapBraille → braille art at full width.
 //
 // rows counts terminal lines consumed: braille = newlines+1; text = 1;
-// graphics = graphicsImageRows (calibrated constant).
+// graphics = graphicsFullLogoImageRows (the pinned cell footprint).
 func Render(cap Capability, size Size, version string, opts ...RenderOption) (art string, rows int) {
 	var cfg renderCfg
 	for _, o := range opts {
@@ -379,23 +386,6 @@ func Render(cap Capability, size Size, version string, opts ...RenderOption) (ar
 		if full := renderFullLogoBraille(dark, brailleFullLogoWidth, cfg.wordmark); full != "" {
 			ver := lipgloss.NewStyle().Foreground(lipgloss.Color(versionColor)).MarginLeft(2).Render("v" + version)
 			art = lipgloss.JoinHorizontal(lipgloss.Bottom, full, ver)
-			rows = countRows(art)
-			return art, rows
-		}
-		return "formae v" + version, 1
-	case CapITerm2:
-		// iTerm2 does not support C=1; wordmark is placed BELOW the image.
-		// (Text-right composition for iTerm2 is a separate tuning effort.)
-		img := encodeITerm2Fn(dark, graphicsFullCols)
-		if img != "" {
-			nameLine, verLine := wordmarkLines(version)
-			art = img + "\n" + nameLine + "\n" + verLine
-			return art, graphicsImageRows
-		}
-		// Fall through to braille on encoder failure.
-		art = renderBraille(dark, brailleWidthFull)
-		if art != "" {
-			art = lipgloss.JoinHorizontal(lipgloss.Center, art, wordmark)
 			rows = countRows(art)
 			return art, rows
 		}

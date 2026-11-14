@@ -9,7 +9,6 @@ import (
 	"os"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/muesli/termenv"
 	"golang.org/x/term"
@@ -33,11 +32,10 @@ type envInfo struct {
 	Term          string // value of TERM
 }
 
-// probeResult holds the results of the raw-mode escape-sequence query.
-// Both fields are false when the probe was skipped or timed out.
+// probeResult holds the result of the raw-mode escape-sequence query.
+// Kitty is false when the probe was skipped or timed out.
 type probeResult struct {
-	Kitty  bool
-	ITerm2 bool
+	Kitty bool
 }
 
 // probeAllowed reports whether the escape-sequence probe may be sent and its
@@ -70,7 +68,7 @@ func probeAllowed(env envInfo) bool {
 //
 //  1. Hard disqualifiers → CapText
 //  2. Probe results (trusted only when probeAllowed says the probe is sound)
-//     probe.Kitty → CapKitty; probe.ITerm2 → CapITerm2
+//     probe.Kitty → CapKitty
 //  3. Env hints are NOT sufficient to enable graphics; they only confirm
 //     braille is a safe choice
 //  4. TTY + Unicode, no confirmed graphics → CapBraille
@@ -84,9 +82,6 @@ func decide(env envInfo, probe probeResult) Capability {
 	if probeAllowed(env) {
 		if probe.Kitty {
 			return CapKitty
-		}
-		if probe.ITerm2 {
-			return CapITerm2
 		}
 	}
 
@@ -145,96 +140,66 @@ var probe = func(env envInfo) probeResult {
 		return probeResult{}
 	}
 
-	// Only probe when stdout is a real TTY; we need raw mode.
-	fd := int(os.Stdout.Fd())
-	if !term.IsTerminal(fd) {
+	if !graphicsCandidate(env) {
 		return probeResult{}
 	}
 
-	old, err := term.MakeRaw(fd)
-	if err != nil {
-		return probeResult{}
-	}
-	defer func() { _ = term.Restore(fd, old) }()
-
-	// Open /dev/tty for reading BEFORE sending the query to stdout so the
-	// read channel is ready before the terminal's reply can arrive.
-	tty, terr := os.Open("/dev/tty")
-	if terr != nil {
-		return probeResult{}
-	}
-	defer func() { _ = tty.Close() }()
-
-	// Send the Kitty APC graphics query followed by a Primary Device
-	// Attributes (DA1) request.  A Kitty-capable terminal answers the APC
-	// query (ESC _ G i=31;OK ESC \) BEFORE the DA1 reply (ESC [ ? … c).
-	// A non-Kitty terminal silently ignores the APC and replies only to DA1.
-	//
-	// Query breakdown:
-	//   \x1b_G          — APC introducer + 'G' (Kitty graphics)
-	//   i=31,s=1,v=1,   — image id 31, size 1×1
-	//   a=q,t=d,f=24;   — action=query, transmission=direct, format=24bpp
-	//   AAAA            — minimal base64 payload (3 zero bytes)
-	//   \x1b\\          — String Terminator
-	//   \x1b[c          — DA1 request (forces a reply from any VT100+ terminal)
-	const kittyQuery = "\x1b_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA\x1b\\\x1b[c"
-	if _, werr := os.Stdout.WriteString(kittyQuery); werr != nil {
-		return probeResult{}
-	}
-
-	// Read the response with a hard timeout using a goroutine + select so the
-	// main flow can NEVER block.  os.Stdout.SetDeadline does not work on
-	// *os.File — do NOT rely on it.  Instead, the goroutine reads from the
-	// tty and the select races against time.After.  A possibly-blocked reader
-	// goroutine at one-time startup is acceptable — it unblocks at program exit
-	// or when the terminal eventually sends the DA1 reply.
-	//
-	// The goroutine reads in a LOOP until the DA1 terminator ('c') arrives. The
-	// terminal answers the APC graphics query and the DA1 request as separate
-	// bursts a few ms apart; the DA1 request (\x1b[c) is sent AFTER the graphics
-	// query, so a reply containing 'c' means both bursts have been drained.
-	// Reading through the 'c' consumes everything the terminal sent, leaving
-	// nothing in its input queue to leak into the shell (e.g. "62;22;52c") after
-	// we restore and exit. A single Read would grab only the first burst and let
-	// the DA1 burst leak.
-	ch := make(chan []byte, 1)
-	go func() {
-		var acc []byte
-		buf := make([]byte, 256)
-		for {
-			n, rerr := tty.Read(buf)
-			if n > 0 {
-				acc = append(acc, buf[:n]...)
-				if bytes.IndexByte(acc, 'c') >= 0 {
-					break
-				}
-			}
-			if rerr != nil {
-				break
-			}
-		}
-		ch <- acc
-	}()
-
-	var result probeResult
-	select {
-	case acc := <-ch:
-		result.Kitty = parseKittyProbe(acc)
-	case <-time.After(150 * time.Millisecond):
-		// Timeout → treat as no graphics support (fail-safe).
-	}
-
-	// iTerm2: there is NO escape-sequence query for iTerm2 inline images —
-	// this is a documented exception.  TERM_PROGRAM=iTerm.app is set
-	// exclusively by iTerm2 itself (not inherited like KITTY_WINDOW_ID), so
-	// it is a strong enough signal to use without a protocol probe.
-	// We only set ITerm2 when Kitty was not confirmed, to avoid double-enable.
-	if !result.Kitty && env.TermProgram == "iTerm.app" {
-		result.ITerm2 = true
-	}
-
-	return result
+	return queryKittyGraphics()
 }
+
+// graphicsCandidate reports whether the terminal is one that may draw the logo
+// as a Kitty graphics image, i.e. whether the probe is worth sending at all.
+// The probe only confirms support; this allowlist decides who is asked, so a
+// terminal that does not understand the query never sees it:
+//
+//   - herdr panes: herdr answers the query itself for the attached client, and
+//     the pane's TERM_PROGRAM/KITTY_* may be inherited from wherever the herdr
+//     server was started, so they are not evidence either way.
+//   - iTerm2 (TERM_PROGRAM=iTerm.app): never. It answers the Kitty query OK, but
+//     its placements are anchored to absolute line numbers with a pixel frame
+//     computed only when placed (iTerm2 3.6.11 KittyImageController.draws), so
+//     after a font zoom or a window-width reflow the logo covers the text and
+//     prompts below it; and its own OSC 1337 inline images ask "Allow
+//     Terminal-Initiated Display?" for every image unless silenced for good
+//     (PTYSession screenConfirmDownloadAllowed). It gets the braille logo.
+//   - macOS Terminal.app (TERM_PROGRAM=Apple_Terminal): never. It has no
+//     graphics protocol and prints the query's payload
+//     ("Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA") as text above the banner.
+//   - Kitty, Ghostty and WezTerm, recognised by the variables they set
+//     themselves: yes. TERM=xterm-kitty / xterm-ghostty is checked before
+//     TERM_PROGRAM, which Kitty does not set and may inherit from the shell it
+//     was started from. KITTY_WINDOW_ID / WEZTERM_* are not used: any terminal
+//     started from a Kitty or WezTerm shell inherits them.
+//   - anything else: no — the braille logo is the safe default, and an unknown
+//     terminal may print the query as text the way Terminal.app does.
+func graphicsCandidate(env envInfo) bool {
+	if env.Herdr {
+		return true
+	}
+	// TERM is always set by the terminal itself, while TERM_PROGRAM is inherited
+	// when a terminal that does not set it (Kitty) is started from another
+	// terminal's shell (iTerm2): TERM wins.
+	if strings.HasPrefix(env.Term, "xterm-kitty") || env.Term == "xterm-ghostty" {
+		return true
+	}
+	switch env.TermProgram {
+	case "iTerm.app", "Apple_Terminal":
+		return false
+	case "ghostty", "WezTerm":
+		return true
+	}
+	// KITTY_WINDOW_ID / WEZTERM_* alone are not evidence: they are inherited by
+	// any terminal started from a Kitty or WezTerm shell (VS Code, Alacritty,
+	// foot ...). A Kitty whose TERM was overridden gets the braille logo.
+	return false
+}
+
+// queryKittyGraphics performs the raw-mode Kitty graphics query on the
+// controlling terminal (queryKittyGraphicsTTY, per platform). It is a var so
+// tests can assert when it is (not) used.
+//
+//nolint:gochecknoglobals
+var queryKittyGraphics = queryKittyGraphicsTTY
 
 // detectOnce and detectCached hold the memoized Detect() result.
 //
@@ -260,7 +225,7 @@ func isHardDisqualified(env envInfo) bool {
 // disqualified terminals.
 func Detect() Capability {
 	detectOnce.Do(func() {
-		env := gatherEnv()
+		env := terminalEnv()
 		if isHardDisqualified(env) {
 			detectCached = CapText
 			return

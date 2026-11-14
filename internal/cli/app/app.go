@@ -241,6 +241,19 @@ func docLabelStyle() lipgloss.Style {
 func (a *App) PrintBanner() {
 	banner.SetTheme(a.Theme())
 	banner.PrintBanner()
+	a.printConfigWarnings()
+}
+
+// PrintTextBanner is PrintBanner without a graphics image (braille logo
+// instead), for screens that clear and redraw themselves such as
+// `agent status --watch`.
+func (a *App) PrintTextBanner() {
+	banner.SetTheme(a.Theme())
+	banner.PrintTextBanner()
+	a.printConfigWarnings()
+}
+
+func (a *App) printConfigWarnings() {
 	if a.Config != nil && len(a.Config.Warnings) > 0 {
 		th := theme.New("formae")
 		goldStyle := lipgloss.NewStyle().Foreground(th.Palette.Warning)
