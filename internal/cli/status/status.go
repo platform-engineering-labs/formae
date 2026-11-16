@@ -28,12 +28,15 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// isTerminal, launchTUI, printBanner, and fetchCommandsStatus are package-level
-// vars so tests can stub them.
+// isTerminal, launchTUI, printBanner, printWatchBanner, and fetchCommandsStatus
+// are package-level vars so tests can stub them.
 var (
 	isTerminal  = tui.IsTerminal
 	launchTUI   = launchStatusTUI
 	printBanner = func(a *app.App) { a.PrintBanner() }
+	// printWatchBanner is the banner of each redrawn watch frame: text only,
+	// since a graphics image would be sent again on every 2 s redraw.
+	printWatchBanner = func(a *app.App) { a.PrintTextBanner() }
 	// fetchCommandsStatus is a seam so tests can drive the running/terminal
 	// decision (interactive vs static) without a live agent.
 	fetchCommandsStatus = func(a *app.App, query string, maxResults int, scope apimodel.CommandScope) (*apimodel.ListCommandStatusResponse, []string, error) {
@@ -507,7 +510,7 @@ func renderCommandsStatus(a *app.App, status *apimodel.ListCommandStatusResponse
 
 func prepareScreen(a *app.App, what string) {
 	banner.ClearScreen()
-	printBanner(a)
+	printWatchBanner(a)
 	fmt.Printf("Watching %s (refreshing every 2s)...\n\n", what)
 }
 

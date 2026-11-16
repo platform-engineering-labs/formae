@@ -16,8 +16,6 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/lipgloss"
-
-	"github.com/platform-engineering-labs/formae/internal/cli/tui/tuitest"
 )
 
 // TestRender_KittyWordmarkTintChangesImage asserts that supplying a wordmark
@@ -67,12 +65,6 @@ func TestTintWordmarkLetters(t *testing.T) {
 	if got := color.NRGBAModel.Convert(out.At(2, 0)).(color.NRGBA); got != (color.NRGBA{R: 96, G: 165, B: 250, A: 128}) {
 		t.Errorf("antialiased letter pixel: got %+v, want blue tint at alpha 128", got)
 	}
-}
-
-func TestEncodeITerm2_Golden(t *testing.T) {
-	t.Parallel()
-	out := encodeITerm2(true, graphicsFullCols)
-	tuitest.RequireGolden(t, []byte(out))
 }
 
 // TestKittyFullLogo_PinsCellFootprint asserts the Kitty image is transmitted
@@ -191,34 +183,5 @@ func TestRender_KittyFullLogo(t *testing.T) {
 	// rows must equal graphicsFullLogoImageRows.
 	if rows != graphicsFullLogoImageRows {
 		t.Errorf("expected rows=%d (graphicsFullLogoImageRows), got %d", graphicsFullLogoImageRows, rows)
-	}
-}
-
-// TestRender_ITerm2TextBelowIntegration asserts that SizeFull + CapITerm2 output
-// (with the real encoder) contains the iTerm2 inline-image escape and
-// "formae" / "v{version}" as terminal text AFTER the image escape.
-func TestRender_ITerm2TextBelowIntegration(t *testing.T) {
-	t.Parallel()
-
-	orig := hasDarkBackground
-	hasDarkBackground = func() bool { return true }
-	defer func() { hasDarkBackground = orig }()
-
-	art, _ := Render(CapITerm2, SizeFull, "1.2.3")
-
-	if !strings.Contains(art, "\x1b]1337") {
-		t.Error("expected iTerm2 OSC 1337 escape in output")
-	}
-
-	// Text should appear after the image escape (text-below for iTerm2).
-	afterEsc := art
-	if idx := strings.LastIndex(art, "\a"); idx >= 0 {
-		afterEsc = art[idx+1:]
-	}
-	if !strings.Contains(afterEsc, "formae") {
-		t.Error("expected 'formae' as terminal text below the iTerm2 image")
-	}
-	if !strings.Contains(afterEsc, "v1.2.3") {
-		t.Error("expected 'v1.2.3' as terminal text below the iTerm2 image")
 	}
 }

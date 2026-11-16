@@ -48,11 +48,6 @@ func tintWordmarkLetters(img image.Image, tint color.Color) image.Image {
 	return out
 }
 
-// graphicsPxPerCell approximates a terminal cell's pixel width; the propeller
-// is scaled to cols*graphicsPxPerCell px so the Kitty/iTerm2 image occupies
-// roughly `cols` columns instead of its full ~430px crop size.
-const graphicsPxPerCell = 8
-
 // scalePropeller downscales the cropped propeller to targetW px wide,
 // preserving aspect ratio. Without this the full ~430px crop renders as a
 // huge (>25-row) image in the terminal.
@@ -69,17 +64,6 @@ func scalePropeller(img image.Image, targetW int) image.Image {
 	xdraw.CatmullRom.Scale(out, out.Bounds(), img, b, xdraw.Over, nil)
 	return out
 }
-
-// Calibrated layout constants for Kitty graphics rendering.
-// These values were measured in a live Kitty terminal using the natural-size
-// propeller image and may need per-terminal tuning.
-const (
-	// graphicsFullCols is the image natural width in terminal cells (Kitty cell estimate).
-	graphicsFullCols = 10
-	// graphicsImageRows is the image height in terminal rows — used to move the
-	// cursor below the image after text composition.
-	graphicsImageRows = 3
-)
 
 // Calibrated layout constants for the FULL-WORDMARK Kitty variant (white
 // "formae" letters + orange propeller rendered as one image). These are
@@ -199,36 +183,4 @@ func loadFullLogoImage(dark bool) (image.Image, error) {
 		return cropped, nil
 	}
 	return img, nil
-}
-
-// encodeITerm2 returns the iTerm2 inline-image escape sequence for the
-// propeller image at natural size for the given theme.
-// The entire PNG is base64-encoded and wrapped in a single atomic OSC 1337
-// escape sequence — fragmented writes can cause terminals to misparse the
-// sequence (prototype fix from commit 0e057261).
-// Returns the complete escape sequence as a string; does NOT write to stdout.
-func encodeITerm2(dark bool, cols int) string {
-	img, err := loadAndCropPropeller(dark)
-	if err != nil {
-		return ""
-	}
-	img = scalePropeller(img, cols*graphicsPxPerCell)
-
-	var imgBuf bytes.Buffer
-	if err := png.Encode(&imgBuf, img); err != nil {
-		return ""
-	}
-
-	rawBytes := imgBuf.Bytes()
-	encoded := base64.StdEncoding.EncodeToString(rawBytes)
-
-	// Build the complete escape sequence in a buffer to ensure atomic write.
-	// Fragmented writes can cause terminals to misparse the sequence.
-	// inline=1 with natural size — no forced grid, no preserveAspectRatio=0.
-	var seq bytes.Buffer
-	fmt.Fprintf(&seq,
-		"\033]1337;File=inline=1;size=%d:%s\a",
-		len(rawBytes), encoded)
-
-	return seq.String()
 }

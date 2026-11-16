@@ -18,22 +18,22 @@ import (
 )
 
 // TestPrepareScreen_ThemesBannerViaApp verifies the watch-mode screen refresh
-// renders its banner through the app-aware printBanner seam (which applies the
-// configured theme) rather than the default-themed banner.PrintBanner(). The
-// caller's app must reach printBanner so the logo follows the user's theme.
+// renders its banner through the app-aware printWatchBanner seam (themed, text
+// only) rather than the default-themed banner.PrintBanner(). The caller's app
+// must reach printWatchBanner so the logo follows the user's theme.
 func TestPrepareScreen_ThemesBannerViaApp(t *testing.T) {
-	origBanner := printBanner
-	t.Cleanup(func() { printBanner = origBanner })
+	origBanner := printWatchBanner
+	t.Cleanup(func() { printWatchBanner = origBanner })
 
 	var gotApp *app.App
 	called := 0
-	printBanner = func(a *app.App) { called++; gotApp = a }
+	printWatchBanner = func(a *app.App) { called++; gotApp = a }
 
 	a := &app.App{}
 	prepareScreen(a, "commands status")
 
-	assert.Equal(t, 1, called, "prepareScreen must render the banner via the themed printBanner seam")
-	assert.Same(t, a, gotApp, "prepareScreen must pass its app to printBanner so the banner uses the configured theme")
+	assert.Equal(t, 1, called, "prepareScreen must render the banner via the themed printWatchBanner seam")
+	assert.Same(t, a, gotApp, "prepareScreen must pass its app to printWatchBanner so the banner uses the configured theme")
 }
 
 func TestRunStatusForHumans_TTYInteractiveOnlyWhenRunning(t *testing.T) {
