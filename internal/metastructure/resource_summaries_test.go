@@ -279,6 +279,12 @@ func (m *mockSummaryDatastore) StackHasActiveCommands(_ string) (bool, error) {
 func (m *mockSummaryDatastore) HasConflictingCommandForStacks(_ []string) (bool, error) {
 	panic("not implemented")
 }
+func (m *mockSummaryDatastore) ConflictingCommandIDsForStacks(_ []string) ([]string, error) {
+	panic("not implemented")
+}
+func (m *mockSummaryDatastore) FailOrphanedCommands() (int, error) {
+	panic("not implemented")
+}
 func (m *mockSummaryDatastore) CreateGenerator(_ pkgmodel.Generator, _ string) (string, error) {
 	panic("not implemented")
 }

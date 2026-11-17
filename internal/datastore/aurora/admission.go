@@ -87,6 +87,12 @@ func (d *DatastoreAuroraDataAPI) AdmitFormaCommand(c *forma_command.FormaCommand
 func (d *DatastoreAuroraDataAPI) HasConflictingCommandForStacks(labels []string) (bool, error) {
 	return d.admissionStore().HasConflictingCommandForStacks(labels)
 }
+func (d *DatastoreAuroraDataAPI) ConflictingCommandIDsForStacks(labels []string) ([]string, error) {
+	return d.admissionStore().ConflictingCommandIDsForStacks(labels)
+}
+func (d *DatastoreAuroraDataAPI) FailOrphanedCommands() (int, error) {
+	return d.admissionStore().FailOrphanedCommands()
+}
 
 var _ datastore.CommandAdmitter = (*DatastoreAuroraDataAPI)(nil)
 

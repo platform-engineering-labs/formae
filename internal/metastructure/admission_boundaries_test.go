@@ -635,3 +635,53 @@ func TestAdmissionBoundariesReviewedAbsorptionNeedsPostCertificationGuard(t *tes
 		})
 	}
 }
+
+// A command abandoned by an earlier run in a shape startup recovery never
+// loads must be named when it blocks a destroy, and a restart must clear it.
+func TestAdmissionBoundariesOrphanedCommandIsListedThenFinalizedOnRestart(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		path := t.TempDir() + "/orphaned-command.db"
+		cfg := &pkgmodel.DatastoreConfig{Sqlite: pkgmodel.SqliteConfig{FilePath: path}}
+		ds, err := dssqlite.NewDatastoreSQLite(context.Background(), cfg, "test")
+		require.NoError(t, err)
+		_, err = ds.CreateStack(&pkgmodel.Stack{Label: "stuck"}, "seed")
+		require.NoError(t, err)
+		_, err = ds.CreateTarget(&pkgmodel.Target{Label: "target", Namespace: "FakeAWS", Config: []byte(`{}`)})
+		require.NoError(t, err)
+		forma := admissionBoundaryForma("stuck", "resource", "before")
+		row := forma.Resources[0]
+		row.Ksuid = util.NewID()
+		row.Managed = true
+		row.NativeID = "native-resource"
+		_, err = ds.StoreResource(&row, "seed")
+		require.NoError(t, err)
+		baseline, err := ds.LoadResourceById(row.Ksuid)
+		require.NoError(t, err)
+		storeDesired(t, ds, *baseline, resource_update.OperationCreate, forma_command.CommandStateSuccess)
+
+		m := startScopedActor(t, ds, path, nil)
+		stack, err := ds.GetStackByLabel("stuck")
+		require.NoError(t, err)
+		// A sync interrupted before commands recorded their source: admission
+		// counts it, and neither recovery nor cancel can reach it.
+		orphan := &forma_command.FormaCommand{ID: util.NewID(), StartTs: time.Now().UTC(), ModifiedTs: time.Now().UTC(), Command: pkgmodel.CommandSync, State: forma_command.CommandStateInProgress, Stacks: []forma_command.CommandStack{{ID: stack.ID, Label: stack.Label}}}
+		require.NoError(t, ds.StoreFormaCommand(orphan, orphan.ID))
+
+		_, destroyErr := m.DestroyForma(forma, &config.FormaCommandConfig{}, "client", "subject", "")
+		var conflict apimodel.FormaConflictingCommandsError
+		require.ErrorAs(t, destroyErr, &conflict)
+		require.Len(t, conflict.ConflictingCommands, 1, "the command that blocked admission must be named")
+		require.Equal(t, orphan.ID, conflict.ConflictingCommands[0].CommandID)
+
+		m.Stop(true)
+		reopened, err := dssqlite.NewDatastoreSQLite(context.Background(), cfg, "restart")
+		require.NoError(t, err)
+		restarted := startScopedActor(t, reopened, path, nil)
+		finalized, err := reopened.GetFormaCommandByCommandID(orphan.ID)
+		require.NoError(t, err)
+		require.Equal(t, forma_command.CommandStateFailed, finalized.State)
+		destroyed, err := restarted.DestroyForma(forma, &config.FormaCommandConfig{}, "client", "subject", "")
+		require.NoError(t, err)
+		waitForAdmissionBoundaryCommand(t, reopened, destroyed.CommandID)
+	})
+}

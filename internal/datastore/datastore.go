@@ -567,6 +567,13 @@ type Datastore interface {
 	// HasConflictingCommandForStacks checks command-level coverage through
 	// membership and resource updates, including metadata-only commands.
 	HasConflictingCommandForStacks(stackLabels []string) (bool, error)
+	// ConflictingCommandIDsForStacks returns the IDs of the commands that make
+	// HasConflictingCommandForStacks true, bounded by MaxListedConflictingCommands.
+	ConflictingCommandIDsForStacks(stackLabels []string) ([]string, error)
+	// FailOrphanedCommands marks Failed every non-terminal command that
+	// LoadIncompleteFormaCommands does not return, and reports how many. Only
+	// safe at startup, before any command can be executing.
+	FailOrphanedCommands() (int, error)
 
 	// Generator operations - a generator produces a value (e.g. a random
 	// password) that a secret will later reference. Unlike a policy, a

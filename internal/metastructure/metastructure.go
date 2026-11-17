@@ -282,6 +282,21 @@ func (m *Metastructure) Start() error {
 		return err
 	}
 
+	// Finalize the commands a previous run abandoned and that the replay below
+	// never loads: interrupted syncs and rows in states this build no longer
+	// writes. Left non-terminal they block every later command on their stacks
+	// with nothing able to finish or cancel them. It has to happen here, before
+	// the node starts: once the synchronizer and discovery are running, a
+	// non-terminal sync is a live one.
+	orphaned, err := m.Datastore.FailOrphanedCommands()
+	if err != nil {
+		slog.Error("Failed to finalize orphaned forma commands", "error", err)
+		return err
+	}
+	if orphaned > 0 {
+		slog.Warn("Marked orphaned forma commands from a previous run as Failed", "count", orphaned)
+	}
+
 	node, err := ergo.StartNode(gen.Atom(m.nodeName), m.options)
 	if err != nil {
 		slog.Error("Failed to start node", "error", err)
@@ -1814,7 +1829,9 @@ func (m *Metastructure) checkForConflictingCommands(commandStackLabels []string)
 // membership after the older resource-update check above has passed, including
 // metadata-only commands and the last-RU-terminal/command-nonterminal window.
 func (m *Metastructure) commandConflictError(commandStackLabels []string) error {
-	incompleteFormaCommands, err := m.Datastore.LoadIncompleteFormaCommands()
+	// The list comes from the same predicate admission rejected on, so every
+	// command that blocked this one is named.
+	ids, err := m.Datastore.ConflictingCommandIDsForStacks(commandStackLabels)
 	if err != nil {
 		// Admission already established the conflict. Failure to enrich the
 		// response must not turn that known conflict into an unrelated 500.
@@ -1822,12 +1839,14 @@ func (m *Metastructure) commandConflictError(commandStackLabels []string) error 
 		return apimodel.FormaConflictingCommandsError{}
 	}
 	conflict := apimodel.FormaConflictingCommandsError{}
-	for _, command := range incompleteFormaCommands {
-		readOnlySync := command.Command == pkgmodel.CommandSync &&
-			(command.Source == forma_command.SourceSynchronizer || command.Source == forma_command.SourceDiscovery)
-		if !readOnlySync && formaTouchesStacks(command, commandStackLabels) {
-			conflict.ConflictingCommands = append(conflict.ConflictingCommands, translateToAPICommand(command))
+	for _, id := range ids {
+		command, err := m.Datastore.GetFormaCommandByCommandID(id)
+		if err != nil || command == nil {
+			// It may have finished and been removed since the check.
+			slog.Warn("Failed to load conflicting forma command", "commandID", id, "error", err)
+			continue
 		}
+		conflict.ConflictingCommands = append(conflict.ConflictingCommands, translateToAPICommand(command))
 	}
 	return conflict
 }

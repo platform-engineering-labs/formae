@@ -67,6 +67,12 @@ func (d DatastorePostgres) AdmitFormaCommand(c *forma_command.FormaCommand, a da
 func (d DatastorePostgres) HasConflictingCommandForStacks(labels []string) (bool, error) {
 	return d.admissionStore().HasConflictingCommandForStacks(labels)
 }
+func (d DatastorePostgres) ConflictingCommandIDsForStacks(labels []string) ([]string, error) {
+	return d.admissionStore().ConflictingCommandIDsForStacks(labels)
+}
+func (d DatastorePostgres) FailOrphanedCommands() (int, error) {
+	return d.admissionStore().FailOrphanedCommands()
+}
 
 var _ datastore.CommandAdmitter = DatastorePostgres{}
 
