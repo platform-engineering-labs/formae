@@ -50,13 +50,34 @@ func FormaeBinary(t *testing.T) string {
 }
 
 // RequireCommandSuccess asserts that the command result reached the "Success"
-// state. If not, it fails the test with the actual state.
+// state. If not, it fails the test with the actual state and, for every
+// resource update that did not succeed, the error the agent recorded for it —
+// without which a failure in CI names the command but not the cause.
 func RequireCommandSuccess(t *testing.T, result CommandResult) {
 	t.Helper()
 
 	if result.State != "Success" && result.State != "NoOp" {
-		t.Fatalf("expected command state Success or NoOp, got %s", result.State)
+		t.Fatalf("expected command state Success or NoOp, got %s%s", result.State, describeUnsuccessfulUpdates(result.ResourceUpdates))
 	}
+}
+
+// describeUnsuccessfulUpdates renders one line per resource update that did
+// not end in Success, or "" when there are none.
+func describeUnsuccessfulUpdates(updates []ResourceUpdate) string {
+	var b strings.Builder
+	for _, ru := range updates {
+		if ru.State == "Success" {
+			continue
+		}
+		fmt.Fprintf(&b, "\n  %s %s (%s): %s", ru.Operation, ru.Label, ru.Type, ru.State)
+		if ru.ErrorMessage != "" {
+			fmt.Fprintf(&b, "\n    error: %s", ru.ErrorMessage)
+		}
+		if ru.StateMessage != "" && ru.StateMessage != ru.ErrorMessage {
+			fmt.Fprintf(&b, "\n    status: %s", ru.StateMessage)
+		}
+	}
+	return b.String()
 }
 
 // FindResource searches the resource slice for the first resource matching

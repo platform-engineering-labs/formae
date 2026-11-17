@@ -48,6 +48,11 @@ type ResourceUpdate struct {
 	Operation       string
 	State           string
 	CreateOnlyPatch json.RawMessage
+	// ErrorMessage is the most recent failure the agent recorded for this
+	// update (the plugin's status message, or the reason it failed before
+	// reaching the plugin). StateMessage is its most recent status message.
+	ErrorMessage string
+	StateMessage string
 }
 
 // FormaeCLI wraps the formae binary for CLI command execution.
@@ -337,6 +342,8 @@ func (f *FormaeCLI) StatusCommand(t *testing.T, commandID string) CommandResult 
 				ResourceType  string `json:"ResourceType"`
 				Operation     string `json:"Operation"`
 				State         string `json:"State"`
+				ErrorMessage  string `json:"ErrorMessage"`
+				StateMessage  string `json:"StateMessage"`
 			} `json:"ResourceUpdates"`
 		} `json:"Commands"`
 	}
@@ -355,10 +362,12 @@ func (f *FormaeCLI) StatusCommand(t *testing.T, commandID string) CommandResult 
 	updates := make([]ResourceUpdate, len(cmd.ResourceUpdates))
 	for i, ru := range cmd.ResourceUpdates {
 		updates[i] = ResourceUpdate{
-			Label:     ru.ResourceLabel,
-			Type:      ru.ResourceType,
-			Operation: ru.Operation,
-			State:     ru.State,
+			Label:        ru.ResourceLabel,
+			Type:         ru.ResourceType,
+			Operation:    ru.Operation,
+			State:        ru.State,
+			ErrorMessage: ru.ErrorMessage,
+			StateMessage: ru.StateMessage,
 		}
 	}
 
