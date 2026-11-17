@@ -621,10 +621,12 @@ func read(from gen.PID, state gen.Atom, data PluginUpdateData, operation ReadRes
 	} else if result.ErrorCode != "" && (!operation.TreatNotFoundAsSuccess() || result.ErrorCode != resource.OperationErrorCodeNotFound) {
 		progressResult.OperationStatus = resource.OperationStatusFailure
 		progressResult.ErrorCode = result.ErrorCode
+		progressResult.StatusMessage = result.StatusMessage
 	} else if result.ErrorCode == resource.OperationErrorCodeNotFound && operation.TreatNotFoundAsSuccess() {
 		proc.Log().Debug("PluginOperator: resource %s not found, marking operation as successful due to sync or delete", operation.NativeID)
 		progressResult.OperationStatus = resource.OperationStatusSuccess
 		progressResult.ErrorCode = result.ErrorCode
+		progressResult.StatusMessage = result.StatusMessage
 	} else {
 		progressResult.OperationStatus = resource.OperationStatusSuccess
 		progressResult.ResourceProperties = json.RawMessage(result.Properties)
