@@ -31,23 +31,38 @@ func (t *admissionTx) Exec(q string, args ...any) error {
 	_, err := t.d.executeStatementInTransaction(t.ctx, t.id, datastore.AdmissionBind(q, ":p"), admissionParams(args))
 	return err
 }
+func (t *admissionTx) ExecAffected(q string, args ...any) (int64, error) {
+	result, err := t.d.executeStatementInTransaction(t.ctx, t.id, datastore.AdmissionBind(q, ":p"), admissionParams(args))
+	if err != nil {
+		return 0, err
+	}
+	return result.NumberOfRecordsUpdated, nil
+}
 func (t *admissionTx) Query(q string, args ...any) ([]string, error) {
+	rows, err := t.QueryAll(q, args...)
+	if err != nil || len(rows) == 0 {
+		return nil, err
+	}
+	return rows[0], nil
+}
+func (t *admissionTx) QueryAll(q string, args ...any) ([][]string, error) {
 	result, err := t.d.executeStatementInTransaction(t.ctx, t.id, datastore.AdmissionBind(q, ":p"), admissionParams(args))
 	if err != nil {
 		return nil, err
 	}
-	if len(result.Records) == 0 {
-		return nil, nil
-	}
-	out := make([]string, len(result.Records[0]))
-	for i, field := range result.Records[0] {
-		v, ok := field.(*types.FieldMemberStringValue)
-		if !ok {
-			return nil, fmt.Errorf("unexpected admission field %T", field)
+	all := make([][]string, 0, len(result.Records))
+	for _, record := range result.Records {
+		out := make([]string, len(record))
+		for i, field := range record {
+			v, ok := field.(*types.FieldMemberStringValue)
+			if !ok {
+				return nil, fmt.Errorf("unexpected admission field %T", field)
+			}
+			out[i] = v.Value
 		}
-		out[i] = v.Value
+		all = append(all, out)
 	}
-	return out, nil
+	return all, nil
 }
 func (t *admissionTx) Store(c *forma_command.FormaCommand, id string) error {
 	return t.d.storeFormaCommandTx(t.ctx, t.id, c, id, true)
@@ -84,8 +99,11 @@ func (d *DatastoreAuroraDataAPI) LookupCommandAdmission(scope, key string) (*dat
 func (d *DatastoreAuroraDataAPI) AdmitFormaCommand(c *forma_command.FormaCommand, a datastore.CommandAdmission) (datastore.AdmissionResult, error) {
 	return d.admissionStore().AdmitFormaCommand(c, a)
 }
-func (d *DatastoreAuroraDataAPI) HasConflictingCommandForStacks(labels []string) (bool, error) {
-	return d.admissionStore().HasConflictingCommandForStacks(labels)
+func (d *DatastoreAuroraDataAPI) ConflictingCommandIDsForStacks(labels []string) ([]string, error) {
+	return d.admissionStore().ConflictingCommandIDsForStacks(labels)
+}
+func (d *DatastoreAuroraDataAPI) FailOrphanedCommands() (int, error) {
+	return d.admissionStore().FailOrphanedCommands()
 }
 
 var _ datastore.CommandAdmitter = (*DatastoreAuroraDataAPI)(nil)

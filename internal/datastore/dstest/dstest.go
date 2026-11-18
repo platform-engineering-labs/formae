@@ -116,6 +116,7 @@ func RunAll(t *testing.T, newDS func(t *testing.T) TestDatastore) {
 
 	RunFormaApplyTest(t, newDS)
 	RunLoadIncompleteFormaCommandsTest(t, newDS)
+	RunOrphanedCommandsTest(t, newDS)
 	RunGetFormaApplyByFormaHash(t, newDS)
 	RunStoreAndLoadFormaCommandOptionalFields(t, newDS)
 	RunFormaCommandInputPropertiesNilAndEmptyRoundTrip(t, newDS)

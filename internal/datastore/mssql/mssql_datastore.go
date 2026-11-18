@@ -621,9 +621,8 @@ func (d *DatastoreMSSQL) LoadIncompleteFormaCommands() ([]*forma_command.FormaCo
 	ctx, span := mssqlTracer.Start(context.Background(), "LoadIncompleteFormaCommands")
 	defer span.End()
 
-	query := formaCommandWithResourceUpdatesQueryBase + " WHERE fc.command != 'sync' AND fc.state IN (@p1, @p2)" + resourceUpdateOrderBy
-	rows, err := d.conn.QueryContext(ctx, query,
-		string(forma_command.CommandStateNotStarted), string(forma_command.CommandStateInProgress))
+	query := formaCommandWithResourceUpdatesQueryBase + " WHERE " + datastore.ResumableCommandPredicate("fc.") + resourceUpdateOrderBy
+	rows, err := d.conn.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}

@@ -564,9 +564,15 @@ type Datastore interface {
 	// StackHasActiveCommands returns true if the stack has any forma commands
 	// that are not in a terminal state (Success, Failed, Canceled)
 	StackHasActiveCommands(stackLabel string) (bool, error)
-	// HasConflictingCommandForStacks checks command-level coverage through
-	// membership and resource updates, including metadata-only commands.
-	HasConflictingCommandForStacks(stackLabels []string) (bool, error)
+	// ConflictingCommandIDsForStacks is the admission check: the IDs of the
+	// non-terminal commands that cover one of the stacks through membership or
+	// resource updates, including metadata-only commands. Bounded by
+	// MaxListedConflictingCommands.
+	ConflictingCommandIDsForStacks(stackLabels []string) ([]string, error)
+	// FailOrphanedCommands marks Failed every non-terminal command that
+	// LoadIncompleteFormaCommands does not return, and reports how many. Only
+	// safe at startup, before any command can be executing.
+	FailOrphanedCommands() (int, error)
 
 	// Generator operations - a generator produces a value (e.g. a random
 	// password) that a secret will later reference. Unlike a policy, a

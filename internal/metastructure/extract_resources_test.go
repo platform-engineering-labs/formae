@@ -290,7 +290,10 @@ func (m *mockExtractDatastore) GetResourcesAtLastReconcile(_ string) ([]datastor
 func (m *mockExtractDatastore) StackHasActiveCommands(_ string) (bool, error) {
 	panic("not implemented")
 }
-func (m *mockExtractDatastore) HasConflictingCommandForStacks(_ []string) (bool, error) {
+func (m *mockExtractDatastore) ConflictingCommandIDsForStacks(_ []string) ([]string, error) {
+	panic("not implemented")
+}
+func (m *mockExtractDatastore) FailOrphanedCommands() (int, error) {
 	panic("not implemented")
 }
 func (m *mockExtractDatastore) CreateGenerator(_ pkgmodel.Generator, _ string) (string, error) {

@@ -21,6 +21,30 @@ func (t admissionTx) Exec(q string, args ...any) error {
 	_, err := t.tx.Exec(t.ctx, datastore.AdmissionBind(q, "$"), args...)
 	return err
 }
+func (t admissionTx) ExecAffected(q string, args ...any) (int64, error) {
+	tag, err := t.tx.Exec(t.ctx, datastore.AdmissionBind(q, "$"), args...)
+	return tag.RowsAffected(), err
+}
+func (t admissionTx) QueryAll(q string, args ...any) ([][]string, error) {
+	rows, err := t.tx.Query(t.ctx, datastore.AdmissionBind(q, "$"), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var all [][]string
+	for rows.Next() {
+		out := make([]string, len(rows.FieldDescriptions()))
+		dest := make([]any, len(out))
+		for i := range out {
+			dest[i] = &out[i]
+		}
+		if err = rows.Scan(dest...); err != nil {
+			return nil, err
+		}
+		all = append(all, out)
+	}
+	return all, rows.Err()
+}
 func (t admissionTx) Query(q string, args ...any) ([]string, error) {
 	rows, err := t.tx.Query(t.ctx, datastore.AdmissionBind(q, "$"), args...)
 	if err != nil {
@@ -64,8 +88,11 @@ func (d DatastorePostgres) LookupCommandAdmission(scope, key string) (*datastore
 func (d DatastorePostgres) AdmitFormaCommand(c *forma_command.FormaCommand, a datastore.CommandAdmission) (datastore.AdmissionResult, error) {
 	return d.admissionStore().AdmitFormaCommand(c, a)
 }
-func (d DatastorePostgres) HasConflictingCommandForStacks(labels []string) (bool, error) {
-	return d.admissionStore().HasConflictingCommandForStacks(labels)
+func (d DatastorePostgres) ConflictingCommandIDsForStacks(labels []string) ([]string, error) {
+	return d.admissionStore().ConflictingCommandIDsForStacks(labels)
+}
+func (d DatastorePostgres) FailOrphanedCommands() (int, error) {
+	return d.admissionStore().FailOrphanedCommands()
 }
 
 var _ datastore.CommandAdmitter = DatastorePostgres{}

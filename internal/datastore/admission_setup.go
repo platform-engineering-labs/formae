@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/demula/mksuid/v2"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
@@ -367,6 +368,24 @@ func (s AdmissionStore) first(q string) string {
 		return "SELECT TOP (1) " + q[len("SELECT "):]
 	}
 	return q + " LIMIT 1"
+}
+
+// limit bounds a SELECT to n rows in the store's dialect.
+func (s AdmissionStore) limit(q string, n int) string {
+	if s.Dialect == "mssql" {
+		return fmt.Sprintf("SELECT TOP (%d) ", n) + q[len("SELECT "):]
+	}
+	return fmt.Sprintf("%s LIMIT %d", q, n)
+}
+
+// timestamp returns the placeholder expression and its argument for writing t
+// to a timestamp column. The Aurora adapter binds every argument as text, so
+// the postgres dialect casts from text instead of binding a time.
+func (s AdmissionStore) timestamp(t time.Time) (string, any) {
+	if s.Dialect == "postgres" {
+		return "CAST(CAST(? AS TEXT) AS TIMESTAMP)", t.UTC().Format("2006-01-02T15:04:05.000000")
+	}
+	return "?", t.UTC()
 }
 func setupVersion(version *string, previous string) error {
 	if *version == "" {

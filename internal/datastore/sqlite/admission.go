@@ -28,8 +28,11 @@ func (d DatastoreSQLite) LookupCommandAdmission(scope, key string) (*datastore.S
 func (d DatastoreSQLite) AdmitFormaCommand(c *forma_command.FormaCommand, a datastore.CommandAdmission) (datastore.AdmissionResult, error) {
 	return d.admissionStore().AdmitFormaCommand(c, a)
 }
-func (d DatastoreSQLite) HasConflictingCommandForStacks(labels []string) (bool, error) {
-	return d.admissionStore().HasConflictingCommandForStacks(labels)
+func (d DatastoreSQLite) ConflictingCommandIDsForStacks(labels []string) ([]string, error) {
+	return d.admissionStore().ConflictingCommandIDsForStacks(labels)
+}
+func (d DatastoreSQLite) FailOrphanedCommands() (int, error) {
+	return d.admissionStore().FailOrphanedCommands()
 }
 
 var _ datastore.CommandAdmitter = DatastoreSQLite{}

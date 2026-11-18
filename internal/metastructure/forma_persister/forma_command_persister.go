@@ -389,6 +389,9 @@ type CommandPersistResult struct {
 	Error              string
 	Admission          *datastore.AdmissionResult
 	AdmissionErrorCode string
+	// ConflictingCommandIDs names the commands a "command-conflict" refusal
+	// observed on the affected stacks.
+	ConflictingCommandIDs []string
 }
 
 func (r CommandPersistResult) CallError() string { return r.Error }
@@ -405,7 +408,7 @@ func (r CommandPersistResult) CallFailure() error {
 	case "invalid":
 		cause = datastore.ErrInvalidAdmission
 	case "command-conflict":
-		cause = datastore.ErrCommandConflict
+		cause = &datastore.CommandConflictError{CommandIDs: r.ConflictingCommandIDs}
 	}
 	if cause != nil {
 		return fmt.Errorf("%s: %w", r.Error, cause)
@@ -556,6 +559,10 @@ func (f *FormaCommandPersister) ack(ok bool, err error) (any, error) {
 			result.AdmissionErrorCode = "invalid"
 		case errors.Is(err, datastore.ErrCommandConflict):
 			result.AdmissionErrorCode = "command-conflict"
+			var conflict *datastore.CommandConflictError
+			if errors.As(err, &conflict) {
+				result.ConflictingCommandIDs = conflict.CommandIDs
+			}
 		}
 	}
 	return result, nil
@@ -580,12 +587,12 @@ func (f *FormaCommandPersister) storeNewFormaCommandWithAdmission(command *forma
 	scheduledGuarded := admission != nil && (admission.PrincipalScope == "stack-expirer" ||
 		admission.PrincipalScope == "auto-reconciler" || admission.PrincipalScope == "generator-rotator")
 	if !readOnlySync && (admission == nil || scheduledGuarded) {
-		conflict, err := f.datastore.HasConflictingCommandForStacks(command.GetStackLabels())
+		conflicting, err := f.datastore.ConflictingCommandIDsForStacks(command.GetStackLabels())
 		if err != nil {
 			return CommandPersistResult{}, fmt.Errorf("check conflicting commands: %w", err)
 		}
-		if conflict {
-			return CommandPersistResult{}, datastore.ErrCommandConflict
+		if len(conflicting) > 0 {
+			return CommandPersistResult{}, &datastore.CommandConflictError{CommandIDs: conflicting}
 		}
 	}
 	for i := range command.ResourceUpdates {
