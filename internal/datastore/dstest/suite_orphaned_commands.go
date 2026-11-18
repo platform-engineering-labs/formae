@@ -61,18 +61,37 @@ func RunOrphanedCommandsTest(t *testing.T, newDS func(t *testing.T) TestDatastor
 		sort.Strings(want)
 		require.Equal(t, want, ids, "every command that blocks admission must be listed, and no other")
 
+		modified := func(id string) (time.Time, time.Time) {
+			c, err := ds.GetFormaCommandByCommandID(id)
+			require.NoError(t, err)
+			require.Len(t, c.ResourceUpdates, 1)
+			return c.ModifiedTs, c.ResourceUpdates[0].ModifiedTs
+		}
+		runningModified, runningUpdateModified := modified(running.ID)
+
+		sweptAfter := time.Now().Add(-time.Second)
 		count, err := ds.FailOrphanedCommands()
 		require.NoError(t, err)
 		require.Equal(t, 3, count)
 
+		// The status API reports modified_ts as the end time, so the swept rows
+		// carry the time of the sweep, one value for all of them, not the time
+		// the abandoned command last made progress.
+		recoveredAt, _ := modified(legacySync.ID)
+		require.True(t, recoveredAt.After(sweptAfter), "swept at %s, modified_ts %s", sweptAfter, recoveredAt)
 		for _, c := range []*forma_command.FormaCommand{legacySync, legacyState, interruptedSync} {
 			commandState, updateState := state(c.ID)
 			require.Equal(t, forma_command.CommandStateFailed, commandState)
 			require.Equal(t, resource_update.ResourceUpdateStateFailed, updateState)
+			commandModified, updateModified := modified(c.ID)
+			require.True(t, recoveredAt.Equal(commandModified), "command modified_ts %s, want %s", commandModified, recoveredAt)
+			require.True(t, recoveredAt.Equal(updateModified), "resource update modified_ts %s, want %s", updateModified, recoveredAt)
 		}
 		commandState, updateState := state(running.ID)
 		require.Equal(t, forma_command.CommandStateInProgress, commandState, "a resumable command belongs to startup recovery")
 		require.Equal(t, resource_update.ResourceUpdateStateInProgress, updateState)
+		commandModified, updateModified := modified(running.ID)
+		require.True(t, runningModified.Equal(commandModified) && runningUpdateModified.Equal(updateModified), "a resumable command must not be restamped")
 		commandState, _ = state(finished.ID)
 		require.Equal(t, forma_command.CommandStateSuccess, commandState)
 

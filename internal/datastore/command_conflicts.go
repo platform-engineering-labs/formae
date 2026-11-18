@@ -8,6 +8,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
@@ -132,7 +133,12 @@ ORDER BY fc.command_id`, MaxListedConflictingCommands), args...)
 // rows: an interrupted sync is never resumed, and legacy states are never
 // loaded. Call it only while no command can be executing, i.e. at startup
 // before the actors run.
+//
+// Every row it changes gets the same modified_ts, the time of the sweep: the
+// status API reports that column as the command's end time, and the previous
+// value is only when the abandoned command last made progress.
 func (s AdmissionStore) FailOrphanedCommands() (int, error) {
+	now, recoveredAt := s.timestamp(time.Now().UTC())
 	tx, err := s.Begin()
 	if err != nil {
 		return 0, err
@@ -140,12 +146,12 @@ func (s AdmissionStore) FailOrphanedCommands() (int, error) {
 	defer func() { _ = tx.Rollback() }()
 	// Resource updates first: the second statement changes what the predicate
 	// in the first one selects.
-	if _, err = tx.ExecAffected(`UPDATE resource_updates SET state='Failed'
+	if _, err = tx.ExecAffected(`UPDATE resource_updates SET state='Failed', modified_ts=`+now+`
 WHERE (state IS NULL OR state NOT IN ('Success','Failed','Rejected','Canceled'))
-AND command_id IN (SELECT command_id FROM forma_commands WHERE ` + orphanedCommandPredicate + `)`); err != nil {
+AND command_id IN (SELECT command_id FROM forma_commands WHERE `+orphanedCommandPredicate+`)`, recoveredAt); err != nil {
 		return 0, err
 	}
-	count, err := tx.ExecAffected(`UPDATE forma_commands SET state='Failed' WHERE ` + orphanedCommandPredicate)
+	count, err := tx.ExecAffected(`UPDATE forma_commands SET state='Failed', modified_ts=`+now+` WHERE `+orphanedCommandPredicate, recoveredAt)
 	if err != nil {
 		return 0, err
 	}
