@@ -25,21 +25,6 @@ CHANNEL := $(shell echo "$(RAW_VERSION)" | grep -q -- '-' && echo dev || echo st
 # Override per-build with HELM_READER_VERSION=<ver>.
 HELM_READER_VERSION ?= 0.1.2
 
-# Pinned gremlins mutation-testing version. mutation-test-changed.sh's
-# classifier depends on this tool's observed failure semantics (a
-# cancelled run exits 0 and writes no report, and the report is a single
-# write at the end of the run), so the version must not float on
-# `@latest`. The pin also holds still the meaning of --exclude-files,
-# which the script relies on to keep a run inside the package it names: a
-# Go regex, matched unanchored against slash-separated paths relative to
-# the invoked directory. v0.6.0 is the newest release, so the pin cannot
-# be lifted by bumping — and it carries a known defect worth knowing
-# about before reading a crashed job: a second signal during shutdown
-# panics with `send on closed channel` in the tool's own signal
-# handling, taking the report with it.
-# Override per-build with GREMLINS_VERSION=<ver>.
-GREMLINS_VERSION ?= v0.6.0
-
 clean:
 	rm -rf .out/
 	rm -rf dist/
@@ -69,10 +54,6 @@ dev-install: build
 	@cp $(CURDIR)/formae $(CURDIR)/dist/dev/bin/formae
 	@echo "Staged at $(CURDIR)/dist/dev/bin/formae"
 	@echo "Run: $(CURDIR)/dist/dev/bin/formae agent start"
-
-## install-gremlins: Install the gremlins mutation testing tool
-install-gremlins:
-	go install github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_VERSION)
 
 build-debug:
 	go build ${DEBUG_GOFLAGS} -o formae cmd/formae/main.go
@@ -320,14 +301,6 @@ test-property-standard:
 test-property-chaos:
 	go test -C tests/blackbox -tags=property -run TestProperty_FullChaos -v -count=1 -rapid.checks=100 -timeout=60m
 
-## mutation-test: Run mutation testing across all unit-tested packages and generate report
-mutation-test: build
-	@echo "Running mutation testing (this will take a while)..."
-	./scripts/mutation-test.sh
-	./scripts/coverage-diff.sh
-	./scripts/generate-mutation-report.sh
-	@echo "Report: .mutation-report/summary.md"
-
 test-schema-pkl:
 	cd internal/schema/pkl/schema && pkl test tests/formae.pkl
 	cd internal/schema/pkl/schema && pkl test tests/collection_resolvable_test.pkl
@@ -416,4 +389,4 @@ add-license:
 
 all: clean build gen-pkl api-docs
 
-.PHONY: stage-oidc-fixtures api-docs clean build install-gremlins build-debug pkg-bin bundle-examples verify-examples-opkg publish-bin version-semver gen-pkl pkg-pkl publish-pkl run tidy-all test-build test-all test-scripts test-unit test-unit-postgres test-unit-auroradataapi test-unit-summary test-integration test-e2e test-property test-property-standard test-property-chaos mutation-test test-descriptors-pkl verify-schema-fakeaws version full-e2e lint lint-reuse add-license postgres-up postgres-down mssql-up mssql-down local-data-api-up local-data-api-down all
+.PHONY: stage-oidc-fixtures api-docs clean build build-debug pkg-bin bundle-examples verify-examples-opkg publish-bin version-semver gen-pkl pkg-pkl publish-pkl run tidy-all test-build test-all test-scripts test-unit test-unit-postgres test-unit-auroradataapi test-unit-summary test-integration test-e2e test-property test-property-standard test-property-chaos test-descriptors-pkl verify-schema-fakeaws version full-e2e lint lint-reuse add-license postgres-up postgres-down mssql-up mssql-down local-data-api-up local-data-api-down all

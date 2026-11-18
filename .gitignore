@@ -98,9 +98,6 @@ docs/design/
 # Design mockups and throwaway prototype/calibration tools (dev-only, not shipped)
 docs/mockups/
 
-# Generated mutation testing report
-.mutation-report/
-
 # Git worktrees
 .worktrees/
 
