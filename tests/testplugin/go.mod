@@ -21,7 +21,7 @@ replace ergo.services/actor/statemachine => github.com/JeroenSoeters/actor/state
 require (
 	ergo.services/ergo v1.999.320
 	github.com/masterminds/semver v1.5.0
-	github.com/platform-engineering-labs/formae/pkg/model v0.1.28
+	github.com/platform-engineering-labs/formae/pkg/model v0.1.29
 	github.com/platform-engineering-labs/formae/pkg/plugin v0.0.0
 	github.com/platform-engineering-labs/formae/tests/testcontrol v0.0.0-00010101000000-000000000000
 	github.com/stretchr/testify v1.11.1

@@ -58,7 +58,7 @@ require (
 	github.com/platform-engineering-labs/formae/pkg/api/model v0.1.2-dev.0
 	github.com/platform-engineering-labs/formae/pkg/auth v0.0.0-00010101000000-000000000000
 	github.com/platform-engineering-labs/formae/pkg/credential v0.1.1-0.20260918154753-1ddaf2b87619
-	github.com/platform-engineering-labs/formae/pkg/model v0.1.29-dev.0
+	github.com/platform-engineering-labs/formae/pkg/model v0.1.29
 	github.com/platform-engineering-labs/formae/pkg/plugin v0.0.0-00010101000000-000000000000
 	github.com/platform-engineering-labs/formae/tests/testcontrol v0.0.0-00010101000000-000000000000
 	github.com/platform-engineering-labs/jsonpatch v0.0.0-20260921135532-7c58038cb9c7
