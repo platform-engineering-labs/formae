@@ -17,6 +17,8 @@ import (
 type retirementQueryCapture struct{ query string }
 
 func (c *retirementQueryCapture) Exec(string, ...any) error                       { return nil }
+func (c *retirementQueryCapture) ExecAffected(string, ...any) (int64, error)      { return 0, nil }
+func (c *retirementQueryCapture) QueryAll(string, ...any) ([][]string, error)     { return nil, nil }
 func (c *retirementQueryCapture) Store(*forma_command.FormaCommand, string) error { return nil }
 func (c *retirementQueryCapture) Commit() error                                   { return nil }
 func (c *retirementQueryCapture) Rollback() error                                 { return nil }

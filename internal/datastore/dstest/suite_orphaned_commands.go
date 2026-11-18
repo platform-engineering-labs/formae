@@ -6,10 +6,12 @@
 package dstest
 
 import (
+	"fmt"
 	"sort"
 	"testing"
 	"time"
 
+	"github.com/platform-engineering-labs/formae/internal/datastore"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/resource_update"
 	"github.com/platform-engineering-labs/formae/internal/metastructure/util"
@@ -53,9 +55,6 @@ func RunOrphanedCommandsTest(t *testing.T, newDS func(t *testing.T) TestDatastor
 			return c.State, c.ResourceUpdates[0].State
 		}
 
-		conflict, err := ds.HasConflictingCommandForStacks([]string{blocked})
-		require.NoError(t, err)
-		require.True(t, conflict)
 		ids, err := ds.ConflictingCommandIDsForStacks([]string{blocked})
 		require.NoError(t, err)
 		want := []string{legacySync.ID, legacyState.ID}
@@ -77,9 +76,6 @@ func RunOrphanedCommandsTest(t *testing.T, newDS func(t *testing.T) TestDatastor
 		commandState, _ = state(finished.ID)
 		require.Equal(t, forma_command.CommandStateSuccess, commandState)
 
-		conflict, err = ds.HasConflictingCommandForStacks([]string{blocked})
-		require.NoError(t, err)
-		require.False(t, conflict)
 		ids, err = ds.ConflictingCommandIDsForStacks([]string{blocked})
 		require.NoError(t, err)
 		require.Empty(t, ids)
@@ -96,5 +92,33 @@ func RunOrphanedCommandsTest(t *testing.T, newDS func(t *testing.T) TestDatastor
 		count, err = ds.FailOrphanedCommands()
 		require.NoError(t, err)
 		require.Zero(t, count)
+
+		// One query per chunk of labels: blockers found by different chunks
+		// are all named. The fillers sort between the two stacks that have one.
+		spread := "orphan-spread-" + util.NewID()
+		spreadCommand := store(spread, pkgmodel.CommandApply, forma_command.CommandStateInProgress, forma_command.SourceUser)
+		labels := []string{resumable, spread}
+		for i := range 400 {
+			labels = append(labels, fmt.Sprintf("orphan-rf-%d", i))
+		}
+		want = []string{running.ID, spreadCommand.ID}
+		sort.Strings(want)
+		ids, err = ds.ConflictingCommandIDsForStacks(labels)
+		require.NoError(t, err)
+		require.Equal(t, want, ids)
+
+		// A rejection names a bounded number of commands however many block.
+		crowded := "orphan-crowded-" + util.NewID()
+		blocking := map[string]bool{running.ID: true}
+		for range datastore.MaxListedConflictingCommands + 3 {
+			blocking[store(crowded, pkgmodel.CommandApply, forma_command.CommandStateInProgress, forma_command.SourceUser).ID] = true
+		}
+		ids, err = ds.ConflictingCommandIDsForStacks([]string{crowded, resumable})
+		require.NoError(t, err)
+		require.Len(t, ids, datastore.MaxListedConflictingCommands)
+		require.True(t, sort.StringsAreSorted(ids))
+		for _, id := range ids {
+			require.True(t, blocking[id], "%s does not block these stacks", id)
+		}
 	})
 }

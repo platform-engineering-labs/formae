@@ -14,10 +14,14 @@ import (
 )
 
 // AdmissionTransaction must use one database transaction for every operation.
-// Query returns nil for no row. SQL uses ? placeholders; adapters bind them.
+// Query returns nil for no row and QueryAll every row. ExecAffected is Exec
+// that also reports how many rows the statement changed. SQL uses ?
+// placeholders; adapters bind them.
 type AdmissionTransaction interface {
 	Exec(string, ...any) error
+	ExecAffected(string, ...any) (int64, error)
 	Query(string, ...any) ([]string, error)
+	QueryAll(string, ...any) ([][]string, error)
 	Store(*forma_command.FormaCommand, string) error
 	Commit() error
 	Rollback() error
@@ -258,6 +262,37 @@ type SQLAdmissionTransaction struct {
 func (t SQLAdmissionTransaction) Exec(q string, args ...any) error {
 	_, err := t.Tx.Exec(AdmissionBind(q, t.Prefix), args...)
 	return err
+}
+func (t SQLAdmissionTransaction) ExecAffected(q string, args ...any) (int64, error) {
+	result, err := t.Tx.Exec(AdmissionBind(q, t.Prefix), args...)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+func (t SQLAdmissionTransaction) QueryAll(q string, args ...any) ([][]string, error) {
+	rows, err := t.Tx.Query(AdmissionBind(q, t.Prefix), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	cols, err := rows.Columns()
+	if err != nil {
+		return nil, err
+	}
+	var all [][]string
+	for rows.Next() {
+		out := make([]string, len(cols))
+		dest := make([]any, len(cols))
+		for i := range out {
+			dest[i] = &out[i]
+		}
+		if err = rows.Scan(dest...); err != nil {
+			return nil, err
+		}
+		all = append(all, out)
+	}
+	return all, rows.Err()
 }
 func (t SQLAdmissionTransaction) Query(q string, args ...any) ([]string, error) {
 	rows, err := t.Tx.Query(AdmissionBind(q, t.Prefix), args...)

@@ -30,9 +30,6 @@ func (d *DatastoreMSSQL) LookupCommandAdmission(scope, key string) (*datastore.S
 func (d *DatastoreMSSQL) AdmitFormaCommand(c *forma_command.FormaCommand, a datastore.CommandAdmission) (datastore.AdmissionResult, error) {
 	return d.admissionStore().AdmitFormaCommand(c, a)
 }
-func (d *DatastoreMSSQL) HasConflictingCommandForStacks(labels []string) (bool, error) {
-	return d.admissionStore().HasConflictingCommandForStacks(labels)
-}
 func (d *DatastoreMSSQL) ConflictingCommandIDsForStacks(labels []string) ([]string, error) {
 	return d.admissionStore().ConflictingCommandIDsForStacks(labels)
 }

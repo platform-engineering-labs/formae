@@ -247,6 +247,24 @@ func (m *Metastructure) Start() error {
 		m.options.Env[gen.Env("AuthPluginHandle")] = m.AuthPluginHandle
 	}
 
+	// Finalize the commands a previous run abandoned and that the replay below
+	// never loads: interrupted syncs and rows in states this build no longer
+	// writes. Left non-terminal they block every later command on their stacks
+	// with nothing able to finish or cancel them. It has to happen before the
+	// node starts: once the synchronizer and discovery are running, a
+	// non-terminal sync is a live one. And it has to happen before the secret
+	// backfill below, which leaves the properties of unfinished commands in
+	// plaintext so they can resume: the sweep finalizes in SQL without hashing,
+	// so the backfill is what hashes the commands it just marked Failed.
+	orphaned, err := m.Datastore.FailOrphanedCommands()
+	if err != nil {
+		slog.Error("Failed to finalize orphaned forma commands", "error", err)
+		return err
+	}
+	if orphaned > 0 {
+		slog.Warn("Marked orphaned forma commands from a previous run as Failed", "count", orphaned)
+	}
+
 	// One-time, idempotent sweep that hashes any plaintext opaque secrets left
 	// behind by writes made before opaque-value hashing existed. It
 	// runs against the datastore alone — no actors, no plugins — so it happens
@@ -280,21 +298,6 @@ func (m *Metastructure) Start() error {
 	if err := migration.ReingestCorruptedUnmanagedRows(m.Datastore); err != nil {
 		slog.Error("Failed to re-ingest dotted-key-corrupted unmanaged resources", "error", err)
 		return err
-	}
-
-	// Finalize the commands a previous run abandoned and that the replay below
-	// never loads: interrupted syncs and rows in states this build no longer
-	// writes. Left non-terminal they block every later command on their stacks
-	// with nothing able to finish or cancel them. It has to happen here, before
-	// the node starts: once the synchronizer and discovery are running, a
-	// non-terminal sync is a live one.
-	orphaned, err := m.Datastore.FailOrphanedCommands()
-	if err != nil {
-		slog.Error("Failed to finalize orphaned forma commands", "error", err)
-		return err
-	}
-	if orphaned > 0 {
-		slog.Warn("Marked orphaned forma commands from a previous run as Failed", "count", orphaned)
 	}
 
 	node, err := ergo.StartNode(gen.Atom(m.nodeName), m.options)
@@ -913,7 +916,7 @@ func (m *Metastructure) DestroyForma(forma *pkgmodel.Forma, config *config.Forma
 	)
 	if err != nil {
 		if errors.Is(err, datastore.ErrCommandConflict) {
-			return nil, m.commandConflictError(fa.GetStackLabels())
+			return nil, m.commandConflictError(err)
 		}
 		slog.Error("Failed to store forma command", "error", err)
 		return nil, fmt.Errorf("failed to store forma command: %w", err)
@@ -1508,7 +1511,7 @@ func (m *Metastructure) ForceAutoReconcile(stackLabel string, subject string, su
 	)
 	if err != nil {
 		if errors.Is(err, datastore.ErrCommandConflict) {
-			return nil, m.commandConflictError(result.command.GetStackLabels())
+			return nil, m.commandConflictError(err)
 		}
 		return nil, fmt.Errorf("failed to store reconcile command: %w", err)
 	}
@@ -1828,22 +1831,23 @@ func (m *Metastructure) checkForConflictingCommands(commandStackLabels []string)
 // exclusion into the public 409-shaped error. The final check includes command
 // membership after the older resource-update check above has passed, including
 // metadata-only commands and the last-RU-terminal/command-nonterminal window.
-func (m *Metastructure) commandConflictError(commandStackLabels []string) error {
-	// The list comes from the same predicate admission rejected on, so every
-	// command that blocked this one is named.
-	ids, err := m.Datastore.ConflictingCommandIDsForStacks(commandStackLabels)
-	if err != nil {
-		// Admission already established the conflict. Failure to enrich the
-		// response must not turn that known conflict into an unrelated 500.
-		slog.Error("Failed to load conflicting forma commands", "error", err)
-		return apimodel.FormaConflictingCommandsError{}
-	}
+//
+// rejection is the persister's refusal. It carries the IDs the admission check
+// read, and those are what the response names: searching again here could come
+// back empty if the blocker finished in between.
+func (m *Metastructure) commandConflictError(rejection error) error {
 	conflict := apimodel.FormaConflictingCommandsError{}
-	for _, id := range ids {
+	var observed *datastore.CommandConflictError
+	if !errors.As(rejection, &observed) {
+		return conflict
+	}
+	for _, id := range observed.CommandIDs {
 		command, err := m.Datastore.GetFormaCommandByCommandID(id)
 		if err != nil || command == nil {
-			// It may have finished and been removed since the check.
-			slog.Warn("Failed to load conflicting forma command", "commandID", id, "error", err)
+			// Admission already established the conflict. Failing to enrich
+			// the response must not hide which command it was.
+			slog.Warn("Failed to load conflicting forma command; naming it by ID only", "commandID", id, "error", err)
+			conflict.ConflictingCommands = append(conflict.ConflictingCommands, apimodel.Command{CommandID: id})
 			continue
 		}
 		conflict.ConflictingCommands = append(conflict.ConflictingCommands, translateToAPICommand(command))

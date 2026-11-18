@@ -368,6 +368,14 @@ func (s AdmissionStore) first(q string) string {
 	}
 	return q + " LIMIT 1"
 }
+
+// limit bounds a SELECT to n rows in the store's dialect.
+func (s AdmissionStore) limit(q string, n int) string {
+	if s.Dialect == "mssql" {
+		return fmt.Sprintf("SELECT TOP (%d) ", n) + q[len("SELECT "):]
+	}
+	return fmt.Sprintf("%s LIMIT %d", q, n)
+}
 func setupVersion(version *string, previous string) error {
 	if *version == "" {
 		*version = mksuid.New().String()

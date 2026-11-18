@@ -276,9 +276,6 @@ func (m *mockSummaryDatastore) GetResourcesAtLastReconcile(_ string) ([]datastor
 func (m *mockSummaryDatastore) StackHasActiveCommands(_ string) (bool, error) {
 	panic("not implemented")
 }
-func (m *mockSummaryDatastore) HasConflictingCommandForStacks(_ []string) (bool, error) {
-	panic("not implemented")
-}
 func (m *mockSummaryDatastore) ConflictingCommandIDsForStacks(_ []string) ([]string, error) {
 	panic("not implemented")
 }

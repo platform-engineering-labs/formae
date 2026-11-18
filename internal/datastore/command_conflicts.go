@@ -7,25 +7,47 @@ import (
 	"fmt"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
+
+	"github.com/platform-engineering-labs/formae/internal/metastructure/forma_command"
+	pkgmodel "github.com/platform-engineering-labs/formae/pkg/model"
 )
+
+// nonTerminalCommandPredicate matches a command that has not reached a final
+// state. The column is NOT NULL on every backend; a NULL state is still read as
+// non-terminal rather than trusted. qualifier is the table alias with its dot,
+// or "".
+func nonTerminalCommandPredicate(qualifier string) string {
+	return fmt.Sprintf("(%[1]sstate IS NULL OR %[1]sstate NOT IN ('%[2]s','%[3]s','%[4]s'))", qualifier,
+		forma_command.CommandStateSuccess, forma_command.CommandStateFailed, forma_command.CommandStateCanceled)
+}
+
+// ResumableCommandPredicate is the single definition of a command that startup
+// recovery owns: LoadIncompleteFormaCommands selects with it on every backend,
+// and FailOrphanedCommands finalizes the non-terminal commands it does not
+// match. Making another state resumable here therefore also takes it out of
+// the sweep. qualifier is the table alias with its dot, or "".
+func ResumableCommandPredicate(qualifier string) string {
+	return fmt.Sprintf("%[1]scommand != '%[2]s' AND %[1]sstate IN ('%[3]s','%[4]s')", qualifier,
+		pkgmodel.CommandSync, forma_command.CommandStateNotStarted, forma_command.CommandStateInProgress)
+}
 
 // conflictingCommandPredicate is the single definition of a command that
 // blocks admission: any non-terminal command except read-only synchronization
-// and discovery. The check that rejects a command and the query that names the
-// commands in the rejection both use it, so they cannot disagree.
-const conflictingCommandPredicate = `(fc.state IS NULL OR fc.state NOT IN ('Success','Failed','Canceled'))
+// and discovery.
+var conflictingCommandPredicate = nonTerminalCommandPredicate("fc.") + `
 AND NOT (fc.command='sync' AND COALESCE(fc.source,'') IN ('synchronizer','discovery'))`
 
-// orphanedCommandPredicate selects every non-terminal command that
-// LoadIncompleteFormaCommands does not return, and that startup recovery
-// therefore never resumes or finalizes. It must stay the exact complement of
-// that method's filter among non-terminal commands.
-const orphanedCommandPredicate = `(state IS NULL OR state NOT IN ('Success','Failed','Canceled'))
-AND (command='sync' OR state IS NULL OR state NOT IN ('NotStarted','InProgress'))`
+// orphanedCommandPredicate selects every non-terminal command that startup
+// recovery never resumes or finalizes. The terminal guard stays separate from
+// the negated resumability rule so that widening the rule can never reach a
+// finished command, and a NULL state is named explicitly because it makes the
+// negation NULL rather than true.
+var orphanedCommandPredicate = nonTerminalCommandPredicate("") + `
+AND (state IS NULL OR NOT (` + ResumableCommandPredicate("") + `))`
 
-// MaxListedConflictingCommands bounds ConflictingCommandIDsForStacks.
+// MaxListedConflictingCommands bounds ConflictingCommandIDsForStacks, and so
+// how many commands a rejection names.
 const MaxListedConflictingCommands = 20
 
 const conflictLabelsPerQuery = 400
@@ -55,48 +77,13 @@ func conflictStackClause(chunk []string) (string, []any) {
 	return clause, args
 }
 
-// HasConflictingCommandForStacks checks command state rather than resource
-// state, so the last-resource-terminal/command-nonterminal interval remains
-// protected. Read-only synchronization and discovery commands are excluded.
-func (s AdmissionStore) HasConflictingCommandForStacks(stackLabels []string) (bool, error) {
-	labels, err := normalizeConflictLabels(stackLabels)
-	if err != nil {
-		return false, err
-	}
-	if len(labels) == 0 {
-		return false, nil
-	}
-	tx, err := s.Begin()
-	if err != nil {
-		return false, err
-	}
-	defer func() { _ = tx.Rollback() }()
-	for start := 0; start < len(labels); start += conflictLabelsPerQuery {
-		end := min(start+conflictLabelsPerQuery, len(labels))
-		clause, args := conflictStackClause(labels[start:end])
-		query := s.first(`SELECT CAST(1 AS VARCHAR(1)) FROM forma_commands fc
-WHERE ` + conflictingCommandPredicate + `
-AND ` + clause)
-		row, err := tx.Query(query, args...)
-		if err != nil {
-			return false, err
-		}
-		if row != nil {
-			if err = tx.Commit(); err != nil {
-				return false, err
-			}
-			return true, nil
-		}
-	}
-	if err = tx.Commit(); err != nil {
-		return false, err
-	}
-	return false, nil
-}
-
-// ConflictingCommandIDsForStacks names the commands that make
-// HasConflictingCommandForStacks true, at most MaxListedConflictingCommands of
-// them, sorted by ID.
+// ConflictingCommandIDsForStacks is the admission check: it returns the
+// commands that block a new command on these stacks, at most
+// MaxListedConflictingCommands of them, sorted by ID. It checks command state
+// rather than resource state, so the last-resource-terminal/command-nonterminal
+// interval remains protected. Read-only synchronization and discovery commands
+// are excluded. The caller rejects on a non-empty answer and reports these same
+// IDs, so the rejection always names what it observed.
 func (s AdmissionStore) ConflictingCommandIDsForStacks(stackLabels []string) ([]string, error) {
 	labels, err := normalizeConflictLabels(stackLabels)
 	if err != nil {
@@ -111,26 +98,18 @@ func (s AdmissionStore) ConflictingCommandIDsForStacks(stackLabels []string) ([]
 	}
 	defer func() { _ = tx.Rollback() }()
 	seen := make(map[string]bool)
-	for start := 0; start < len(labels); start += conflictLabelsPerQuery {
+	for start := 0; start < len(labels) && len(seen) < MaxListedConflictingCommands; start += conflictLabelsPerQuery {
 		end := min(start+conflictLabelsPerQuery, len(labels))
-		clause, stackArgs := conflictStackClause(labels[start:end])
-		// AdmissionTransaction.Query answers one row, so page by command ID.
-		query := s.first(`SELECT fc.command_id FROM forma_commands fc
-WHERE ` + conflictingCommandPredicate + `
-AND fc.command_id > ?
-AND ` + clause + `
-ORDER BY fc.command_id`)
-		cursor := ""
-		for range MaxListedConflictingCommands {
-			row, err := tx.Query(query, append([]any{cursor}, stackArgs...)...)
-			if err != nil {
-				return nil, err
-			}
-			if row == nil {
-				break
-			}
-			cursor = row[0]
-			seen[cursor] = true
+		clause, args := conflictStackClause(labels[start:end])
+		rows, err := tx.QueryAll(s.limit(`SELECT fc.command_id FROM forma_commands fc
+WHERE `+conflictingCommandPredicate+`
+AND `+clause+`
+ORDER BY fc.command_id`, MaxListedConflictingCommands), args...)
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			seen[row[0]] = true
 		}
 	}
 	if err = tx.Commit(); err != nil {
@@ -159,28 +138,19 @@ func (s AdmissionStore) FailOrphanedCommands() (int, error) {
 		return 0, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	row, err := tx.Query(`SELECT CAST(COUNT(*) AS VARCHAR(20)) FROM forma_commands WHERE ` + orphanedCommandPredicate)
-	if err != nil {
-		return 0, err
-	}
-	count := 0
-	if row != nil {
-		if count, err = strconv.Atoi(row[0]); err != nil {
-			return 0, err
-		}
-	}
-	if count > 0 {
-		if err = tx.Exec(`UPDATE resource_updates SET state='Failed'
+	// Resource updates first: the second statement changes what the predicate
+	// in the first one selects.
+	if _, err = tx.ExecAffected(`UPDATE resource_updates SET state='Failed'
 WHERE (state IS NULL OR state NOT IN ('Success','Failed','Rejected','Canceled'))
 AND command_id IN (SELECT command_id FROM forma_commands WHERE ` + orphanedCommandPredicate + `)`); err != nil {
-			return 0, err
-		}
-		if err = tx.Exec(`UPDATE forma_commands SET state='Failed' WHERE ` + orphanedCommandPredicate); err != nil {
-			return 0, err
-		}
+		return 0, err
+	}
+	count, err := tx.ExecAffected(`UPDATE forma_commands SET state='Failed' WHERE ` + orphanedCommandPredicate)
+	if err != nil {
+		return 0, err
 	}
 	if err = tx.Commit(); err != nil {
 		return 0, err
 	}
-	return count, nil
+	return int(count), nil
 }

@@ -191,9 +191,6 @@ func (m *mockDatastore) GetResourcesAtLastReconcile(_ string) ([]ResourceSnapsho
 	return nil, nil
 }
 func (m *mockDatastore) StackHasActiveCommands(_ string) (bool, error) { return false, nil }
-func (m *mockDatastore) HasConflictingCommandForStacks(_ []string) (bool, error) {
-	return false, nil
-}
 func (m *mockDatastore) ConflictingCommandIDsForStacks(_ []string) ([]string, error) {
 	return nil, nil
 }

@@ -6,6 +6,7 @@ package metastructure
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -663,9 +664,18 @@ func TestAdmissionBoundariesOrphanedCommandIsListedThenFinalizedOnRestart(t *tes
 		stack, err := ds.GetStackByLabel("stuck")
 		require.NoError(t, err)
 		// A sync interrupted before commands recorded their source: admission
-		// counts it, and neither recovery nor cancel can reach it.
-		orphan := &forma_command.FormaCommand{ID: util.NewID(), StartTs: time.Now().UTC(), ModifiedTs: time.Now().UTC(), Command: pkgmodel.CommandSync, State: forma_command.CommandStateInProgress, Stacks: []forma_command.CommandStack{{ID: stack.ID, Label: stack.Label}}}
+		// counts it, and neither recovery nor cancel can reach it. It holds an
+		// opaque value that is still plaintext, as every unfinished command's is.
+		opaque := pkgmodel.Schema{Fields: []string{"SecretString"}, Hints: map[string]pkgmodel.FieldHint{"SecretString": {Opaque: true}}}
+		orphan := &forma_command.FormaCommand{ID: util.NewID(), StartTs: time.Now().UTC(), ModifiedTs: time.Now().UTC(), Command: pkgmodel.CommandSync, State: forma_command.CommandStateInProgress, Stacks: []forma_command.CommandStack{{ID: stack.ID, Label: stack.Label}}, ResourceUpdates: []resource_update.ResourceUpdate{{
+			DesiredState:   pkgmodel.Resource{Ksuid: util.NewID(), Stack: "stuck", Target: "target", Label: "secret", Type: "FakeAWS::SecretsManager::Secret", Schema: opaque, Properties: []byte(`{"SecretString":"plaintext-desired"}`)},
+			PriorState:     pkgmodel.Resource{Properties: []byte(`{"SecretString":"plaintext-prior"}`)},
+			ResourceTarget: pkgmodel.Target{Label: "target"},
+			StackLabel:     "stuck", Operation: resource_update.OperationRead, State: resource_update.ResourceUpdateStateInProgress,
+		}}}
 		require.NoError(t, ds.StoreFormaCommand(orphan, orphan.ID))
+		// A sync only persists the resource updates that saw a change.
+		require.NoError(t, ds.BulkStoreResourceUpdates(orphan.ID, orphan.ResourceUpdates))
 
 		_, destroyErr := m.DestroyForma(forma, &config.FormaCommandConfig{}, "client", "subject", "")
 		var conflict apimodel.FormaConflictingCommandsError
@@ -680,8 +690,69 @@ func TestAdmissionBoundariesOrphanedCommandIsListedThenFinalizedOnRestart(t *tes
 		finalized, err := reopened.GetFormaCommandByCommandID(orphan.ID)
 		require.NoError(t, err)
 		require.Equal(t, forma_command.CommandStateFailed, finalized.State)
+		// The sweep runs before the secret backfill, so this same restart also
+		// hashes what the orphan held; it must not take a second one.
+		require.Len(t, finalized.ResourceUpdates, 1)
+		update := finalized.ResourceUpdates[0]
+		require.Equal(t, resource_update.ResourceUpdateStateFailed, update.State)
+		for name, stored := range map[string]json.RawMessage{"desired": update.DesiredState.Properties, "prior": update.PriorState.Properties} {
+			var properties map[string]map[string]any
+			require.NoError(t, json.Unmarshal(stored, &properties), "%s state: %s", name, stored)
+			require.Equal(t, true, properties["SecretString"]["$hashed"], "%s state: %s", name, stored)
+			require.NotContains(t, string(stored), "plaintext")
+		}
 		destroyed, err := restarted.DestroyForma(forma, &config.FormaCommandConfig{}, "client", "subject", "")
 		require.NoError(t, err)
 		waitForAdmissionBoundaryCommand(t, reopened, destroyed.CommandID)
+	})
+}
+
+// unreadableCommand fails to load one command's details, as a datastore does
+// when the row is gone or the read errors between admission and the response.
+type unreadableCommand struct {
+	*scopedReadBarrier
+	id string
+}
+
+func (d *unreadableCommand) GetFormaCommandByCommandID(id string) (*forma_command.FormaCommand, error) {
+	if id == d.id {
+		return nil, errors.New("command details unavailable")
+	}
+	return d.scopedReadBarrier.GetFormaCommandByCommandID(id)
+}
+
+// The rejection names the command admission observed, not what a later lookup
+// can still find: a blocker whose details cannot be loaded is named by ID.
+func TestAdmissionBoundariesRejectedDestroyNamesObservedBlockerWithoutItsDetails(t *testing.T) {
+	testutil.RunTestFromProjectRoot(t, func(t *testing.T) {
+		path := t.TempDir() + "/unreadable-blocker.db"
+		ds, err := dssqlite.NewDatastoreSQLite(context.Background(), &pkgmodel.DatastoreConfig{Sqlite: pkgmodel.SqliteConfig{FilePath: path}}, "test")
+		require.NoError(t, err)
+		_, err = ds.CreateStack(&pkgmodel.Stack{Label: "busy"}, "seed")
+		require.NoError(t, err)
+		_, err = ds.CreateTarget(&pkgmodel.Target{Label: "target", Namespace: "FakeAWS", Config: []byte(`{}`)})
+		require.NoError(t, err)
+		forma := admissionBoundaryForma("busy", "resource", "before")
+		row := forma.Resources[0]
+		row.Ksuid = util.NewID()
+		row.Managed = true
+		row.NativeID = "native-resource"
+		_, err = ds.StoreResource(&row, "seed")
+		require.NoError(t, err)
+		baseline, err := ds.LoadResourceById(row.Ksuid)
+		require.NoError(t, err)
+		storeDesired(t, ds, *baseline, resource_update.OperationCreate, forma_command.CommandStateSuccess)
+
+		stack, err := ds.GetStackByLabel("busy")
+		require.NoError(t, err)
+		blocker := &forma_command.FormaCommand{ID: util.NewID(), StartTs: time.Now().UTC(), ModifiedTs: time.Now().UTC(), Command: pkgmodel.CommandSync, State: forma_command.CommandStateInProgress, Stacks: []forma_command.CommandStack{{ID: stack.ID, Label: stack.Label}}}
+		m := startScopedActor(t, &unreadableCommand{scopedReadBarrier: withScopedBarrier(ds, nil), id: blocker.ID}, path, nil)
+		require.NoError(t, ds.StoreFormaCommand(blocker, blocker.ID))
+
+		_, destroyErr := m.DestroyForma(forma, &config.FormaCommandConfig{}, "client", "subject", "")
+		var conflict apimodel.FormaConflictingCommandsError
+		require.ErrorAs(t, destroyErr, &conflict)
+		require.Len(t, conflict.ConflictingCommands, 1, "the observed blocker must be named even without its details")
+		require.Equal(t, blocker.ID, conflict.ConflictingCommands[0].CommandID)
 	})
 }

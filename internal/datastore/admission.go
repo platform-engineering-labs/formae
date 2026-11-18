@@ -39,6 +39,16 @@ var (
 	ErrCommandConflict   = errors.New("nonterminal command already covers an affected stack")
 )
 
+// CommandConflictError is ErrCommandConflict together with the commands the
+// admission check observed on the affected stacks. The rejection reports these
+// IDs rather than searching again, since a blocker can finish in between.
+type CommandConflictError struct {
+	CommandIDs []string
+}
+
+func (e *CommandConflictError) Error() string { return ErrCommandConflict.Error() }
+func (e *CommandConflictError) Unwrap() error { return ErrCommandConflict }
+
 type RevisionGuard struct {
 	Key      string
 	Revision int64

@@ -1,0 +1,60 @@
+# 2026/11/18 12:45:58.743954 [TestAdmissionCommandLifecycleProperty] [rapid] draw before: "a"
+# 2026/11/18 12:45:58.743971 [TestAdmissionCommandLifecycleProperty] [rapid] draw after: "zetdm"
+# 2026/11/18 12:45:58.743977 [TestAdmissionCommandLifecycleProperty] [rapid] draw operation_order: []string{"planning_metadata", "read_membership_and_observation", "state_and_terminal_restore", "metadata_removal", "unrelated_stack", "modified_ts_only", "rollback"}
+# 2026/11/18 12:46:18.752046 [TestAdmissionCommandLifecycleProperty] 
+# 	Error Trace:	/Users/discountelf/Projects/PEL/formae/internal/datastore/postgres/admission_test.go:51
+# 	            				/Users/discountelf/Projects/PEL/formae/internal/datastore/dstest/suite_admission_command_lifecycle_property.go:39
+# 	            				/Users/discountelf/go/pkg/mod/pgregory.net/rapid@v1.2.0/engine.go:371
+# 	            				/Users/discountelf/go/pkg/mod/pgregory.net/rapid@v1.2.0/engine.go:380
+# 	            				/Users/discountelf/go/pkg/mod/pgregory.net/rapid@v1.2.0/engine.go:205
+# 	            				/Users/discountelf/go/pkg/mod/pgregory.net/rapid@v1.2.0/engine.go:120
+# 	            				/Users/discountelf/Projects/PEL/formae/internal/datastore/dstest/suite_admission_command_lifecycle_property.go:31
+# 	            				/Users/discountelf/Projects/PEL/formae/internal/datastore/postgres/admission_test.go:45
+# 	Error:      	Received unexpected error:
+# 	            	failed to connect to admin database: failed to connect to `user=postgres database=postgres`:
+# 	            		[::1]:5432 (localhost): dial error: dial tcp [::1]:5432: connect: connection refused
+# 	            		127.0.0.1:5432 (localhost): tls error: read tcp 127.0.0.1:52863->127.0.0.1:5432: read: connection reset by peer
+# 	            		[::1]:5432 (localhost): dial error: dial tcp [::1]:5432: connect: connection refused
+# 	            		127.0.0.1:5432 (localhost): failed to receive message: read tcp 127.0.0.1:52866->127.0.0.1:5432: read: connection reset by peer
+# 	Test:       	TestAdmissionCommandLifecycleProperty
+# 
+v0.4.8#12233922255714406512
+0xf04f3490a4de3
+0x0
+0x3df49eb33303a
+0x0
+0x216ad634663d0
+0x170b69483d66e9
+0x0
+0x1f3157a09f42d5
+0xffffffffffffffff
+0x183bfa42200bcd
+0x0
+0x7649dc699ea21
+0x4
+0x166ccb03d25d9a
+0x0
+0x125e417d86a883
+0x13
+0x1776c594937686
+0x0
+0x66bcfcc4da97e
+0x3
+0x1a853e630f5d9d
+0x0
+0xfcb1079e1b933
+0xc
+0x123e337dbaa2e
+0xb34622c391cb2
+0x2
+0x133271404d0439
+0x5
+0xd4cf12f4de229
+0x4
+0x254b1500736ee
+0x0
+0x467799441d41c
+0x1
+0xc3f438b3e1303
+0x1
+0x81d3d9d227f04
