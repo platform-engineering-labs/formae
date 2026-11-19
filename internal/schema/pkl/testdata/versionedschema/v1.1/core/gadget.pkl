@@ -25,4 +25,7 @@ const type = "FakeVer::Core::Gadget"
 open class Gadget extends formae.Resource {
     @fakever.FieldHint
     name: String?
+
+    @fakever.FieldHint
+    widgetName: (String|formae.Resolvable)?
 }

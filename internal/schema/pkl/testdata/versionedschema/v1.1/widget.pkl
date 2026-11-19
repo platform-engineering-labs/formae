@@ -15,6 +15,14 @@ import "../fakever.pkl"
 
 const type = "FakeVer::Core::Widget"
 
+open class WidgetResolvable extends formae.Resolvable {
+    hidden type = module.type
+
+    hidden widgetName: WidgetResolvable = (this) {
+        property = "Name"
+    }
+}
+
 @fakever.ResourceHint {
     type = module.type
     identifier = "Name"
@@ -26,4 +34,11 @@ open class Widget extends formae.Resource {
 
     @fakever.FieldHint
     replicas: Int?
+
+    local parent = this
+
+    hidden res: WidgetResolvable = new {
+        label = parent.label
+        stack = parent.stack?.label
+    }
 }
